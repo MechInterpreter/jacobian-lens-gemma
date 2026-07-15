@@ -1,0 +1,49 @@
+# Micro-smoke: the smallest end-to-end run — 2 prompts, one middle layer,
+# short sequences, dim_batch 4. Purpose: first verified execution + GPU
+# memory probe. Not a usable lens.
+mode: microsmoke
+
+model:
+  repo_id: google/gemma-4-E4B-it
+  revision: null            # resolved to an immutable commit SHA at runtime and recorded
+  tokenizer_repo_id: null   # defaults to model repo at the same resolved SHA
+  tokenizer_revision: null
+  dtype: bfloat16
+  device_map: null          # set to "cuda" on the Colab A100
+  allow_model_load: false   # must be flipped explicitly for real execution
+  expect_n_layers: 42
+  expect_d_model: 2560
+  expect_vocab_size: 262144
+
+sites:
+  # Output tensor of model.language_model.layers[l]: the residual stream after
+  # attention + MLP + per-layer-embedding re-injection + layer_scalar,
+  # i.e. the input to block l+1.
+  source_site: block_output
+  # Same site at the last block (pre-final-norm residual h_final).
+  target_site: block_output
+  source_layers: [21]
+  target_layer: 41
+
+positions:
+  skip_first: 16            # leading attention-sink positions excluded
+  source_rule: "all positions t with skip_first <= t < seq_len - 1"
+  target_rule: "cotangents at every valid position; causality zeroes t' < t, so the source gradient is sum over t' >= t"
+
+fitting:
+  prompt_source: file
+  prompts_path: configs/prompts/fit_prompts.json
+  n_prompts: 2
+  max_seq_len: 48
+  dim_batch: 4              # memory probe starts here; scale up only after measuring
+  seed: 42
+  checkpoint_every: 1
+
+eval:
+  prompts_path: configs/prompts/eval_prompts.json
+  top_k: 10
+  control_seed: 1234
+
+paths:
+  checkpoint: artifacts/microsmoke/ckpt.pt
+  output_dir: artifacts/microsmoke

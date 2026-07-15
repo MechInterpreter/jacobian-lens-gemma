@@ -1,0 +1,47 @@
+# Pilot: ~100 WikiText-103 sequences of 128 tokens, seven layers spanning the
+# depth of the 42-block stack. Checkpointed and mergeable (fit disjoint prompt
+# slices, combine with JacobianLens.merge). This is the first run whose lens
+# quality is worth evaluating; the paper used ~1000 sequences and reports
+# quality saturating quickly (~100 usable).
+mode: pilot
+
+model:
+  repo_id: google/gemma-4-E4B-it
+  revision: null
+  tokenizer_repo_id: null
+  tokenizer_revision: null
+  dtype: bfloat16
+  device_map: null          # set to "cuda" on the Colab A100
+  allow_model_load: false
+  expect_n_layers: 42
+  expect_d_model: 2560
+  expect_vocab_size: 262144
+
+sites:
+  source_site: block_output
+  target_site: block_output
+  source_layers: [3, 7, 14, 21, 28, 35, 38]
+  target_layer: 41
+
+positions:
+  skip_first: 16
+  source_rule: "all positions t with skip_first <= t < seq_len - 1"
+  target_rule: "cotangents at every valid position; causality zeroes t' < t, so the source gradient is sum over t' >= t"
+
+fitting:
+  prompt_source: wikitext   # Salesforce/wikitext wikitext-103-raw-v1, streamed
+  prompts_path: null        # prompt hashes are recorded in metadata for reproducibility
+  n_prompts: 100
+  max_seq_len: 128
+  dim_batch: 8              # raise only after measuring peak memory at this setting
+  seed: 42
+  checkpoint_every: 5       # ~26 MB/layer fp32 running sum; 7 layers ≈ 180 MB/write
+
+eval:
+  prompts_path: configs/prompts/eval_prompts.json
+  top_k: 10
+  control_seed: 1234
+
+paths:
+  checkpoint: artifacts/pilot/ckpt.pt
+  output_dir: artifacts/pilot

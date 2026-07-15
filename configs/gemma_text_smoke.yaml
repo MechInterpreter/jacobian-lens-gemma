@@ -1,0 +1,45 @@
+# Smoke: 8 plain-text prompts, five layers spanning early/middle/late.
+# Verifies correctness and feasibility end-to-end. NOT a research-quality
+# lens — do not interpret smoke readouts as the method's capability.
+mode: smoke
+
+model:
+  repo_id: google/gemma-4-E4B-it
+  revision: null
+  tokenizer_repo_id: null
+  tokenizer_revision: null
+  dtype: bfloat16
+  device_map: null          # set to "cuda" on the Colab A100
+  allow_model_load: false
+  expect_n_layers: 42
+  expect_d_model: 2560
+  expect_vocab_size: 262144
+
+sites:
+  source_site: block_output
+  target_site: block_output
+  source_layers: [7, 14, 21, 28, 35]
+  target_layer: 41
+
+positions:
+  skip_first: 16
+  source_rule: "all positions t with skip_first <= t < seq_len - 1"
+  target_rule: "cotangents at every valid position; causality zeroes t' < t, so the source gradient is sum over t' >= t"
+
+fitting:
+  prompt_source: file
+  prompts_path: configs/prompts/fit_prompts.json
+  n_prompts: 8
+  max_seq_len: 96
+  dim_batch: 8              # raise only after the microsmoke memory probe
+  seed: 42
+  checkpoint_every: 1
+
+eval:
+  prompts_path: configs/prompts/eval_prompts.json
+  top_k: 10
+  control_seed: 1234
+
+paths:
+  checkpoint: artifacts/smoke/ckpt.pt
+  output_dir: artifacts/smoke

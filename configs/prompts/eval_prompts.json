@@ -1,0 +1,38 @@
+{
+  "description": "Evaluation prompts, applied AFTER fitting; never part of the fitted Jacobian corpus. Plain-text and chat-templated prompts are evaluated separately (chat entries are rendered with the tokenizer's chat template at eval time). 'positions' use Python indexing into the tokenized sequence.",
+  "plain": [
+    {
+      "slug": "multihop-currency",
+      "text": "Fact: The capital of Japan is Tokyo.\nFact: The currency used in the country shaped like a boot is",
+      "positions": [-2, -1],
+      "note": "Upstream walkthrough example; two-hop (boot -> Italy -> euro/lira). Interpretable mid-layer readouts expected if transport is meaningful."
+    },
+    {
+      "slug": "capital-france",
+      "text": "The Eiffel Tower stands on the Champ de Mars in the capital city of France, which is named",
+      "positions": [-2, -1],
+      "note": "One-hop factual recall."
+    },
+    {
+      "slug": "antonym",
+      "text": "Hot is to cold as day is to night, and up is to down as left is to",
+      "positions": [-2, -1],
+      "note": "Relational completion."
+    },
+    {
+      "slug": "counting",
+      "text": "The list of items is: apple, banana, cherry, date, elderberry. The number of items in the list is",
+      "positions": [-2, -1],
+      "note": "Unverbalized intermediate (count) preceding the answer."
+    }
+  ],
+  "chat": [
+    {
+      "slug": "chat-multihop-currency",
+      "user": "Answer with a single word. What currency is used in the country shaped like a boot?",
+      "assistant_prefill": "",
+      "positions": [-2, -1],
+      "note": "Chat-templated variant of multihop-currency; compares readout behaviour under the -it model's native format. Evaluated separately from plain-text prompts."
+    }
+  ]
+}

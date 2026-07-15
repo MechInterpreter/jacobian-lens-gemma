@@ -12,3 +12,8 @@ dist/
 *.pt
 slice*.html
 slices/
+
+# gemma adaptation outputs (fitted lenses, checkpoints, metadata, HF cache)
+artifacts/
+checkpoints/
+hf_cache/

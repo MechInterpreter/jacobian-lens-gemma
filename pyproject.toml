@@ -21,7 +21,8 @@ Repository = "https://github.com/anthropics/jacobian-lens"
 Paper = "https://transformer-circuits.pub/2026/workspace/index.html"
 
 [project.optional-dependencies]
-dev = ["pytest", "ruff", "datasets"]
+dev = ["pytest", "ruff", "datasets", "pyyaml"]
+gemma = ["pyyaml", "datasets", "accelerate"]
 
 [tool.ruff]
 line-length = 88
