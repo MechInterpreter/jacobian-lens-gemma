@@ -15,6 +15,22 @@ implementation to [`google/gemma-4-E4B-it`](https://huggingface.co/google/gemma-
   retains Anthropic PBC copyright notices; files new in this fork are marked in
   their headers.
 
+## Current status
+
+The **smoke** stage — the second of three planned stages (micro-smoke →
+smoke → pilot) — has completed successfully on real `google/gemma-4-E4B-it`
+weights (revision `fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd`): the Jacobian
+lens was fitted on 8 plain-text prompts at 5 source layers in 361.5 s on a
+Colab GPU, producing finite Jacobians, and was evaluated against a logit-lens
+baseline and three negative controls. Full results, methodology, and an
+explicit separation of measured findings from speculative interpretation are
+in **[docs/smoke_report.md](docs/smoke_report.md)**; the complete run
+artifacts are preserved under
+[`runs/smoke_20260715T172315460316_fb2eefcd91cd/`](runs/smoke_20260715T172315460316_fb2eefcd91cd/).
+See [docs/research_log.md](docs/research_log.md) for the engineering
+milestones that led to this run. The next planned stage is **pilot**
+(`configs/gemma_text_pilot.yaml`).
+
 ## What is inherited vs new
 
 **Inherited unchanged** (upstream `jlens` core — no modifications):
