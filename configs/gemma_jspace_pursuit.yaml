@@ -1,0 +1,53 @@
+# Sparse J-space decomposition by gradient pursuit, against the FROZEN
+# 100-prompt pilot lens (never refitted here). The lens artifact is located
+# under the pilot run directory and verified by file fingerprint, model
+# revision, source layers, dimensions, and finiteness before anything runs.
+mode: jspace_pursuit
+
+model:
+  repo_id: google/gemma-4-E4B-it
+  # Must resolve to the exact revision the pilot lens was fitted on
+  # (cross-checked against lens.expect_model_revision below).
+  revision: fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd
+  dtype: bfloat16
+  device_map: null          # set to "cuda" on the Colab GPU
+  allow_model_load: false
+  expect_n_layers: 42
+  expect_d_model: 2560
+  expect_vocab_size: 262144
+
+lens:
+  # Resolved against RUNS_ROOT on Drive in Colab, or the local runs/ dir.
+  run_dir_name: pilot_20260715T200437612150_311fd108c23a
+  artifact_relpath: artifacts/lens.pt
+  # sha256 of the lens.pt file as archived from the completed pilot run.
+  expect_file_sha256: "sha256:7229c7562d1d55420b70abb13f481934649c4b01417bd851e97cedb47c96f474"
+  expect_model_revision: fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd
+  expect_source_layers: [3, 7, 14, 21, 28, 35, 38]
+  expect_n_prompts: 100
+
+decomposition:
+  # Initial focus: the layers with demonstrated readout fidelity plus the
+  # mid-stack (see docs/pilot_report.md, "Implications"). All must be
+  # fitted layers of the pilot lens.
+  layers: [14, 21, 28, 35, 38]
+  # Paper-supported k values: 10 (ablations), 16 (concept vectors),
+  # 25 (J-space component identification; "typically no more than 25").
+  k_values: [10, 16, 25]
+  # Choices the paper leaves open — documented in
+  # docs/jspace_decomposition.md, recorded in every output record:
+  normalize_atoms: true
+  refine_steps: 2
+  tol_relative_residual: 0.0
+  fold_final_norm_weight: false   # paper-literal: atoms are rows of W_U @ J_l
+  correlation_chunk_size: 65536   # bounds the [batch, vocab] matmul memory
+  atoms_dtype: float32
+
+eval:
+  prompts_path: configs/prompts/eval_prompts_v2.json
+  top_k: 10
+  control_seed: 1234
+  max_seq_len: 512
+
+paths:
+  output_dir: artifacts/jspace

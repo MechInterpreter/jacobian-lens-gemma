@@ -12,9 +12,12 @@ from jlens.metadata import (
     UPSTREAM_COMMIT,
     config_fingerprint,
     environment_manifest,
+    file_sha256,
     load_config,
+    load_jspace_config,
     prompt_hashes,
     validate_config,
+    validate_jspace_config,
     write_metadata,
 )
 
@@ -115,6 +118,48 @@ def test_write_metadata_roundtrip(tmp_path):
     loaded = json.loads(path.read_text(encoding="utf-8"))
     assert loaded["answer"] == 42
     assert "written_utc" in loaded
+
+
+def test_file_sha256_known_value(tmp_path):
+    path = tmp_path / "blob.bin"
+    path.write_bytes(b"jlens")
+    import hashlib
+
+    expected = "sha256:" + hashlib.sha256(b"jlens").hexdigest()
+    assert file_sha256(str(path)) == expected
+
+
+def test_shipped_jspace_config_validates():
+    config = load_jspace_config(str(REPO_ROOT / "configs/gemma_jspace_pursuit.yaml"))
+    assert config["mode"] == "jspace_pursuit"
+    assert config["model"]["allow_model_load"] is False  # gated by default
+    # The decomposition must consume the frozen pilot lens, verified.
+    assert config["lens"]["run_dir_name"].startswith("pilot_")
+    assert config["lens"]["expect_file_sha256"].startswith("sha256:")
+    assert config["lens"]["expect_source_layers"] == [3, 7, 14, 21, 28, 35, 38]
+    # Model revision pinned to the pilot's, in both places.
+    assert config["model"]["revision"] == config["lens"]["expect_model_revision"]
+    # Decomposition layers are a subset of the fitted layers.
+    assert set(config["decomposition"]["layers"]) <= set(
+        config["lens"]["expect_source_layers"]
+    )
+    # Paper-supported k values only.
+    assert config["decomposition"]["k_values"] == [10, 16, 25]
+
+
+def test_validate_jspace_config_rejects_bad_layers():
+    config = load_jspace_config(str(REPO_ROOT / "configs/gemma_jspace_pursuit.yaml"))
+    config["decomposition"]["layers"] = [14, 40]  # 40 not a fitted layer
+    with pytest.raises(ValueError, match="not in lens.expect_source_layers"):
+        validate_jspace_config(config)
+    config = load_jspace_config(str(REPO_ROOT / "configs/gemma_jspace_pursuit.yaml"))
+    del config["lens"]["expect_n_prompts"]
+    with pytest.raises(ValueError, match="missing key: lens.expect_n_prompts"):
+        validate_jspace_config(config)
+    config = load_jspace_config(str(REPO_ROOT / "configs/gemma_jspace_pursuit.yaml"))
+    config["mode"] = "pilot"
+    with pytest.raises(ValueError, match="jspace_pursuit"):
+        validate_jspace_config(config)
 
 
 def test_environment_manifest_pins_upstream():

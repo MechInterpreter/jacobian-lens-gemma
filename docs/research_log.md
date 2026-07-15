@@ -95,8 +95,31 @@ all metadata — was copied into this repository at
 [`runs/smoke_20260715T172315460316_fb2eefcd91cd/`](../runs/smoke_20260715T172315460316_fb2eefcd91cd/)
 and is documented in full in [`smoke_report.md`](smoke_report.md).
 
+## 2026-07-15 — Pilot stage executed on real Gemma 4 E4B weights
+
+Using the notebook and configuration at commit `541b0b3`
+(recorded as `environment.local_commit` in every artifact of this run),
+`configs/gemma_text_pilot.yaml` was run to completion on a Colab GPU runtime
+(NVIDIA L4): revision `fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd` of
+`google/gemma-4-E4B-it` was loaded, and the Jacobian lens was fitted on
+**100 WikiText-103 prompts** (128 tokens each, seed 42) at **seven source
+layers (3, 7, 14, 21, 28, 35, 38)** in 9665.4 s, producing finite
+`[2560, 2560]` Jacobians. Evaluation on the held-out prompt set with the
+logit-lens baseline and three negative controls followed; layer 38 gave the
+strongest next-token rank (12) and layers 28/35/38 strongly beat the
+permuted and random controls. Run metadata is preserved under
+[`runs/pilot_20260715T200437612150_311fd108c23a/`](../runs/pilot_20260715T200437612150_311fd108c23a/)
+and documented in full — including an audit showing the single wrong-layer
+control conflates adjacent and maximally-distant substitutions — in
+[`pilot_report.md`](pilot_report.md). This 100-prompt pilot lens is the
+frozen, authoritative lens artifact for all subsequent decomposition work.
+
 ## Next planned milestone
 
-The **pilot** stage (`configs/gemma_text_pilot.yaml`: ~100 WikiText-103
-sequences, 7 layers spanning the full model depth) has not yet been run; see
-`smoke_report.md`'s Future Work section.
+Sparse J-space decomposition of held-out activations by nonnegative
+gradient pursuit against the frozen pilot lens (branch
+`jspace-gradient-pursuit`): pilot analysis is documented in
+[`pilot_report.md`](pilot_report.md), evaluation controls are being
+disambiguated and extended, and the decomposition + cone-signature +
+candidate-ignition tooling is described in
+[`jspace_decomposition.md`](jspace_decomposition.md).

@@ -119,6 +119,103 @@ def config_fingerprint(config: dict) -> str:
     return "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
 
 
+def file_sha256(path: str) -> str:
+    """``sha256:<hex>`` fingerprint of a file's bytes (streamed). Used to
+    pin artifact files (e.g. a fitted ``lens.pt``) across environments."""
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return "sha256:" + digest.hexdigest()
+
+
+#: Schema for the J-space decomposition workflow config (separate from the
+#: fitting schema above; the decomposition consumes a frozen lens and never
+#: refits).
+_JSPACE_SCHEMA: tuple[tuple[str, tuple[type, ...], bool], ...] = (
+    ("mode", (str,), True),
+    ("model.repo_id", (str,), True),
+    ("model.revision", (str, type(None)), True),
+    ("model.dtype", (str,), True),
+    ("model.device_map", (str, type(None)), True),
+    ("model.allow_model_load", (bool,), True),
+    ("model.expect_n_layers", (int,), True),
+    ("model.expect_d_model", (int,), True),
+    ("model.expect_vocab_size", (int,), True),
+    ("lens.run_dir_name", (str,), True),
+    ("lens.artifact_relpath", (str,), True),
+    ("lens.expect_file_sha256", (str, type(None)), True),
+    ("lens.expect_model_revision", (str,), True),
+    ("lens.expect_source_layers", (list,), True),
+    ("lens.expect_n_prompts", (int,), True),
+    ("decomposition.layers", (list,), True),
+    ("decomposition.k_values", (list,), True),
+    ("decomposition.normalize_atoms", (bool,), True),
+    ("decomposition.refine_steps", (int,), True),
+    ("decomposition.tol_relative_residual", (float, int), True),
+    ("decomposition.fold_final_norm_weight", (bool,), True),
+    ("decomposition.correlation_chunk_size", (int, type(None)), True),
+    ("eval.prompts_path", (str,), True),
+    ("eval.top_k", (int,), True),
+    ("eval.control_seed", (int,), True),
+    ("eval.max_seq_len", (int,), True),
+    ("paths.output_dir", (str,), True),
+)
+
+
+def validate_jspace_config(config: dict) -> None:
+    """Structural validation of a J-space decomposition config; raises
+    ``ValueError`` listing every problem."""
+    problems: list[str] = []
+    for dotted, types, required in _JSPACE_SCHEMA:
+        found, value = _get_dotted(config, dotted)
+        if not found:
+            if required:
+                problems.append(f"missing key: {dotted}")
+            continue
+        if not isinstance(value, types):
+            problems.append(
+                f"{dotted}: expected {'/'.join(t.__name__ for t in types)}, "
+                f"got {type(value).__name__} ({value!r})"
+            )
+    found, mode = _get_dotted(config, "mode")
+    if found and mode != "jspace_pursuit":
+        problems.append(f"mode: {mode!r} must be 'jspace_pursuit'")
+    for key in ("lens.expect_source_layers", "decomposition.layers",
+                "decomposition.k_values"):
+        found, values = _get_dotted(config, key)
+        if found and isinstance(values, list):
+            if not values or not all(isinstance(v, int) for v in values):
+                problems.append(f"{key}: must be a non-empty list of ints")
+    found_layers, layers = _get_dotted(config, "decomposition.layers")
+    found_fitted, fitted = _get_dotted(config, "lens.expect_source_layers")
+    if (
+        found_layers
+        and found_fitted
+        and isinstance(layers, list)
+        and isinstance(fitted, list)
+        and not set(layers) <= set(fitted)
+    ):
+        problems.append(
+            f"decomposition.layers {sorted(set(layers) - set(fitted))} not in "
+            f"lens.expect_source_layers"
+        )
+    if problems:
+        raise ValueError("invalid jspace config:\n  " + "\n  ".join(problems))
+
+
+def load_jspace_config(path: str) -> dict:
+    """Load and validate a YAML J-space decomposition config."""
+    import yaml
+
+    with open(path, encoding="utf-8") as handle:
+        config = yaml.safe_load(handle)
+    if not isinstance(config, dict):
+        raise ValueError(f"{path}: top level must be a mapping")
+    validate_jspace_config(config)
+    return config
+
+
 def prompt_hashes(prompts: list[str]) -> list[str]:
     """Stable short hash per prompt, so prompt sets are reproducible without
     committing full text."""

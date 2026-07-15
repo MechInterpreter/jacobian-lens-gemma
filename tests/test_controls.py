@@ -6,12 +6,18 @@ import pytest
 import torch
 
 from jlens.controls import (
+    adjacent_layer_mapping,
     control_lens,
+    distant_layer_mapping,
+    layer_mapped_lens,
+    mapping_provenance,
     permute_rows,
     ranks_of_targets,
     scale_matched_random,
+    shuffled_layer_mapping,
     topk_overlap,
     wrong_layer_lens,
+    wrong_layer_mapping,
 )
 from jlens.fitting import fit
 from jlens.lens import JacobianLens
@@ -108,6 +114,84 @@ def test_ranks_of_targets_matches_naive():
         naive = int((logits[i] > logits[i, targets[i]]).sum())
         assert int(ranks[i]) == naive
     assert int(ranks_of_targets(logits[:1], logits[0].argmax().unsqueeze(0))) == 0
+
+
+PILOT_LAYERS = [3, 7, 14, 21, 28, 35, 38]
+
+
+def test_adjacent_layer_mapping_picks_nearest_other_layer():
+    mapping = adjacent_layer_mapping(PILOT_LAYERS)
+    assert mapping == {3: 7, 7: 3, 14: 21, 21: 28, 28: 35, 35: 38, 38: 35}
+    # Ties (equidistant neighbours) break toward the deeper layer.
+    assert adjacent_layer_mapping([0, 2, 4]) == {0: 2, 2: 4, 4: 2}
+    with pytest.raises(ValueError, match=">= 2"):
+        adjacent_layer_mapping([5])
+
+
+def test_distant_layer_mapping_picks_farthest_layer():
+    mapping = distant_layer_mapping(PILOT_LAYERS)
+    assert mapping == {3: 38, 7: 38, 14: 38, 21: 3, 28: 3, 35: 3, 38: 3}
+    with pytest.raises(ValueError, match=">= 2"):
+        distant_layer_mapping([5])
+
+
+def test_shuffled_layer_mapping_is_a_deterministic_derangement():
+    mapping = shuffled_layer_mapping(PILOT_LAYERS, seed=7)
+    assert sorted(mapping) == PILOT_LAYERS
+    assert sorted(mapping.values()) == PILOT_LAYERS  # a permutation
+    assert all(source != layer for layer, source in mapping.items())
+    assert shuffled_layer_mapping(PILOT_LAYERS, seed=7) == mapping
+    assert shuffled_layer_mapping(PILOT_LAYERS, seed=8) != mapping
+    # Smallest possible case must terminate (the only derangement is a swap).
+    assert shuffled_layer_mapping([1, 2], seed=0) == {1: 2, 2: 1}
+
+
+def test_wrong_layer_mapping_documents_the_cyclic_control(fitted):
+    """The explicit mapping must reproduce wrong_layer_lens exactly, so the
+    historical control's provenance is recorded truthfully."""
+    _, lens = fitted
+    mapping = wrong_layer_mapping(lens.source_layers)
+    via_mapping = layer_mapped_lens(lens, mapping)
+    via_legacy = wrong_layer_lens(lens)
+    for layer in lens.source_layers:
+        torch.testing.assert_close(
+            via_mapping.jacobians[layer], via_legacy.jacobians[layer]
+        )
+
+
+def test_layer_mapped_lens_uses_exactly_the_claimed_matrices(fitted):
+    """Every layer-mapping control must hold, bit-for-bit, the fitted J of
+    the layer its mapping claims — the core provenance guarantee."""
+    _, lens = fitted
+    for make in (adjacent_layer_mapping, distant_layer_mapping):
+        mapping = make(lens.source_layers)
+        control = layer_mapped_lens(lens, mapping)
+        for layer, source in mapping.items():
+            torch.testing.assert_close(
+                control.jacobians[layer], lens.jacobians[source]
+            )
+    mapping = shuffled_layer_mapping(lens.source_layers, seed=3)
+    control = layer_mapped_lens(lens, mapping)
+    for layer, source in mapping.items():
+        torch.testing.assert_close(
+            control.jacobians[layer], lens.jacobians[source]
+        )
+
+
+def test_layer_mapped_lens_rejects_bad_mappings(fitted):
+    _, lens = fitted
+    with pytest.raises(ValueError, match="non-fitted"):
+        layer_mapped_lens(lens, {0: 99})
+    with pytest.raises(ValueError, match="cover exactly"):
+        layer_mapped_lens(lens, {lens.source_layers[0]: lens.source_layers[1]})
+
+
+def test_mapping_provenance_records_distances():
+    rows = mapping_provenance({35: 38, 38: 3})
+    assert rows == [
+        {"applied_at_layer": 35, "jacobian_fitted_at_layer": 38, "layer_distance": 3},
+        {"applied_at_layer": 38, "jacobian_fitted_at_layer": 3, "layer_distance": 35},
+    ]
 
 
 def test_controls_change_the_readout(fitted):

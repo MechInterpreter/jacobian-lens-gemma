@@ -17,19 +17,24 @@ implementation to [`google/gemma-4-E4B-it`](https://huggingface.co/google/gemma-
 
 ## Current status
 
-The **smoke** stage — the second of three planned stages (micro-smoke →
-smoke → pilot) — has completed successfully on real `google/gemma-4-E4B-it`
-weights (revision `fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd`): the Jacobian
-lens was fitted on 8 plain-text prompts at 5 source layers in 361.5 s on a
-Colab GPU, producing finite Jacobians, and was evaluated against a logit-lens
-baseline and three negative controls. Full results, methodology, and an
-explicit separation of measured findings from speculative interpretation are
-in **[docs/smoke_report.md](docs/smoke_report.md)**; the complete run
-artifacts are preserved under
-[`runs/smoke_20260715T172315460316_fb2eefcd91cd/`](runs/smoke_20260715T172315460316_fb2eefcd91cd/).
-See [docs/research_log.md](docs/research_log.md) for the engineering
-milestones that led to this run. The next planned stage is **pilot**
-(`configs/gemma_text_pilot.yaml`).
+The **pilot** stage — the final planned fitting stage (micro-smoke → smoke →
+**pilot**) — has completed on real `google/gemma-4-E4B-it` weights (revision
+`fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd`): the Jacobian lens was fitted on
+100 WikiText prompts at 7 source layers (3, 7, 14, 21, 28, 35, 38) in
+9665 s on a Colab L4, producing finite Jacobians, and was evaluated against
+a logit-lens baseline and three negative controls. Layer 38 gave the
+strongest next-token rank (12) and layers 28/35/38 strongly beat the
+permuted and random controls; the single wrong-layer control proved
+ambiguous and is audited and superseded for future evaluations. Full
+results and interpretation boundaries: **[docs/pilot_report.md](docs/pilot_report.md)**;
+run metadata is preserved under
+[`runs/pilot_20260715T200437612150_311fd108c23a/`](runs/pilot_20260715T200437612150_311fd108c23a/).
+The earlier smoke stage is documented in
+[docs/smoke_report.md](docs/smoke_report.md); engineering milestones in
+[docs/research_log.md](docs/research_log.md). Current work: sparse J-space
+decomposition by gradient pursuit on the frozen pilot lens
+(branch `jspace-gradient-pursuit`; see
+[docs/jspace_decomposition.md](docs/jspace_decomposition.md)).
 
 ## What is inherited vs new
 
@@ -44,13 +49,18 @@ tests, and the upstream walkthrough/README (below).
 | Path | Purpose |
 |---|---|
 | `jlens/gemma4.py` | Revision pinning, gated loading, explicit BOS control, pre-softcap + softcapped dual readout, architecture verification, fit-cost probe |
-| `jlens/controls.py` | Negative controls: row-permuted fitted J (primary), scale-matched random, wrong-layer application; overlap/rank metrics |
-| `jlens/metadata.py` | Config validation, config fingerprint, environment manifest, atomic metadata writes |
-| `configs/gemma_text_{microsmoke,smoke,pilot}.yaml` | The three experiment stages (see below) |
-| `configs/prompts/` | Plain-text fitting corpus (smoke) + separate plain/chat evaluation prompts |
+| `jlens/controls.py` | Negative controls: row-permuted fitted J (primary), scale-matched random, legacy wrong-layer application, and named layer-mapping controls (adjacent / distant / shuffled) with recorded provenance; overlap/rank metrics |
+| `jlens/metadata.py` | Config validation (fit + jspace schemas), config/file fingerprints, environment manifest, atomic metadata writes |
+| `jlens/evaluation.py` | Named control suite, one-forward-pass evaluation, aggregate statistics (median rank, MRR, hit rates) per format/category |
+| `jlens/pursuit.py` | Sparse nonnegative J-space decomposition by gradient pursuit; J-lens dictionary construction (rows of `W_U J_l`); see [docs/jspace_decomposition.md](docs/jspace_decomposition.md) |
+| `jlens/cones.py` | Cone record schema, deterministic cone signatures, trajectory/overlap/concentration utilities, transparent grouping |
+| `jlens/ignition.py` | Candidate-ignition diagnostics (explicitly labeled; optional heuristic composite disabled by default) |
+| `configs/gemma_text_{microsmoke,smoke,pilot}.yaml`, `configs/gemma_jspace_pursuit.yaml` | The three fitting stages + the decomposition workflow |
+| `configs/prompts/` | Plain-text fitting corpus (smoke), v1 evaluation prompts, categorized held-out evaluation set v2 |
 | `scripts/fit_gemma.py`, `scripts/apply_gemma.py` | CLI: fit and evaluate with full metadata |
-| `notebooks/gemma_4_e4b_text_jlens.ipynb` | End-to-end pilot notebook (sequential from a fresh runtime; model load behind `JLENS_ALLOW_GEMMA=1`) |
-| `tests/test_gemma4_adapter.py`, `test_controls.py`, `test_finite_difference.py`, `test_metadata.py`, `test_scripts.py`, `mock_gemma4.py` | 47 new CPU-only tests (no network, no real model) |
+| `notebooks/gemma_4_e4b_text_jlens.ipynb` | End-to-end fitting notebook (produced the smoke and pilot runs) |
+| `notebooks/gemma_4_e4b_jspace_pursuit.ipynb` | Decomposition notebook: verifies and consumes the frozen pilot lens, never refits |
+| `tests/` | CPU-only tests (no network, no real model): adapter, controls, evaluation, pursuit, cones, ignition, metadata, scripts, finite differences |
 
 **Validated so far:** the full local CPU suite (79 tests) passes: layout
 auto-detection on a Gemma4-shaped mock, Jacobian orientation pinned
