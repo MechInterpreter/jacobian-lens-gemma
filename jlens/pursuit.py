@@ -75,6 +75,47 @@ from jlens.lens import JacobianLens
 #: Sentinel for unused slots in fixed-width index tensors.
 PAD_INDEX = -1
 
+#: Default row-chunk size for whole-dictionary validation/norm passes.
+#: 16384 rows of a [262144, 2560] float32 dictionary bound the transient
+#: allocations of one pass to ~160 MB (float32 chunk view is free; the
+#: isfinite bool mask is 16384*2560 = 40 MB) instead of the ~671 MB bool
+#: mask a whole-tensor ``torch.isfinite(atoms)`` materializes — the exact
+#: allocation that OOMed dictionary construction on an L4.
+VALIDATION_CHUNK_ROWS = 16384
+
+
+def validate_finite(tensor: torch.Tensor, *, chunk_rows: int | None = VALIDATION_CHUNK_ROWS) -> bool:
+    """``torch.isfinite(tensor).all()`` with bounded peak memory.
+
+    Checks the tensor in row chunks so the boolean mask temporary is at most
+    ``chunk_rows`` rows instead of the full tensor; each chunk's mask is
+    released before the next is allocated. Mathematically identical to the
+    whole-tensor check (finiteness is elementwise); ``chunk_rows=None``
+    falls back to the single-pass check.
+    """
+    if chunk_rows is None or tensor.ndim == 0 or tensor.shape[0] <= chunk_rows:
+        return bool(torch.isfinite(tensor).all())
+    for start in range(0, tensor.shape[0], chunk_rows):
+        finite = torch.isfinite(tensor[start : start + chunk_rows]).all()
+        if not bool(finite):
+            return False
+        del finite
+    return True
+
+
+def _chunked_row_norms(tensor: torch.Tensor, *, chunk_rows: int | None = VALIDATION_CHUNK_ROWS) -> torch.Tensor:
+    """Float32 L2 norms per row without materializing a full float32 copy of
+    a lower-precision tensor (only ``chunk_rows`` rows are upcast at a
+    time). Identical per-row arithmetic to ``tensor.float().norm(dim=-1)``."""
+    if tensor.dtype == torch.float32 or chunk_rows is None or tensor.shape[0] <= chunk_rows:
+        return tensor.float().norm(dim=-1)
+    norms = torch.empty(tensor.shape[0], dtype=torch.float32, device=tensor.device)
+    for start in range(0, tensor.shape[0], chunk_rows):
+        chunk = tensor[start : start + chunk_rows].float()
+        norms[start : start + chunk.shape[0]] = chunk.norm(dim=-1)
+        del chunk
+    return norms
+
 
 @dataclass(frozen=True)
 class PursuitSettings:
@@ -134,10 +175,10 @@ class JSpaceDictionary:
     ) -> None:
         if atoms.ndim != 2:
             raise ValueError(f"atoms must be [n_atoms, d_model], got {tuple(atoms.shape)}")
-        if not torch.isfinite(atoms).all():
+        if not validate_finite(atoms):
             raise ValueError("dictionary atoms contain NaN/Inf")
         self.atoms = atoms
-        self.atom_norms = atoms.float().norm(dim=-1)
+        self.atom_norms = _chunked_row_norms(atoms)
         self.layer = layer
         self.provenance = provenance or {}
 
@@ -163,6 +204,7 @@ class JSpaceDictionary:
         final_norm_weight: torch.Tensor | None = None,
         device: torch.device | str | None = None,
         dtype: torch.dtype = torch.float32,
+        build_chunk_rows: int | None = None,
     ) -> JSpaceDictionary:
         """Build the layer-``layer`` dictionary from a fitted lens.
 
@@ -182,6 +224,27 @@ class JSpaceDictionary:
                 ``unembedding_weight.device``).
             dtype: Storage dtype for the atoms (float32 default; correlations
                 are always computed in float32).
+            build_chunk_rows: If set, build the product in row chunks of this
+                size: only ``build_chunk_rows`` rows of ``W_U`` are upcast to
+                float32 at a time and each chunk's product is written
+                straight into the preallocated output. This avoids the two
+                transient full-size tensors of the one-shot path (the float32
+                copy of a lower-precision ``W_U`` and, for non-float32
+                ``dtype``, the full float32 product held next to its
+                converted copy) — for Gemma 4 E4B each is ~2.7 GB. ``None``
+                (default) keeps the single ``W @ J`` matmul.
+
+        Peak-memory notes (Gemma 4 E4B, vocab 262144, d_model 2560): float32
+        atoms are 2.7 GB and are the *output*, so they always exist; the
+        avoidable costs are the float32 ``W_U`` copy (2.7 GB, skipped by
+        ``build_chunk_rows`` when the model weight is bf16), the finiteness
+        mask (671 MB unchunked, ~40 MB chunked — see
+        :func:`validate_finite`), a float32 copy for norms when atoms are
+        stored in a lower precision (chunked in ``__init__``), and the
+        ``[batch, vocab]`` correlation matrix during pursuit (bounded by
+        ``PursuitSettings.correlation_chunk_size``). Callers decomposing
+        several layers should drop each layer's dictionary (``del``) before
+        building the next; nothing here retains it.
         """
         if layer not in lens.jacobians:
             raise ValueError(
@@ -193,16 +256,35 @@ class JSpaceDictionary:
                 f"{tuple(unembedding_weight.shape)}"
             )
         device = torch.device(device) if device is not None else unembedding_weight.device
-        W = unembedding_weight.detach().to(device=device, dtype=torch.float32)
+        w = None
         if final_norm_weight is not None:
             w = final_norm_weight.detach().to(device=device, dtype=torch.float32)
             if w.shape != (lens.d_model,):
                 raise ValueError(
                     f"final_norm_weight must be [{lens.d_model}], got {tuple(w.shape)}"
                 )
-            W = W * w  # scale columns: rows of (W_U * w) @ J
         J = lens.jacobians[layer].to(device=device, dtype=torch.float32)
-        atoms = (W @ J).to(dtype)
+        source = unembedding_weight.detach()
+        if build_chunk_rows is None:
+            W = source.to(device=device, dtype=torch.float32)
+            if w is not None:
+                W = W * w  # scale columns: rows of (W_U * w) @ J
+            atoms = (W @ J).to(dtype)
+        else:
+            if build_chunk_rows < 1:
+                raise ValueError(
+                    f"build_chunk_rows must be >= 1, got {build_chunk_rows}"
+                )
+            n_atoms = source.shape[0]
+            atoms = torch.empty(n_atoms, lens.d_model, dtype=dtype, device=device)
+            for start in range(0, n_atoms, build_chunk_rows):
+                chunk = source[start : start + build_chunk_rows].to(
+                    device=device, dtype=torch.float32
+                )
+                if w is not None:
+                    chunk = chunk * w
+                atoms[start : start + chunk.shape[0]] = (chunk @ J).to(dtype)
+                del chunk
         return cls(
             atoms,
             layer=layer,

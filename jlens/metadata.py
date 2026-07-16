@@ -216,6 +216,56 @@ def load_jspace_config(path: str) -> dict:
     return config
 
 
+def execution_record(
+    *,
+    configured_allow_model_load: bool,
+    resolved_allow_model_load: bool,
+    model_loaded: bool,
+    override_source: str | None = None,
+) -> dict:
+    """Provenance block distinguishing static configuration from what a run
+    actually did.
+
+    The completed jspace run recorded the static notebook YAML verbatim
+    (``config.model.allow_model_load: false``) while its ``load_info`` block
+    shows Gemma *was* loaded — the config value was overridden at execution
+    time but the resolved value was never written down. This record makes
+    the three facts explicit and self-consistent:
+
+    - ``configured_allow_model_load``: the static config/YAML value;
+    - ``resolved_allow_model_load``: the value in effect after CLI flags or
+      notebook overrides (``override_source`` says where the override came
+      from, e.g. ``"cli:--allow-model-load"`` or ``"notebook"``);
+    - ``model_loaded``: whether a real model load actually happened.
+
+    Raises ``ValueError`` for the impossible combination (model loaded
+    while loading was resolved off), so a run can never write a record with
+    the old ambiguity. Existing run artifacts are historical facts and are
+    not rewritten; new runs should store this under an ``"execution"`` key
+    next to the static config.
+    """
+    if model_loaded and not resolved_allow_model_load:
+        raise ValueError(
+            "inconsistent execution record: model_loaded=True but "
+            "resolved_allow_model_load=False"
+        )
+    if (
+        override_source is None
+        and resolved_allow_model_load != configured_allow_model_load
+    ):
+        raise ValueError(
+            "resolved_allow_model_load differs from the configured value; "
+            "record where the override came from via override_source"
+        )
+    return {
+        "schema": "jlens.metadata.execution.v1",
+        "configured_allow_model_load": bool(configured_allow_model_load),
+        "resolved_allow_model_load": bool(resolved_allow_model_load),
+        "override_source": override_source,
+        "model_loaded": bool(model_loaded),
+    }
+
+
 def prompt_hashes(prompts: list[str]) -> list[str]:
     """Stable short hash per prompt, so prompt sets are reproducible without
     committing full text."""

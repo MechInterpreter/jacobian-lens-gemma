@@ -31,10 +31,21 @@ run metadata is preserved under
 [`runs/pilot_20260715T200437612150_311fd108c23a/`](runs/pilot_20260715T200437612150_311fd108c23a/).
 The earlier smoke stage is documented in
 [docs/smoke_report.md](docs/smoke_report.md); engineering milestones in
-[docs/research_log.md](docs/research_log.md). Current work: sparse J-space
-decomposition by gradient pursuit on the frozen pilot lens
-(branch `jspace-gradient-pursuit`; see
-[docs/jspace_decomposition.md](docs/jspace_decomposition.md)).
+[docs/research_log.md](docs/research_log.md).
+
+The sparse **J-space decomposition** by gradient pursuit on the frozen
+pilot lens (branch `jspace-gradient-pursuit`; method in
+[docs/jspace_decomposition.md](docs/jspace_decomposition.md)) has completed
+on real weights: 1,140 decompositions (5 layers × k ∈ {10, 16, 25} × 76
+held-out activations) under
+[`runs/jspace_20260716T170808536780_e4118850fb70/`](runs/jspace_20260716T170808536780_e4118850fb70/).
+The full offline analysis — k comparison, cross-k stability, the layer-21
+collapse, the plain/chat gap, similarity-based recurrence, atom
+frequencies, candidate-ignition robustness, and evaluation controls — is in
+**[docs/jspace_run_report.md](docs/jspace_run_report.md)** (methodology:
+[docs/jspace_similarity_analysis.md](docs/jspace_similarity_analysis.md);
+derived tables under `reports/`, regenerable with
+`python scripts/analyze_jspace.py --run-dir <run>`).
 
 ## What is inherited vs new
 
@@ -58,6 +69,8 @@ tests, and the upstream walkthrough/README (below).
 | `configs/gemma_text_{microsmoke,smoke,pilot}.yaml`, `configs/gemma_jspace_pursuit.yaml` | The three fitting stages + the decomposition workflow |
 | `configs/prompts/` | Plain-text fitting corpus (smoke), v1 evaluation prompts, categorized held-out evaluation set v2 |
 | `scripts/fit_gemma.py`, `scripts/apply_gemma.py` | CLI: fit and evaluate with full metadata |
+| `jlens/similarity.py` | Similarity-based recurrence (Jaccard / weighted Jaccard / sparse cosine / top-m), stratified similarity groups with threshold-sensitivity, atom frequency and enrichment statistics |
+| `jlens/jspace_analysis.py`, `scripts/analyze_jspace.py` | Deterministic read-only analysis of a completed jspace run: integrity checks, k comparison, cross-k stability, transition/eval summaries (outputs under `reports/`) |
 | `notebooks/gemma_4_e4b_text_jlens.ipynb` | End-to-end fitting notebook (produced the smoke and pilot runs) |
 | `notebooks/gemma_4_e4b_jspace_pursuit.ipynb` | Decomposition notebook: verifies and consumes the frozen pilot lens, never refits |
 | `tests/` | CPU-only tests (no network, no real model): adapter, controls, evaluation, pursuit, cones, ignition, metadata, scripts, finite differences |

@@ -114,12 +114,46 @@ control conflates adjacent and maximally-distant substitutions — in
 [`pilot_report.md`](pilot_report.md). This 100-prompt pilot lens is the
 frozen, authoritative lens artifact for all subsequent decomposition work.
 
+## 2026-07-16 — J-space gradient-pursuit run completed and analyzed
+
+The sparse J-space decomposition ran to completion on real Gemma 4 E4B
+weights (run `jspace_20260716T170808536780_e4118850fb70`, Colab A100,
+implementation commit `6442fff`): the frozen 100-prompt pilot lens
+(fingerprint verified) was decomposed against at layers 14/21/28/35/38 for
+k ∈ {10, 16, 25} over 76 held-out activations (38 prompts × 2 positions) —
+1,140 decompositions, all 15 layer/k units complete, plus trajectories,
+candidate-ignition diagnostics, recurring-signature tables, and the named
+control-suite evaluation.
+
+On branch `jspace-pursuit-analysis` this run was turned into a rigorous
+offline analysis (no model download, no GPU, source artifacts byte-frozen):
+deterministic analysis pipeline (`jlens/jspace_analysis.py`,
+`jlens/similarity.py`, `scripts/analyze_jspace.py`; derived tables under
+`reports/`), full integrity verification (zero issues), and
+[`jspace_run_report.md`](jspace_run_report.md) with
+[`jspace_similarity_analysis.md`](jspace_similarity_analysis.md) as the
+recurrence methodology. Headlines: k=10 suffices (k25 adds 4–10 % relative
+explained fraction as tail mass; supports are ~95–99 % nested); layer 21's
+explained-fraction collapse (2.3e-5) traces to an outlier fitted Jacobian
+(‖J₂₁‖_F = 188.7 vs 3.5–18.1 at all other layers) and stays unresolved
+between fitting pathology and genuine mid-stack transition; the plain/chat
+gap decomposes into a position-−1 tokenization artifact, mid-stack
+template dominance, and a modest residual format shift; exact cone
+signatures never repeat, but similarity-based recurrence finds
+threshold-robust repeated structure (chat-template cones mid-stack;
+antonym/copula completion-frame cones late); the 35→38 sparse-coordinate
+stabilization survives every cut (k, format, position, category, frequency
+adjustment, output-token removal) and is reported as late-layer
+consolidation — explicitly NOT validated ignition. The L4 OOM in
+whole-dictionary `isfinite` was fixed with chunked validation/norms and an
+optional chunked dictionary build (bit-identical results, tested), and
+`jlens.metadata.execution_record` now separates configured vs resolved
+`allow_model_load` so the completed run's provenance ambiguity cannot
+recur.
+
 ## Next planned milestone
 
-Sparse J-space decomposition of held-out activations by nonnegative
-gradient pursuit against the frozen pilot lens (branch
-`jspace-gradient-pursuit`): pilot analysis is documented in
-[`pilot_report.md`](pilot_report.md), evaluation controls are being
-disambiguated and extended, and the decomposition + cone-signature +
-candidate-ignition tooling is described in
-[`jspace_decomposition.md`](jspace_decomposition.md).
+Layer-21 refit diagnostic (per-prompt Jacobian variance at the outlier
+layer, optional chat-formatted fitting subset), then a lower-memory
+decomposition rerun on {21, 31, 35, 38} at k=10 — now feasible without an
+A100 after the chunked-memory changes.

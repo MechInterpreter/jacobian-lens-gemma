@@ -1,0 +1,187 @@
+{
+ "adjacent_source_notes": [
+  {
+   "applied_at_layer": 35,
+   "jacobian_fitted_at_layer": 38,
+   "variant": "adjacent_layer"
+  },
+  {
+   "applied_at_layer": 38,
+   "jacobian_fitted_at_layer": 35,
+   "variant": "adjacent_layer"
+  },
+  {
+   "applied_at_layer": 38,
+   "jacobian_fitted_at_layer": 35,
+   "variant": "shuffled_layer"
+  }
+ ],
+ "pairs": [
+  {
+   "consistent": true,
+   "expected_identical": true,
+   "identical_examples": 38,
+   "layer": 14,
+   "source_layer_a": 38,
+   "source_layer_b": 38,
+   "total_examples": 38,
+   "variant_a": "distant_layer",
+   "variant_b": "shuffled_layer"
+  },
+  {
+   "consistent": true,
+   "expected_identical": false,
+   "identical_examples": 0,
+   "layer": 21,
+   "source_layer_a": 3,
+   "source_layer_b": 14,
+   "total_examples": 38,
+   "variant_a": "distant_layer",
+   "variant_b": "shuffled_layer"
+  },
+  {
+   "consistent": true,
+   "expected_identical": true,
+   "identical_examples": 38,
+   "layer": 28,
+   "source_layer_a": 3,
+   "source_layer_b": 3,
+   "total_examples": 38,
+   "variant_a": "distant_layer",
+   "variant_b": "shuffled_layer"
+  },
+  {
+   "consistent": true,
+   "expected_identical": false,
+   "identical_examples": 0,
+   "layer": 35,
+   "source_layer_a": 3,
+   "source_layer_b": 7,
+   "total_examples": 38,
+   "variant_a": "distant_layer",
+   "variant_b": "shuffled_layer"
+  },
+  {
+   "consistent": true,
+   "expected_identical": false,
+   "identical_examples": 0,
+   "layer": 38,
+   "source_layer_a": 3,
+   "source_layer_b": 35,
+   "total_examples": 38,
+   "variant_a": "distant_layer",
+   "variant_b": "shuffled_layer"
+  },
+  {
+   "consistent": true,
+   "expected_identical": false,
+   "identical_examples": 0,
+   "layer": 14,
+   "source_layer_a": 21,
+   "source_layer_b": 38,
+   "total_examples": 38,
+   "variant_a": "adjacent_layer",
+   "variant_b": "shuffled_layer"
+  },
+  {
+   "consistent": true,
+   "expected_identical": false,
+   "identical_examples": 0,
+   "layer": 21,
+   "source_layer_a": 28,
+   "source_layer_b": 14,
+   "total_examples": 38,
+   "variant_a": "adjacent_layer",
+   "variant_b": "shuffled_layer"
+  },
+  {
+   "consistent": true,
+   "expected_identical": false,
+   "identical_examples": 0,
+   "layer": 28,
+   "source_layer_a": 35,
+   "source_layer_b": 3,
+   "total_examples": 38,
+   "variant_a": "adjacent_layer",
+   "variant_b": "shuffled_layer"
+  },
+  {
+   "consistent": true,
+   "expected_identical": false,
+   "identical_examples": 0,
+   "layer": 35,
+   "source_layer_a": 38,
+   "source_layer_b": 7,
+   "total_examples": 38,
+   "variant_a": "adjacent_layer",
+   "variant_b": "shuffled_layer"
+  },
+  {
+   "consistent": true,
+   "expected_identical": true,
+   "identical_examples": 38,
+   "layer": 38,
+   "source_layer_a": 35,
+   "source_layer_b": 35,
+   "total_examples": 38,
+   "variant_a": "adjacent_layer",
+   "variant_b": "shuffled_layer"
+  },
+  {
+   "consistent": true,
+   "expected_identical": false,
+   "identical_examples": 0,
+   "layer": 14,
+   "source_layer_a": 21,
+   "source_layer_b": 38,
+   "total_examples": 38,
+   "variant_a": "adjacent_layer",
+   "variant_b": "distant_layer"
+  },
+  {
+   "consistent": true,
+   "expected_identical": false,
+   "identical_examples": 0,
+   "layer": 21,
+   "source_layer_a": 28,
+   "source_layer_b": 3,
+   "total_examples": 38,
+   "variant_a": "adjacent_layer",
+   "variant_b": "distant_layer"
+  },
+  {
+   "consistent": true,
+   "expected_identical": false,
+   "identical_examples": 0,
+   "layer": 28,
+   "source_layer_a": 35,
+   "source_layer_b": 3,
+   "total_examples": 38,
+   "variant_a": "adjacent_layer",
+   "variant_b": "distant_layer"
+  },
+  {
+   "consistent": true,
+   "expected_identical": false,
+   "identical_examples": 0,
+   "layer": 35,
+   "source_layer_a": 38,
+   "source_layer_b": 3,
+   "total_examples": 38,
+   "variant_a": "adjacent_layer",
+   "variant_b": "distant_layer"
+  },
+  {
+   "consistent": true,
+   "expected_identical": false,
+   "identical_examples": 0,
+   "layer": 38,
+   "source_layer_a": 35,
+   "source_layer_b": 3,
+   "total_examples": 38,
+   "variant_a": "adjacent_layer",
+   "variant_b": "distant_layer"
+  }
+ ],
+ "schema": "jlens.analysis.control_collisions.v1"
+}
