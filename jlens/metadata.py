@@ -18,7 +18,7 @@ import subprocess
 from datetime import datetime, timezone
 from typing import Any
 
-_MODES = ("microsmoke", "smoke", "pilot")
+_MODES = ("microsmoke", "smoke", "pilot", "layer21_diagnostic")
 
 #: (dotted key, type(s), required). Validation is structural — values such as
 #: layer indices are range-checked later against the actual model by

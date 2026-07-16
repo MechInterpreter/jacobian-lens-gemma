@@ -27,7 +27,7 @@ import logging
 import math
 import os
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 import torch
 
@@ -233,6 +233,7 @@ def fit(
     checkpoint_path: str | None = None,
     checkpoint_every: int | None = 1,
     resume: bool = True,
+    on_prompt: Callable[[dict], None] | None = None,
 ) -> JacobianLens:
     """Fit ``J_l`` over a list of prompts and return a :class:`JacobianLens`.
 
@@ -257,6 +258,17 @@ def fit(
             checkpoint can be large (``len(source_layers) * d_model**2 * 4``
             bytes), so raise this for large models.
         resume: If ``True`` and ``checkpoint_path`` exists, resume from it.
+        on_prompt: Optional observer called once per prompt after it is
+            accumulated (or skipped), with a payload dict:
+            ``prompt_index``, ``status`` (``"ok"``/``"skipped"``), ``prompt``
+            (the text; observers hash it rather than store it), ``reason``
+            (skips only), ``seq_len``/``n_valid_positions`` (ok only),
+            ``elapsed_seconds``, ``per_prompt_jacobians`` (the prompt's own
+            ``{layer: [d, d]}`` tensors; ``None`` on skips),
+            ``jacobian_sum`` (running sum, read-only by convention),
+            ``n_done``, ``checkpoint_path``, and ``checkpoint_written``.
+            On resume, already-processed prompts do not re-fire. See
+            :class:`jlens.fit_diagnostics.PromptDiagnosticsRecorder`.
 
     Returns:
         The fitted :class:`JacobianLens`.
@@ -344,6 +356,21 @@ def fit(
         except ValueError as exc:
             logger.warning("  skipping prompt %d: %s", prompt_idx, exc)
             next_idx = prompt_idx + 1
+            if on_prompt is not None:
+                on_prompt(
+                    {
+                        "prompt_index": prompt_idx,
+                        "status": "skipped",
+                        "prompt": prompt,
+                        "reason": str(exc),
+                        "elapsed_seconds": time.perf_counter() - start_time,
+                        "per_prompt_jacobians": None,
+                        "jacobian_sum": jacobian_sum,
+                        "n_done": n_done,
+                        "checkpoint_path": checkpoint_path,
+                        "checkpoint_written": False,
+                    }
+                )
             continue
 
         # Per-prompt diagnostics, max over source layers: the prompt's own
@@ -377,8 +404,28 @@ def fit(
             prompt_norm,
             mean_rel_change,
         )
-        if checkpoint_every is not None and next_idx % checkpoint_every == 0:
+        checkpoint_written = (
+            checkpoint_every is not None and next_idx % checkpoint_every == 0
+        )
+        if checkpoint_written:
             write_checkpoint()
+        if on_prompt is not None:
+            on_prompt(
+                {
+                    "prompt_index": prompt_idx,
+                    "status": "ok",
+                    "prompt": prompt,
+                    "seq_len": seq_len,
+                    "n_valid_positions": n_valid,
+                    "elapsed_seconds": time.perf_counter() - start_time,
+                    "per_prompt_jacobians": per_prompt_J,
+                    "jacobian_sum": jacobian_sum,
+                    "n_done": n_done,
+                    "checkpoint_path": checkpoint_path,
+                    "checkpoint_written": checkpoint_written
+                    and checkpoint_path is not None,
+                }
+            )
 
     write_checkpoint()
     if n_done == 0:
