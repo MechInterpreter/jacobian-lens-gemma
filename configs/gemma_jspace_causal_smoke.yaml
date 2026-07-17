@@ -1,0 +1,61 @@
+# Causal steering smoke run on Gemma 4 E4B — measured residual-stream
+# interventions at the exact block_output sites the frozen pilot lens reads.
+# Consumes the completed jspace run's k=10 cone records; never refits the
+# lens and never reruns the pursuit. Validated by
+# jlens.metadata.load_causal_config; run by
+# notebooks/gemma_4_e4b_jspace_causal_smoke.ipynb.
+mode: causal_smoke
+
+model:
+  repo_id: google/gemma-4-E4B-it
+  revision: fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd  # immutable, same as lens fit
+  dtype: bfloat16
+  device_map: null            # notebook overrides to "cuda" via JLENS_DEVICE_MAP
+  allow_model_load: false     # notebook overrides via JLENS_ALLOW_GEMMA=1 (recorded)
+  expect_n_layers: 42
+  expect_d_model: 2560
+  expect_vocab_size: 262144
+
+lens:
+  run_dir_name: pilot_20260715T200437612150_311fd108c23a
+  artifact_relpath: artifacts/lens.pt
+  expect_file_sha256: sha256:7229c7562d1d55420b70abb13f481934649c4b01417bd851e97cedb47c96f474
+  expect_model_revision: fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd
+  expect_source_layers: [3, 7, 14, 21, 28, 35, 38]
+  expect_n_prompts: 100
+
+source:
+  # Completed J-space run whose cone records define the intervention deltas.
+  jspace_run_dir_name: jspace_20260716T170808536780_e4118850fb70
+  cones_k: 10
+  expect_config_fingerprint: sha256:e4118850fb70842b2fea162642f0265cb6c82dc0abfb357aca8eb455eb7f0253
+
+intervention:
+  layers: [35, 38]            # primary steering layers
+  multipliers: [-1.0, 0.0, 1.0]
+  optional_multipliers: [-0.5, 0.5]   # schema-supported; off for the first smoke run
+  families:
+    - output_atom_contribution
+    - top_non_output_atom_contribution
+    - full_cone_reconstruction
+  controls:
+    - isotropic_random_direction      # deterministic, exactly norm-matched
+  norm_preserving: false      # variant prepared; off for the first smoke run
+  generate_completions: true
+  completion_max_new_tokens: 8
+
+examples:
+  manifest_path: configs/causal_smoke_examples.json
+
+eval:
+  top_k: 10
+
+parity:
+  # Baseline gate: unhooked vs multiplier-0 vs identical-copy writeback must
+  # agree within this max-abs pre-softcap logit difference (bf16 kernels can
+  # legitimately reorder reductions when a hook clones the output tensor).
+  # Exceeding it aborts the run before any intervention is recorded.
+  max_abs_logit_diff_tol: 0.05
+
+paths:
+  output_dir: artifacts/causal_smoke   # local light-path output; Colab uses RUN_DIR/artifacts

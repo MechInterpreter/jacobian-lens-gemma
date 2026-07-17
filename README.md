@@ -1,7 +1,16 @@
-# jlens-gemma — Jacobian lens on Gemma 4 E4B
+# Gemma 4 Multimodal J-Lens Explorer
 
-Research fork adapting Anthropic's official **Jacobian Lens** reference
-implementation to [`google/gemma-4-E4B-it`](https://huggingface.co/google/gemma-4-E4B-it).
+A browser-based interpretability explorer for
+[`google/gemma-4-E4B-it`](https://huggingface.co/google/gemma-4-E4B-it) that
+visualizes **J-lens predictions**, **sparse k=10 gradient-pursuit cones**,
+**cross-layer cone trajectories**, and **measured causal steering** for text,
+image-conditioned, and audio-conditioned model states — built on this
+repository's completed Jacobian-lens research runs. The explorer is a fully
+static site: browsing completed experiments never loads Gemma and never runs
+Python.
+
+This repo is a research fork adapting Anthropic's official **Jacobian Lens**
+reference implementation to Gemma 4 E4B.
 
 - **Paper (authoritative method source):** [Verbalizable Representations Form a
   Global Workspace in Language Models](https://transformer-circuits.pub/2026/workspace/index.html)
@@ -15,7 +24,138 @@ implementation to [`google/gemma-4-E4B-it`](https://huggingface.co/google/gemma-
   retains Anthropic PBC copyright notices; files new in this fork are marked in
   their headers.
 
-## Current status
+## The explorer at a glance
+
+```mermaid
+flowchart LR
+    subgraph completed["Completed research runs (GPU, immutable)"]
+        pilot["pilot run<br/>frozen lens.pt"]
+        jspace["jspace run<br/>k=10 cones, trajectories,<br/>eval records"]
+    end
+    subgraph notebooks["Planned L4 notebooks (user-run)"]
+        causal["causal smoke run<br/>measured interventions<br/>@ layers 35/38"]
+        multimodal["multimodal capture<br/>image + audio records<br/>@ layer 38"]
+    end
+    exporter["scripts/export_explorer_bundle.py<br/>deterministic, schema-validated"]
+    schema["schemas/explorer_bundle.schema.json<br/>jlens.explorer.bundle.v1"]
+    bundle["explorer/public/data/*.json<br/>static bundles"]
+    app["explorer/ (Vite + React + TS)<br/>static site — no backend"]
+
+    pilot --> jspace
+    jspace --> exporter
+    causal -- explorer_causal_bundle.json --> bundle
+    multimodal -- multimodal_explorer_bundle.json --> bundle
+    exporter --> bundle
+    schema -.validates.-> exporter
+    schema -.validates.-> causal
+    schema -.validates.-> multimodal
+    bundle --> app
+```
+
+**End-user flow:** choose a saved example → inspect input and token/position
+metadata → select a layer → compare model vs J-lens predictions → inspect the
+k=10 sparse cone → replay the gradient pursuit step by step → compare cones
+across layers → open measured steering results vs matched controls → switch
+between Text / Image / Audio.
+
+### Screenshots
+
+*(Capture after `npm run build`; serve `explorer/dist/` and load the demo.)*
+
+| Screenshot | How to capture |
+|---|---|
+| `docs/img/explorer_text.png` | Text tab, `factual-canberra`, layer 38: cone panel + pursuit player visible |
+| `docs/img/explorer_trajectory.png` | Same example, cross-layer trajectory panel (L35→L38 retained atoms highlighted) |
+| `docs/img/explorer_causal.png` | Causal panel after merging a measured causal bundle (multiplier −1 vs control) |
+| `docs/img/explorer_image.png` | Image tab with a real captured example (post multimodal run) |
+
+Do not screenshot fixture data as if it were results — the UI badges make the
+distinction visible; keep the badge in frame.
+
+### Feature status: measured vs planned
+
+| Feature | Data behind it today |
+|---|---|
+| Example browser, input viewer, layer rail, predictions, cones, pursuit playback, trajectories (Text) | **Measured** — completed jspace run (20-example demo bundle committed) |
+| Causal steering panel | **Schema + UI complete**; shows *No causal data available* or a loudly-badged synthetic fixture until `notebooks/gemma_4_e4b_jspace_causal_smoke.ipynb` is run |
+| Image / Audio tabs | **Schema + UI complete**; loudly-badged synthetic fixture until `notebooks/gemma_4_e4b_multimodal_jlens_capture.ipynb` is run |
+
+The frontend automatically prefers measured bundles: files placed under
+`explorer/public/data/measured/` (git-ignored) silently replace the fixtures.
+
+## Explorer: install, develop, build
+
+Requires Node.js ≥ 20.
+
+```bash
+cd explorer
+npm install
+npm run dev        # dev server at http://localhost:5173
+npm test           # Vitest + React Testing Library (24 tests)
+npm run build      # type-check + static production build into explorer/dist/
+```
+
+`explorer/dist/` is deployable to any static host (GitHub Pages included —
+`base: "./"` keeps asset paths relative). No server-side code exists.
+
+### Exporting completed runs
+
+```bash
+# Rebuild the committed 20-example text demo bundle (byte-identical re-runs):
+python scripts/export_explorer_bundle.py \
+    --run-dir runs/jspace_20260716T170808536780_e4118850fb70 \
+    --analysis-dir reports/jspace_20260716T170808536780_e4118850fb70 \
+    --demo-set --out explorer/public/data/text_demo.json
+
+# Merge later measured bundles into a combined export if desired:
+python scripts/export_explorer_bundle.py --run-dir <jspace-run> --demo-set \
+    --merge path/to/explorer_causal_bundle.json \
+    --merge path/to/multimodal_explorer_bundle.json \
+    --out explorer/public/data/text_demo.json
+```
+
+The bundle format is versioned and documented:
+[docs/explorer_data_format.md](docs/explorer_data_format.md); architecture:
+[docs/explorer_architecture.md](docs/explorer_architecture.md); product scope:
+[docs/explorer_mvp_spec.md](docs/explorer_mvp_spec.md).
+
+### Running the causal smoke notebook (Colab L4)
+
+`notebooks/gemma_4_e4b_jspace_causal_smoke.ipynb` — measured residual-stream
+interventions (`h' = h + multiplier·delta`) at layers 35/38 on four
+manifest-pinned examples, with a baseline-parity gate, deterministic condition
+IDs, per-condition checkpointing, and norm-matched random controls
+(~120 conditions, ≈30–45 min). Guide: [docs/causal_smoke_run.md](docs/causal_smoke_run.md).
+Afterwards copy `artifacts/explorer_causal_bundle.json` to
+`explorer/public/data/measured/causal.json`.
+
+### Running the multimodal capture notebook (Colab L4)
+
+`notebooks/gemma_4_e4b_multimodal_jlens_capture.ipynb` — the first
+image-conditioned and audio-conditioned records: one user-supplied image and
+audio clip, layer 38, k=10 pursuit on the frozen text-fitted lens
+(≈15–25 min). Guide: [docs/multimodal_capture.md](docs/multimodal_capture.md).
+Afterwards copy `artifacts/multimodal_explorer_bundle.json` to
+`explorer/public/data/measured/multimodal.json` and `artifacts/assets/*` to
+`explorer/public/data/measured/assets/`.
+
+### Explorer limitations
+
+- The J-lens is a linear approximation fitted on 100 text prompts; the k=10
+  cones explain a small fraction of activation norm (shown, not hidden).
+- Per-step pursuit coefficients and per-layer J-lens top-k lists were not
+  persisted by the completed text run; the UI labels them unavailable rather
+  than fabricating them (capture notebooks record full lists for new runs).
+- Multimodal records apply the *text-fitted* lens to multimodal-conditioned
+  decoder states — exploratory, with no modality-invariance claim and no
+  pixel/audio-span attribution.
+- Causal effects are shown only at measured multipliers; nothing is
+  interpolated. Cone signatures are bookkeeping, not concept claims.
+- Layer 21's anomalous lens fit is documented history
+  ([docs/jspace_run_report.md](docs/jspace_run_report.md)), visible in the
+  explorer as data, and not an active workstream.
+
+## Research status
 
 The **pilot** stage — the final planned fitting stage (micro-smoke → smoke →
 **pilot**) — has completed on real `google/gemma-4-E4B-it` weights (revision
@@ -47,6 +187,12 @@ frequencies, candidate-ignition robustness, and evaluation controls — is in
 derived tables under `reports/`, regenerable with
 `python scripts/analyze_jspace.py --run-dir <run>`).
 
+The **explorer product** (branch `multimodal-jlens-explorer`) packages those
+completed text results into the static browser application above and prepares
+the causal-steering and multimodal-capture notebooks for the next real runs.
+No causal or multimodal measurements exist yet; the UI says so explicitly
+until the runs complete.
+
 ## What is inherited vs new
 
 **Inherited unchanged** (upstream `jlens` core — no modifications):
@@ -61,30 +207,29 @@ tests, and the upstream walkthrough/README (below).
 |---|---|
 | `jlens/gemma4.py` | Revision pinning, gated loading, explicit BOS control, pre-softcap + softcapped dual readout, architecture verification, fit-cost probe |
 | `jlens/controls.py` | Negative controls: row-permuted fitted J (primary), scale-matched random, legacy wrong-layer application, and named layer-mapping controls (adjacent / distant / shuffled) with recorded provenance; overlap/rank metrics |
-| `jlens/metadata.py` | Config validation (fit + jspace schemas), config/file fingerprints, environment manifest, atomic metadata writes |
+| `jlens/metadata.py` | Config validation (fit + jspace + causal + multimodal schemas), config/file fingerprints, environment manifest, atomic metadata writes |
 | `jlens/evaluation.py` | Named control suite, one-forward-pass evaluation, aggregate statistics (median rank, MRR, hit rates) per format/category |
 | `jlens/pursuit.py` | Sparse nonnegative J-space decomposition by gradient pursuit; J-lens dictionary construction (rows of `W_U J_l`); see [docs/jspace_decomposition.md](docs/jspace_decomposition.md) |
 | `jlens/cones.py` | Cone record schema, deterministic cone signatures, trajectory/overlap/concentration utilities, transparent grouping |
 | `jlens/ignition.py` | Candidate-ignition diagnostics (explicitly labeled; optional heuristic composite disabled by default) |
-| `configs/gemma_text_{microsmoke,smoke,pilot}.yaml`, `configs/gemma_jspace_pursuit.yaml` | The three fitting stages + the decomposition workflow |
-| `configs/prompts/` | Plain-text fitting corpus (smoke), v1 evaluation prompts, categorized held-out evaluation set v2 |
-| `scripts/fit_gemma.py`, `scripts/apply_gemma.py` | CLI: fit and evaluate with full metadata |
 | `jlens/similarity.py` | Similarity-based recurrence (Jaccard / weighted Jaccard / sparse cosine / top-m), stratified similarity groups with threshold-sensitivity, atom frequency and enrichment statistics |
 | `jlens/jspace_analysis.py`, `scripts/analyze_jspace.py` | Deterministic read-only analysis of a completed jspace run: integrity checks, k comparison, cross-k stability, transition/eval summaries (outputs under `reports/`) |
+| `jlens/explorer_export.py`, `scripts/export_explorer_bundle.py` | Deterministic explorer-bundle exporter: normalized schema, stable IDs, absolute-path stripping, subset export, causal/multimodal merging |
+| `jlens/interventions.py` | Residual-stream interventions at block_output sites: hook editing with exact position/dtype/tuple preservation, parity checks, deterministic condition IDs, norm-matched random controls, append-safe JSONL records |
+| `schemas/explorer_bundle.schema.json` | Versioned JSON Schema for `jlens.explorer.bundle.v1` (text + image + audio + causal records) |
+| `explorer/` | The Gemma 4 Multimodal J-Lens Explorer (Vite + React + TypeScript static app, Vitest tests) |
+| `scripts/make_ui_fixtures.py` | Deterministic, loudly-labelled synthetic UI fixtures (causal + multimodal) for pre-run UI states |
+| `configs/gemma_text_{microsmoke,smoke,pilot}.yaml`, `configs/gemma_jspace_pursuit.yaml` | The three fitting stages + the decomposition workflow |
+| `configs/gemma_jspace_causal_smoke.yaml`, `configs/causal_smoke_examples.json` | Causal smoke-run config + deterministic 4-example manifest with per-example selection reasons |
+| `configs/gemma_multimodal_jlens_capture.yaml` | Multimodal capture config (layer 38, k=10, user-supplied assets) |
+| `configs/prompts/` | Plain-text fitting corpus (smoke), v1 evaluation prompts, categorized held-out evaluation set v2 |
+| `scripts/fit_gemma.py`, `scripts/apply_gemma.py` | CLI: fit and evaluate with full metadata |
 | `notebooks/gemma_4_e4b_text_jlens.ipynb` | End-to-end fitting notebook (produced the smoke and pilot runs) |
 | `notebooks/gemma_4_e4b_jspace_pursuit.ipynb` | Decomposition notebook: verifies and consumes the frozen pilot lens, never refits |
-| `tests/` | CPU-only tests (no network, no real model): adapter, controls, evaluation, pursuit, cones, ignition, metadata, scripts, finite differences |
-
-**Validated so far:** the full local CPU suite (79 tests) passes: layout
-auto-detection on a Gemma4-shaped mock, Jacobian orientation pinned
-analytically and by finite differences, checkpoint/resume, controls, config
-validation, and the complete fit→apply pipeline on the mock. **No real-model
-results exist yet** — no scientific claims are made. Planned next: microsmoke
-(1–2 prompts, 1 layer) → smoke (8 prompts, 5 layers) → pilot (100 WikiText
-sequences, 7 layers) on a Colab A100. Anything beyond the text-only pilot
-(k-cones, sparse decompositions, steering, multimodal) is future/speculative —
-deliberately not implemented; `jlens/gemma4.py` and the configs are the
-intended extension points.
+| `notebooks/gemma_4_e4b_layer21_diagnostic.ipynb` | Layer-21 refit diagnostic (completed investigation; documented history) |
+| `notebooks/gemma_4_e4b_jspace_causal_smoke.ipynb` | Causal steering smoke run: parity-gated, checkpointed, resume-safe measured interventions |
+| `notebooks/gemma_4_e4b_multimodal_jlens_capture.ipynb` | First image/audio-conditioned captures on the frozen lens |
+| `tests/` | CPU-only tests (no network, no real model): adapter, controls, evaluation, pursuit, cones, ignition, metadata, scripts, exporter, interventions, notebook light paths, finite differences |
 
 ## Gemma 4 E4B specifics
 
@@ -97,6 +242,7 @@ every-6th-layer full attention, KV sharing across the last 18 layers.
 
 - **Source site** `h_l`: output of `model.language_model.layers[l]` (after
   attention + MLP + PLE re-injection + `layer_scalar`) — the input to block `l+1`.
+  This is also the exact site `jlens/interventions.py` edits.
 - **Target site** `h_final`: same site at block 41 (pre-final-norm residual).
 - **Convention:** `J[i, j] = ∂h_final[i]/∂h_l[j]` (rows = target dims);
   transport is `J @ h`. Readout reports **pre-softcap** logits (paper
@@ -105,12 +251,12 @@ every-6th-layer full attention, KV sharing across the last 18 layers.
 - The model repo revision is resolved to an immutable commit SHA at run time
   and recorded in every artifact; nothing is fitted against a mutable ref.
 
-## Install & test
+## Install & test (Python)
 
 ```bash
 pip install -e .            # torch, transformers>=5.5, huggingface_hub, numpy
-pip install -e .[gemma]     # + pyyaml, datasets, accelerate
-pytest tests -q             # 79 CPU-only tests; no network, no model download
+pip install -e .[dev]       # + pytest, ruff, datasets, pyyaml (jsonschema recommended)
+pytest tests -q             # CPU-only tests; no network, no model download
 ```
 
 Model access: `google/gemma-4-E4B-it` (~16 GB bf16) is ungated on the HF Hub
@@ -119,10 +265,12 @@ flag below.
 
 ## Running the experiment stages
 
-Real-model work is intended for a **Colab A100 (40 GB)**; the model does not
-fit a 12 GB local GPU, and CPU fitting is impractically slow. Start every new
-environment with the memory probe at the configured small `dim_batch` (4–8)
-and scale up only after reading its peak-memory figure.
+Real-model work is intended for Colab GPUs (the completed fits used an
+A100/L4; the new causal and multimodal notebooks are sized for an **L4**).
+The model does not fit a 12 GB local GPU, and CPU fitting is impractically
+slow. Start every new environment with the memory probe at the configured
+small `dim_batch` (4–8) and scale up only after reading its peak-memory
+figure.
 
 ```bash
 # stage 1: micro-smoke — 1–2 prompts, one middle layer (21), seq ≤ 48, dim_batch 4
@@ -154,8 +302,9 @@ readouts verify plumbing, not lens quality.
 **Known limitations:** bf16 backward noise in the fp32-accumulated `J`;
 sliding-window + KV-shared attention differ architecturally from the paper's
 models; the `-it` chat distribution differs from the plain-text fitting corpus
-(chat prompts are evaluated separately, never fitted on); no multimodal
-support; the fork is text-only by design in this pass.
+(chat prompts are evaluated separately, never fitted on); multimodal support
+is limited to the exploratory capture notebook — the lens itself remains
+text-fitted.
 
 ---
 

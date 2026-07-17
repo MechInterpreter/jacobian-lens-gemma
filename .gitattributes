@@ -1,0 +1,6 @@
+# Deterministic explorer data: these files are byte-compared against
+# exporter output (tests/test_explorer_export.py), so they must check out
+# with LF on every platform.
+explorer/public/data/** text eol=lf
+schemas/*.json text eol=lf
+explorer/public/data/fixtures/assets/* binary

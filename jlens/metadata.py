@@ -216,6 +216,177 @@ def load_jspace_config(path: str) -> dict:
     return config
 
 
+#: Schema for the causal steering smoke-run config (consumes a frozen lens
+#: and a completed jspace run's cone records; never refits, never re-decomposes).
+_CAUSAL_SCHEMA: tuple[tuple[str, tuple[type, ...], bool], ...] = (
+    ("mode", (str,), True),
+    ("model.repo_id", (str,), True),
+    ("model.revision", (str, type(None)), True),
+    ("model.dtype", (str,), True),
+    ("model.device_map", (str, type(None)), True),
+    ("model.allow_model_load", (bool,), True),
+    ("model.expect_n_layers", (int,), True),
+    ("model.expect_d_model", (int,), True),
+    ("model.expect_vocab_size", (int,), True),
+    ("lens.run_dir_name", (str,), True),
+    ("lens.artifact_relpath", (str,), True),
+    ("lens.expect_file_sha256", (str, type(None)), True),
+    ("lens.expect_model_revision", (str,), True),
+    ("lens.expect_source_layers", (list,), True),
+    ("lens.expect_n_prompts", (int,), True),
+    ("source.jspace_run_dir_name", (str,), True),
+    ("source.cones_k", (int,), True),
+    ("source.expect_config_fingerprint", (str, type(None)), True),
+    ("intervention.layers", (list,), True),
+    ("intervention.multipliers", (list,), True),
+    ("intervention.optional_multipliers", (list,), False),
+    ("intervention.families", (list,), True),
+    ("intervention.controls", (list,), True),
+    ("intervention.norm_preserving", (bool,), True),
+    ("intervention.generate_completions", (bool,), True),
+    ("intervention.completion_max_new_tokens", (int,), True),
+    ("examples.manifest_path", (str,), True),
+    ("eval.top_k", (int,), True),
+    ("parity.max_abs_logit_diff_tol", (float, int), True),
+    ("paths.output_dir", (str,), True),
+)
+
+
+def validate_causal_config(config: dict) -> None:
+    """Structural validation of a causal smoke-run config; raises
+    ``ValueError`` listing every problem."""
+    problems: list[str] = []
+    for dotted, types, required in _CAUSAL_SCHEMA:
+        found, value = _get_dotted(config, dotted)
+        if not found:
+            if required:
+                problems.append(f"missing key: {dotted}")
+            continue
+        if not isinstance(value, types):
+            problems.append(
+                f"{dotted}: expected {'/'.join(t.__name__ for t in types)}, "
+                f"got {type(value).__name__} ({value!r})"
+            )
+    found, mode = _get_dotted(config, "mode")
+    if found and mode != "causal_smoke":
+        problems.append(f"mode: {mode!r} must be 'causal_smoke'")
+    found, layers = _get_dotted(config, "intervention.layers")
+    _, fitted = _get_dotted(config, "lens.expect_source_layers")
+    if (
+        found
+        and isinstance(layers, list)
+        and isinstance(fitted, list)
+        and not set(layers) <= set(fitted)
+    ):
+        problems.append(
+            f"intervention.layers {sorted(set(layers) - set(fitted))} not in "
+            f"lens.expect_source_layers"
+        )
+    found, multipliers = _get_dotted(config, "intervention.multipliers")
+    if found and isinstance(multipliers, list):
+        if not all(isinstance(m, (int, float)) for m in multipliers):
+            problems.append("intervention.multipliers: must be numbers")
+        elif 0.0 not in [float(m) for m in multipliers]:
+            problems.append(
+                "intervention.multipliers must include 0.0 (the parity no-op)"
+            )
+    if problems:
+        raise ValueError("invalid causal config:\n  " + "\n  ".join(problems))
+
+
+def load_causal_config(path: str) -> dict:
+    """Load and validate a YAML causal smoke-run config."""
+    import yaml
+
+    with open(path, encoding="utf-8") as handle:
+        config = yaml.safe_load(handle)
+    if not isinstance(config, dict):
+        raise ValueError(f"{path}: top level must be a mapping")
+    validate_causal_config(config)
+    return config
+
+
+#: Schema for the multimodal capture config (image/audio-conditioned decoder
+#: states probed with the frozen text-fitted lens; exploratory by design).
+_MULTIMODAL_SCHEMA: tuple[tuple[str, tuple[type, ...], bool], ...] = (
+    ("mode", (str,), True),
+    ("model.repo_id", (str,), True),
+    ("model.revision", (str, type(None)), True),
+    ("model.dtype", (str,), True),
+    ("model.device_map", (str, type(None)), True),
+    ("model.allow_model_load", (bool,), True),
+    ("model.expect_n_layers", (int,), True),
+    ("model.expect_d_model", (int,), True),
+    ("model.expect_vocab_size", (int,), True),
+    ("lens.run_dir_name", (str,), True),
+    ("lens.artifact_relpath", (str,), True),
+    ("lens.expect_file_sha256", (str, type(None)), True),
+    ("lens.expect_model_revision", (str,), True),
+    ("lens.expect_source_layers", (list,), True),
+    ("lens.expect_n_prompts", (int,), True),
+    ("capture.layers", (list,), True),
+    ("capture.k", (int,), True),
+    ("capture.position", (int,), True),
+    ("capture.top_k", (int,), True),
+    ("decomposition.normalize_atoms", (bool,), True),
+    ("decomposition.refine_steps", (int,), True),
+    ("decomposition.tol_relative_residual", (float, int), True),
+    ("decomposition.fold_final_norm_weight", (bool,), True),
+    ("decomposition.correlation_chunk_size", (int, type(None)), True),
+    ("inputs.image_path", (str, type(None)), True),
+    ("inputs.image_prompt", (str,), True),
+    ("inputs.audio_path", (str, type(None)), True),
+    ("inputs.audio_prompt", (str,), True),
+    ("paths.output_dir", (str,), True),
+)
+
+
+def validate_multimodal_config(config: dict) -> None:
+    """Structural validation of a multimodal capture config; raises
+    ``ValueError`` listing every problem."""
+    problems: list[str] = []
+    for dotted, types, required in _MULTIMODAL_SCHEMA:
+        found, value = _get_dotted(config, dotted)
+        if not found:
+            if required:
+                problems.append(f"missing key: {dotted}")
+            continue
+        if not isinstance(value, types):
+            problems.append(
+                f"{dotted}: expected {'/'.join(t.__name__ for t in types)}, "
+                f"got {type(value).__name__} ({value!r})"
+            )
+    found, mode = _get_dotted(config, "mode")
+    if found and mode != "multimodal_capture":
+        problems.append(f"mode: {mode!r} must be 'multimodal_capture'")
+    found, layers = _get_dotted(config, "capture.layers")
+    _, fitted = _get_dotted(config, "lens.expect_source_layers")
+    if (
+        found
+        and isinstance(layers, list)
+        and isinstance(fitted, list)
+        and not set(layers) <= set(fitted)
+    ):
+        problems.append(
+            f"capture.layers {sorted(set(layers) - set(fitted))} not in "
+            f"lens.expect_source_layers"
+        )
+    if problems:
+        raise ValueError("invalid multimodal config:\n  " + "\n  ".join(problems))
+
+
+def load_multimodal_config(path: str) -> dict:
+    """Load and validate a YAML multimodal capture config."""
+    import yaml
+
+    with open(path, encoding="utf-8") as handle:
+        config = yaml.safe_load(handle)
+    if not isinstance(config, dict):
+        raise ValueError(f"{path}: top level must be a mapping")
+    validate_multimodal_config(config)
+    return config
+
+
 def execution_record(
     *,
     configured_allow_model_load: bool,

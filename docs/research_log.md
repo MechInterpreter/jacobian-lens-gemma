@@ -157,3 +157,58 @@ Layer-21 refit diagnostic (per-prompt Jacobian variance at the outlier
 layer, optional chat-formatted fitting subset), then a lower-memory
 decomposition rerun on {21, 31, 35, 38} at k=10 — now feasible without an
 A100 after the chunked-memory changes.
+
+
+# 2026-07-17 — Gemma 4 Multimodal J-Lens Explorer (branch `multimodal-jlens-explorer`)
+
+The completed text research was packaged into a resume-ready product: the
+**Gemma 4 Multimodal J-Lens Explorer**, a static Vite/React/TypeScript
+application (`explorer/`) that visualizes J-lens predictions, k=10
+gradient-pursuit cones, step-replayable pursuit traces, and cross-layer
+trajectories from the completed jspace run — no Python, no model, no backend
+at browse time. Data flows through one versioned schema
+(`schemas/explorer_bundle.schema.json`, `jlens.explorer.bundle.v1`) fed by a
+deterministic exporter (`jlens/explorer_export.py`,
+`scripts/export_explorer_bundle.py`; byte-identical re-exports, absolute
+paths stripped, sources verified read-only). A committed 20-example demo
+bundle covers all categories and both formats, deliberately including weak
+examples; per-step pursuit coefficients and per-layer J-lens top-k lists
+were not persisted by the completed run and are exported/rendered as
+explicitly unavailable rather than reconstructed.
+
+Two GPU notebooks were prepared (not executed — no model download, no GPU in
+this pass), both consuming the frozen fingerprint-verified pilot lens:
+
+- `notebooks/gemma_4_e4b_jspace_causal_smoke.ipynb` +
+  `jlens/interventions.py`: measured residual-stream interventions
+  (`h' = h + m·delta`) at the exact block_output sites, layers 35/38,
+  multipliers −1/0/+1, three targeted families from the recorded k=10 cones
+  plus exactly norm-matched deterministic random controls (~120 conditions,
+  ≈30–45 min on an L4). Baseline-parity gate (unhooked vs multiplier-0 vs
+  identical-copy writeback) aborts before any intervention on drift;
+  deterministic condition IDs, per-condition JSONL checkpointing,
+  append-safe resume, completed-run refusal. The 4-example manifest
+  (`configs/causal_smoke_examples.json`) pins strong/semantic/chat/weak cases
+  chosen from measured records, reasons recorded.
+- `notebooks/gemma_4_e4b_multimodal_jlens_capture.ipynb`: first
+  image-/audio-conditioned records (layer 38, k=10, position −1) with
+  processor-interface inspection, clear failure on unsupported modalities,
+  and explorer-ready bundles — recorded throughout as an exploratory
+  application of the text-fitted lens, with no modality-invariance or
+  pixel/audio-span claims.
+
+Causal and multimodal UI states ship with deterministic, loudly-badged
+synthetic fixtures (`scripts/make_ui_fixtures.py`); the frontend
+auto-prefers measured bundles dropped under `explorer/public/data/measured/`.
+Added ~70 Python tests (exporter determinism/immutability/merging,
+intervention hook semantics and cleanup, config validation, notebook light
+paths) and 24 frontend tests (Vitest + RTL); full CPU suite green with no
+network access. Layer 21 remains documented history — visible in the
+explorer as data, not a workstream.
+
+## Next planned milestone
+
+User-run L4 sessions: the causal smoke run, then the multimodal capture;
+merge both bundles into the explorer, capture screenshots, and switch
+resume packaging from the pre-completion bullet to the full bullet
+(docs/resume_packaging.md gates this on the merged measured bundles).
