@@ -216,7 +216,7 @@ describe("bundle loading over fetch", () => {
     render(<App preloaded={undefined} />);
     await waitFor(() =>
       expect(screen.getByRole("alert")).toHaveTextContent(
-        /could not load data\/text_demo\.json/,
+        /could not load \/data\/text_demo\.json/,
       ),
     );
   });

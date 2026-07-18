@@ -133,16 +133,38 @@ async function fetchBundle(path: string): Promise<ExplorerBundle | null> {
     return null;
   }
   if (!response.ok) return null;
-  const raw: unknown = await response.json();
+  let raw: unknown;
+  try {
+    raw = await response.json();
+  } catch {
+    // A static host's SPA/not-found fallback (Vite's dev-server history
+    // fallback, GitHub Pages' 404->index.html rewrite, etc.) answers a
+    // missing file with "200 OK" and an HTML body instead of a real 404.
+    // That is indistinguishable from "this bundle doesn't exist" for our
+    // purposes, so treat it the same way rather than crashing bundle load.
+    return null;
+  }
   return validateBundle(raw);
+}
+
+/** Base URL for the bundle data directory: derived from Vite's own
+ * `BASE_URL` ("/" in dev and tests, the configured deploy base — e.g. "./"
+ * for a relative base — in a production build), so requests land under
+ * `/data/...` when served from the site root (`npm run dev`) and under
+ * `<deploy-base>/data/...` (e.g. `/jacobian-lens-gemma/data/...` on GitHub
+ * Pages) once built and deployed. A function (not a precomputed constant)
+ * so it always reflects the current `import.meta.env.BASE_URL`. */
+export function defaultDataBaseUrl(): string {
+  return `${import.meta.env.BASE_URL.replace(/\/$/, "")}/data`;
 }
 
 /** Load the default bundle set.
  *
  * Measured bundles are preferred automatically: fixtures are only loaded for
- * a section when no measured bundle provides it. Paths are relative to the
- * deployed site root. */
-export async function loadDefaultBundles(baseUrl = "data"): Promise<LoadedData> {
+ * a section when no measured bundle provides it. */
+export async function loadDefaultBundles(
+  baseUrl: string = defaultDataBaseUrl(),
+): Promise<LoadedData> {
   const warnings: string[] = [];
   const sources: LoadedData["sources"] = [];
 
