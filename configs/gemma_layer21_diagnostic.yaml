@@ -1,0 +1,77 @@
+# Layer-21 refit diagnostic: repeat the pilot fit EXACTLY (same model
+# revision, same 100 streamed WikiText-103 prompts in the same order, same
+# seed/positions/batching/checkpointing) but at source layer 21 only, while
+# recording per-prompt Jacobian diagnostics (jlens/fit_diagnostics.py).
+# Purpose: decide whether the pilot's outlier J_21 (||J||_F = 188.7 vs
+# 3.5-18.1 at every other fitted layer; docs/jspace_run_report.md §4) is an
+# unstable corpus-averaged fit, dominance by a few prompts, or reproducible.
+# Everything except sites.source_layers matches configs/gemma_text_pilot.yaml;
+# model.revision is additionally pinned to the pilot's resolved revision.
+mode: layer21_diagnostic
+
+model:
+  repo_id: google/gemma-4-E4B-it
+  # Pinned to the pilot's resolved revision (the pilot config had null and
+  # resolved at load time; this run must match it exactly).
+  revision: fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd
+  tokenizer_repo_id: null
+  tokenizer_revision: null
+  dtype: bfloat16
+  device_map: null          # set to "cuda" on the Colab L4
+  allow_model_load: false
+  expect_n_layers: 42
+  expect_d_model: 2560
+  expect_vocab_size: 262144
+
+sites:
+  source_site: block_output
+  target_site: block_output
+  source_layers: [21]       # the diagnostic layer — nothing else is refit
+  target_layer: 41
+
+positions:
+  skip_first: 16
+  source_rule: "all positions t with skip_first <= t < seq_len - 1"
+  target_rule: "cotangents at every valid position; causality zeroes t' < t, so the source gradient is sum over t' >= t"
+
+fitting:
+  prompt_source: wikitext   # Salesforce/wikitext wikitext-103-raw-v1, streamed
+  prompts_path: null
+  n_prompts: 100
+  max_seq_len: 128
+  dim_batch: 8
+  seed: 42
+  checkpoint_every: 5       # 1 layer fp32 running sum ≈ 26 MB/write
+
+# The reference run whose fit this diagnostic replicates. The notebook
+# cross-checks the resolved revision and the exact per-prompt hashes against
+# this run's recorded fit_metadata.json, and compares the refit J_21 with
+# the frozen pilot J_21 (read-only; the pilot artifacts are never touched).
+reference:
+  pilot_run_dir_name: pilot_20260715T200437612150_311fd108c23a
+  fit_metadata_relpath: artifacts/fit_metadata.json
+  lens_relpath: artifacts/lens.pt
+  expect_lens_sha256: "sha256:7229c7562d1d55420b70abb13f481934649c4b01417bd851e97cedb47c96f474"
+  expect_model_revision: fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd
+
+# Held-out evaluation (v2 prompt set, named controls) and the k=10-only
+# J-space pursuit both run at layer 21 only.
+eval:
+  prompts_path: configs/prompts/eval_prompts_v2.json
+  top_k: 10
+  control_seed: 1234
+  max_seq_len: 512
+
+pursuit:
+  k_values: [10]            # k=10 ONLY for this diagnostic
+  normalize_atoms: true
+  refine_steps: 2
+  tol_relative_residual: 0.0
+  fold_final_norm_weight: false
+  correlation_chunk_size: 65536
+  atoms_dtype: float32
+  build_chunk_rows: 16384   # lower-memory dictionary build (L4 target)
+
+paths:
+  checkpoint: artifacts/layer21_diagnostic/ckpt.pt
+  output_dir: artifacts/layer21_diagnostic

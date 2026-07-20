@@ -29,6 +29,8 @@ pre-softcap and softcapped logits.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import torch
 
 from jlens.lens import JacobianLens
@@ -82,7 +84,17 @@ def control_lens(
 def wrong_layer_lens(lens: JacobianLens) -> JacobianLens:
     """A lens whose fitted layers are cyclically reassigned (``J`` fitted at
     layer ``l`` is applied at the next fitted layer), so each residual is
-    transported with a genuine-but-mismatched Jacobian."""
+    transported with a genuine-but-mismatched Jacobian.
+
+    .. note:: Superseded for new evaluations. The cyclic shift conflates
+        qualitatively different substitutions — adjacent late layers get a
+        near-equivalent transport while the last fitted layer gets the most
+        distant one (see ``docs/pilot_report.md``, "Audit of the wrong-layer
+        control"). Kept unchanged because the smoke and pilot artifacts were
+        produced with it; use :func:`layer_mapped_lens` with
+        :func:`adjacent_layer_mapping` / :func:`distant_layer_mapping` /
+        :func:`shuffled_layer_mapping` going forward.
+    """
     layers = lens.source_layers
     if len(layers) < 2:
         raise ValueError("wrong_layer_lens needs a lens fitted at >= 2 layers")
@@ -93,6 +105,102 @@ def wrong_layer_lens(lens: JacobianLens) -> JacobianLens:
     return JacobianLens(
         jacobians=shifted, n_prompts=lens.n_prompts, d_model=lens.d_model
     )
+
+
+def wrong_layer_mapping(layers: Sequence[int]) -> dict[int, int]:
+    """The layer reassignment :func:`wrong_layer_lens` performs, made
+    explicit: ``{applied_layer: layer_whose_J_is_used}`` under the cyclic
+    shift. Exists so the historical control's provenance can be recorded and
+    audited without re-deriving it from the implementation."""
+    layers = sorted(layers)
+    if len(layers) < 2:
+        raise ValueError("wrong_layer_mapping needs >= 2 layers")
+    return {
+        layers[i]: layers[(i + 1) % len(layers)] for i in range(len(layers))
+    }
+
+
+def adjacent_layer_mapping(layers: Sequence[int]) -> dict[int, int]:
+    """Map each fitted layer to its *nearest other* fitted layer (ties break
+    toward the deeper layer). A weak mismatch control: transports each
+    residual with the most similar genuine-but-wrong Jacobian available."""
+    layers = sorted(layers)
+    if len(layers) < 2:
+        raise ValueError("adjacent_layer_mapping needs >= 2 layers")
+    mapping: dict[int, int] = {}
+    for layer in layers:
+        others = [l for l in layers if l != layer]
+        mapping[layer] = min(others, key=lambda l: (abs(l - layer), -l))
+    return mapping
+
+
+def distant_layer_mapping(layers: Sequence[int]) -> dict[int, int]:
+    """Map each fitted layer to the *farthest* fitted layer (ties break
+    toward the shallower layer). A strong mismatch control: transports each
+    residual with the least similar genuine Jacobian available."""
+    layers = sorted(layers)
+    if len(layers) < 2:
+        raise ValueError("distant_layer_mapping needs >= 2 layers")
+    mapping: dict[int, int] = {}
+    for layer in layers:
+        others = [l for l in layers if l != layer]
+        mapping[layer] = max(others, key=lambda l: (abs(l - layer), -l))
+    return mapping
+
+
+def shuffled_layer_mapping(layers: Sequence[int], *, seed: int) -> dict[int, int]:
+    """A seeded derangement of the fitted layers (no layer keeps its own
+    Jacobian), deterministic for a given ``(layers, seed)``. Mixes distances
+    without the cyclic shift's systematic wraparound artifact."""
+    layers = sorted(layers)
+    if len(layers) < 2:
+        raise ValueError("shuffled_layer_mapping needs >= 2 layers")
+    generator = torch.Generator().manual_seed(seed)
+    while True:
+        perm = torch.randperm(len(layers), generator=generator).tolist()
+        if all(perm[i] != i for i in range(len(layers))):
+            return {layers[i]: layers[perm[i]] for i in range(len(layers))}
+
+
+def layer_mapped_lens(
+    lens: JacobianLens, mapping: dict[int, int]
+) -> JacobianLens:
+    """A lens where the residual at layer ``l`` is transported with the
+    Jacobian fitted at ``mapping[l]``. Every key and value must be a fitted
+    layer; the mapping is the control's provenance and should be recorded in
+    output metadata (see :func:`mapping_provenance`)."""
+    fitted = set(lens.source_layers)
+    bad = sorted(set(mapping) - fitted) + sorted(set(mapping.values()) - fitted)
+    if bad:
+        raise ValueError(
+            f"mapping references non-fitted layers {sorted(set(bad))}; "
+            f"fitted layers are {lens.source_layers}"
+        )
+    if set(mapping) != fitted:
+        raise ValueError(
+            f"mapping keys {sorted(mapping)} must cover exactly the fitted "
+            f"layers {lens.source_layers}"
+        )
+    remapped = {
+        layer: lens.jacobians[mapping[layer]].clone() for layer in mapping
+    }
+    return JacobianLens(
+        jacobians=remapped, n_prompts=lens.n_prompts, d_model=lens.d_model
+    )
+
+
+def mapping_provenance(mapping: dict[int, int]) -> list[dict]:
+    """Serializable provenance rows for a layer-mapped control:
+    which fitted Jacobian was used at which layer, and how far apart the
+    intended and substituted layers are."""
+    return [
+        {
+            "applied_at_layer": layer,
+            "jacobian_fitted_at_layer": source,
+            "layer_distance": abs(layer - source),
+        }
+        for layer, source in sorted(mapping.items())
+    ]
 
 
 def topk_overlap(logits_a: torch.Tensor, logits_b: torch.Tensor, k: int) -> float:

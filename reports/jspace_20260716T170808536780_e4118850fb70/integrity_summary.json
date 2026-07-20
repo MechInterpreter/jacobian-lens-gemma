@@ -1,0 +1,52 @@
+{
+ "clean": true,
+ "issues": [],
+ "k_values": [
+  10,
+  16,
+  25
+ ],
+ "layers": [
+  14,
+  21,
+  28,
+  35,
+  38
+ ],
+ "lens_fingerprint": "sha256:7229c7562d1d55420b70abb13f481934649c4b01417bd851e97cedb47c96f474",
+ "local_commit": "6442fff2c67bfb0e1c081cef8c58350820db5e4a",
+ "model_revision": "fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd",
+ "n_capture_positions": 76,
+ "notes": [
+  "config.model.allow_model_load is false but load_info shows the model was loaded: the config block records the *static* notebook YAML, and the run resolved allow-model-load at execution time without writing the resolved value back. Future runs should record jlens.metadata.execution_record(...) alongside the static config."
+ ],
+ "record_counts": {
+  "cones_layer14_k10": 76,
+  "cones_layer14_k16": 76,
+  "cones_layer14_k25": 76,
+  "cones_layer21_k10": 76,
+  "cones_layer21_k16": 76,
+  "cones_layer21_k25": 76,
+  "cones_layer28_k10": 76,
+  "cones_layer28_k16": 76,
+  "cones_layer28_k25": 76,
+  "cones_layer35_k10": 76,
+  "cones_layer35_k16": 76,
+  "cones_layer35_k25": 76,
+  "cones_layer38_k10": 76,
+  "cones_layer38_k16": 76,
+  "cones_layer38_k25": 76,
+  "ignition_candidates_k10": 304,
+  "ignition_candidates_k16": 304,
+  "ignition_candidates_k25": 304,
+  "recurring_signatures_k10": 380,
+  "recurring_signatures_k16": 380,
+  "recurring_signatures_k25": 380,
+  "trajectories_k10": 304,
+  "trajectories_k16": 304,
+  "trajectories_k25": 304
+ },
+ "run_dir_recorded": "/content/drive/MyDrive/jacobian-lens-gemma/runs/jspace_20260716T170808536780_e4118850fb70",
+ "run_id": "jspace_20260716T170808536780_e4118850fb70",
+ "schema": "jlens.analysis.integrity.v1"
+}

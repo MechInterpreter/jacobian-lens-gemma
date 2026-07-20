@@ -95,8 +95,120 @@ all metadata — was copied into this repository at
 [`runs/smoke_20260715T172315460316_fb2eefcd91cd/`](../runs/smoke_20260715T172315460316_fb2eefcd91cd/)
 and is documented in full in [`smoke_report.md`](smoke_report.md).
 
+## 2026-07-15 — Pilot stage executed on real Gemma 4 E4B weights
+
+Using the notebook and configuration at commit `541b0b3`
+(recorded as `environment.local_commit` in every artifact of this run),
+`configs/gemma_text_pilot.yaml` was run to completion on a Colab GPU runtime
+(NVIDIA L4): revision `fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd` of
+`google/gemma-4-E4B-it` was loaded, and the Jacobian lens was fitted on
+**100 WikiText-103 prompts** (128 tokens each, seed 42) at **seven source
+layers (3, 7, 14, 21, 28, 35, 38)** in 9665.4 s, producing finite
+`[2560, 2560]` Jacobians. Evaluation on the held-out prompt set with the
+logit-lens baseline and three negative controls followed; layer 38 gave the
+strongest next-token rank (12) and layers 28/35/38 strongly beat the
+permuted and random controls. Run metadata is preserved under
+[`runs/pilot_20260715T200437612150_311fd108c23a/`](../runs/pilot_20260715T200437612150_311fd108c23a/)
+and documented in full — including an audit showing the single wrong-layer
+control conflates adjacent and maximally-distant substitutions — in
+[`pilot_report.md`](pilot_report.md). This 100-prompt pilot lens is the
+frozen, authoritative lens artifact for all subsequent decomposition work.
+
+## 2026-07-16 — J-space gradient-pursuit run completed and analyzed
+
+The sparse J-space decomposition ran to completion on real Gemma 4 E4B
+weights (run `jspace_20260716T170808536780_e4118850fb70`, Colab A100,
+implementation commit `6442fff`): the frozen 100-prompt pilot lens
+(fingerprint verified) was decomposed against at layers 14/21/28/35/38 for
+k ∈ {10, 16, 25} over 76 held-out activations (38 prompts × 2 positions) —
+1,140 decompositions, all 15 layer/k units complete, plus trajectories,
+candidate-ignition diagnostics, recurring-signature tables, and the named
+control-suite evaluation.
+
+On branch `jspace-pursuit-analysis` this run was turned into a rigorous
+offline analysis (no model download, no GPU, source artifacts byte-frozen):
+deterministic analysis pipeline (`jlens/jspace_analysis.py`,
+`jlens/similarity.py`, `scripts/analyze_jspace.py`; derived tables under
+`reports/`), full integrity verification (zero issues), and
+[`jspace_run_report.md`](jspace_run_report.md) with
+[`jspace_similarity_analysis.md`](jspace_similarity_analysis.md) as the
+recurrence methodology. Headlines: k=10 suffices (k25 adds 4–10 % relative
+explained fraction as tail mass; supports are ~95–99 % nested); layer 21's
+explained-fraction collapse (2.3e-5) traces to an outlier fitted Jacobian
+(‖J₂₁‖_F = 188.7 vs 3.5–18.1 at all other layers) and stays unresolved
+between fitting pathology and genuine mid-stack transition; the plain/chat
+gap decomposes into a position-−1 tokenization artifact, mid-stack
+template dominance, and a modest residual format shift; exact cone
+signatures never repeat, but similarity-based recurrence finds
+threshold-robust repeated structure (chat-template cones mid-stack;
+antonym/copula completion-frame cones late); the 35→38 sparse-coordinate
+stabilization survives every cut (k, format, position, category, frequency
+adjustment, output-token removal) and is reported as late-layer
+consolidation — explicitly NOT validated ignition. The L4 OOM in
+whole-dictionary `isfinite` was fixed with chunked validation/norms and an
+optional chunked dictionary build (bit-identical results, tested), and
+`jlens.metadata.execution_record` now separates configured vs resolved
+`allow_model_load` so the completed run's provenance ambiguity cannot
+recur.
+
 ## Next planned milestone
 
-The **pilot** stage (`configs/gemma_text_pilot.yaml`: ~100 WikiText-103
-sequences, 7 layers spanning the full model depth) has not yet been run; see
-`smoke_report.md`'s Future Work section.
+Layer-21 refit diagnostic (per-prompt Jacobian variance at the outlier
+layer, optional chat-formatted fitting subset), then a lower-memory
+decomposition rerun on {21, 31, 35, 38} at k=10 — now feasible without an
+A100 after the chunked-memory changes.
+
+
+# 2026-07-17 — Gemma 4 Multimodal J-Lens Explorer (branch `multimodal-jlens-explorer`)
+
+The completed text research was packaged into a resume-ready product: the
+**Gemma 4 Multimodal J-Lens Explorer**, a static Vite/React/TypeScript
+application (`explorer/`) that visualizes J-lens predictions, k=10
+gradient-pursuit cones, step-replayable pursuit traces, and cross-layer
+trajectories from the completed jspace run — no Python, no model, no backend
+at browse time. Data flows through one versioned schema
+(`schemas/explorer_bundle.schema.json`, `jlens.explorer.bundle.v1`) fed by a
+deterministic exporter (`jlens/explorer_export.py`,
+`scripts/export_explorer_bundle.py`; byte-identical re-exports, absolute
+paths stripped, sources verified read-only). A committed 20-example demo
+bundle covers all categories and both formats, deliberately including weak
+examples; per-step pursuit coefficients and per-layer J-lens top-k lists
+were not persisted by the completed run and are exported/rendered as
+explicitly unavailable rather than reconstructed.
+
+Two GPU notebooks were prepared (not executed — no model download, no GPU in
+this pass), both consuming the frozen fingerprint-verified pilot lens:
+
+- `notebooks/gemma_4_e4b_jspace_causal_smoke.ipynb` +
+  `jlens/interventions.py`: measured residual-stream interventions
+  (`h' = h + m·delta`) at the exact block_output sites, layers 35/38,
+  multipliers −1/0/+1, three targeted families from the recorded k=10 cones
+  plus exactly norm-matched deterministic random controls (~120 conditions,
+  ≈30–45 min on an L4). Baseline-parity gate (unhooked vs multiplier-0 vs
+  identical-copy writeback) aborts before any intervention on drift;
+  deterministic condition IDs, per-condition JSONL checkpointing,
+  append-safe resume, completed-run refusal. The 4-example manifest
+  (`configs/causal_smoke_examples.json`) pins strong/semantic/chat/weak cases
+  chosen from measured records, reasons recorded.
+- `notebooks/gemma_4_e4b_multimodal_jlens_capture.ipynb`: first
+  image-/audio-conditioned records (layer 38, k=10, position −1) with
+  processor-interface inspection, clear failure on unsupported modalities,
+  and explorer-ready bundles — recorded throughout as an exploratory
+  application of the text-fitted lens, with no modality-invariance or
+  pixel/audio-span claims.
+
+Causal and multimodal UI states ship with deterministic, loudly-badged
+synthetic fixtures (`scripts/make_ui_fixtures.py`); the frontend
+auto-prefers measured bundles dropped under `explorer/public/data/measured/`.
+Added ~70 Python tests (exporter determinism/immutability/merging,
+intervention hook semantics and cleanup, config validation, notebook light
+paths) and 24 frontend tests (Vitest + RTL); full CPU suite green with no
+network access. Layer 21 remains documented history — visible in the
+explorer as data, not a workstream.
+
+## Next planned milestone
+
+User-run L4 sessions: the causal smoke run, then the multimodal capture;
+merge both bundles into the explorer, capture screenshots, and switch
+resume packaging from the pre-completion bullet to the full bullet
+(docs/resume_packaging.md gates this on the merged measured bundles).

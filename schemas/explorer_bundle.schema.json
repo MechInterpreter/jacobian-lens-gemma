@@ -1,0 +1,420 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/MechInterpreter/jacobian-lens-gemma/schemas/explorer_bundle.schema.json",
+  "title": "Gemma 4 Multimodal J-Lens Explorer bundle",
+  "description": "One self-contained static bundle consumed by the browser explorer. Normalized across text, image-conditioned, and audio-conditioned examples. Semantic version lives in provenance.schema_version; this file describes the 1.x line.",
+  "type": "object",
+  "required": ["schema", "provenance", "examples", "layer_records", "cones", "pursuit_traces", "trajectories", "causal_records"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": { "const": "jlens.explorer.bundle.v1" },
+    "provenance": { "$ref": "#/$defs/bundleProvenance" },
+    "examples": { "type": "array", "items": { "$ref": "#/$defs/example" } },
+    "layer_records": { "type": "array", "items": { "$ref": "#/$defs/layerRecord" } },
+    "cones": { "type": "array", "items": { "$ref": "#/$defs/coneRecord" } },
+    "pursuit_traces": { "type": "array", "items": { "$ref": "#/$defs/pursuitTrace" } },
+    "trajectories": { "type": "array", "items": { "$ref": "#/$defs/trajectoryTransition" } },
+    "causal_records": { "type": "array", "items": { "$ref": "#/$defs/causalRecord" } },
+    "causal_baseline_parity": {
+      "description": "Optional baseline-parity report copied from the causal run (unhooked vs multiplier-zero vs identical-copy writeback).",
+      "type": "object"
+    },
+    "notes": { "type": "string" }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{8,64}$" },
+    "dataStatus": { "enum": ["measured", "imported", "synthetic_fixture"] },
+    "modality": { "enum": ["text", "image", "audio", "image_text", "audio_text"] },
+
+    "bundleProvenance": {
+      "type": "object",
+      "required": ["schema_version", "exporter_version", "source_run_ids", "model_repo_id", "model_revision", "created_utc", "data_status", "modalities_present"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": { "type": "string", "pattern": "^1\\.[0-9]+\\.[0-9]+$" },
+        "exporter_version": { "type": "string" },
+        "source_run_ids": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "source_artifact_fingerprints": {
+          "description": "Repo-relative artifact path -> sha256 of the source file bytes.",
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/sha256" }
+        },
+        "lens_fingerprint": { "$ref": "#/$defs/sha256" },
+        "model_repo_id": { "type": "string" },
+        "model_revision": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "implementation_commit": { "type": ["string", "null"] },
+        "created_utc": {
+          "description": "ISO-8601 UTC. Deterministic exports derive this from source artifacts, not wall-clock, so re-exports are byte-identical.",
+          "type": "string"
+        },
+        "data_status": { "$ref": "#/$defs/dataStatus" },
+        "modalities_present": { "type": "array", "items": { "$ref": "#/$defs/modality" } },
+        "merged_bundles": {
+          "description": "Provenance blocks of bundles merged into this one (e.g. causal or multimodal bundles merged into a text bundle).",
+          "type": "array",
+          "items": { "type": "object" }
+        },
+        "notes": { "type": "string" }
+      }
+    },
+
+    "example": {
+      "type": "object",
+      "required": ["example_id", "prompt_hash", "category", "format", "modality", "display_title", "data_status", "input"],
+      "additionalProperties": false,
+      "properties": {
+        "example_id": {
+          "description": "Stable ID: '<modality>:<slug>:<prompt_hash>'.",
+          "type": "string"
+        },
+        "prompt_slug": { "type": ["string", "null"] },
+        "prompt_hash": { "type": "string", "pattern": "^[0-9a-f]{16}$" },
+        "category": { "type": "string" },
+        "format": { "enum": ["plain", "chat"] },
+        "modality": { "$ref": "#/$defs/modality" },
+        "display_title": { "type": "string" },
+        "prompt_text": {
+          "description": "Full prompt text when the source records it; null when only the hash is available.",
+          "type": ["string", "null"]
+        },
+        "data_status": { "$ref": "#/$defs/dataStatus" },
+        "seq_len": { "type": ["integer", "null"], "minimum": 1 },
+        "selected_positions": {
+          "description": "Positions (Python negative indexing into the tokenized sequence) with records in this bundle.",
+          "type": "array",
+          "items": { "type": "integer" }
+        },
+        "model_output": {
+          "description": "The full model's measured next-token prediction metadata per position.",
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/positionOutput" }
+        },
+        "strength": {
+          "description": "Descriptive strong/weak tag derived from measured layer-38 J-lens agreement; absent when not derivable.",
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "properties": {
+            "tag": { "enum": ["strong", "weak", "middling"] },
+            "basis": { "type": "string" }
+          },
+          "required": ["tag", "basis"]
+        },
+        "selection_reason": { "type": ["string", "null"] },
+        "input": { "$ref": "#/$defs/inputRepresentation" }
+      }
+    },
+
+    "positionOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "input_token_id": { "type": "integer" },
+        "input_token": { "type": "string" },
+        "model_top1_id": { "type": "integer" },
+        "model_top1_token": { "type": "string" },
+        "model_topk": {
+          "description": "Full model top-k list when recorded; null for runs that did not persist it.",
+          "type": ["array", "null"],
+          "items": { "$ref": "#/$defs/tokenScore" }
+        }
+      }
+    },
+
+    "tokenScore": {
+      "type": "object",
+      "required": ["token_id", "token"],
+      "additionalProperties": false,
+      "properties": {
+        "token_id": { "type": "integer" },
+        "token": { "type": "string" },
+        "logit": { "type": ["number", "null"] },
+        "prob": { "type": ["number", "null"] }
+      }
+    },
+
+    "inputRepresentation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "properties": {
+            "token_ids": { "type": ["array", "null"], "items": { "type": "integer" } },
+            "token_labels": { "type": ["array", "null"], "items": { "type": "string" } },
+            "positions_available": { "type": "array", "items": { "type": "integer" } },
+            "special_token_flags": { "type": ["array", "null"], "items": { "type": "boolean" } },
+            "prompt_text_is_pre_template": {
+              "description": "True for chat examples where prompt_text is the pre-template user message (the recorded prompt_hash covers the rendered chat template, which the source run did not store).",
+              "type": ["boolean", "null"]
+            },
+            "tokenization_available": {
+              "description": "False when the source run stored only per-position token metadata, not the full tokenization.",
+              "type": "boolean"
+            }
+          },
+          "required": ["tokenization_available"]
+        },
+        "image": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "properties": {
+            "asset_url": { "description": "Browser-safe relative URL; never an absolute local path.", "type": ["string", "null"] },
+            "width": { "type": ["integer", "null"] },
+            "height": { "type": ["integer", "null"] },
+            "prompt_text": { "type": ["string", "null"] },
+            "modality_token_range": {
+              "description": "[start, end) indices of image tokens in the multimodal sequence, when the processor exposes them; null otherwise. No pixel attribution is implied.",
+              "type": ["array", "null"], "items": { "type": "integer" }, "minItems": 2, "maxItems": 2
+            },
+            "processor_metadata": { "type": ["object", "null"] }
+          }
+        },
+        "audio": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "properties": {
+            "asset_url": { "type": ["string", "null"] },
+            "duration_seconds": { "type": ["number", "null"] },
+            "sample_rate": { "type": ["integer", "null"] },
+            "prompt_text": { "type": ["string", "null"] },
+            "modality_token_range": {
+              "description": "[start, end) indices of audio tokens in the multimodal sequence, when the processor exposes them; null otherwise. No time-span attribution is implied.",
+              "type": ["array", "null"], "items": { "type": "integer" }, "minItems": 2, "maxItems": 2
+            },
+            "processor_metadata": { "type": ["object", "null"] }
+          }
+        }
+      }
+    },
+
+    "layerRecord": {
+      "type": "object",
+      "required": ["example_id", "layer", "position", "source_site", "data_status"],
+      "additionalProperties": false,
+      "properties": {
+        "example_id": { "type": "string" },
+        "layer": { "type": "integer", "minimum": 0, "maximum": 41 },
+        "position": { "type": "integer" },
+        "source_site": { "const": "block_output" },
+        "data_status": { "$ref": "#/$defs/dataStatus" },
+        "input_token_id": { "type": ["integer", "null"] },
+        "input_token": { "type": ["string", "null"] },
+        "model_topk": { "type": ["array", "null"], "items": { "$ref": "#/$defs/tokenScore" } },
+        "jlens_topk": {
+          "description": "J-lens top-k token list; null for the completed text run (not persisted) and populated by the capture notebooks.",
+          "type": ["array", "null"],
+          "items": { "$ref": "#/$defs/tokenScore" }
+        },
+        "rank_of_model_top1": { "type": ["integer", "null"], "minimum": 0 },
+        "topk_overlap_with_model": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "eval_metadata": { "type": ["object", "null"] },
+        "target_activation_norm": { "type": ["number", "null"] },
+        "residual_norm": { "type": ["number", "null"] },
+        "relative_residual": { "type": ["number", "null"] },
+        "explained_fraction": { "type": ["number", "null"] }
+      }
+    },
+
+    "coneRecord": {
+      "type": "object",
+      "required": ["example_id", "layer", "position", "requested_k", "selected_atoms", "reconstruction", "data_status", "source_provenance"],
+      "additionalProperties": false,
+      "properties": {
+        "example_id": { "type": "string" },
+        "layer": { "type": "integer" },
+        "position": { "type": "integer" },
+        "requested_k": { "type": "integer", "minimum": 1 },
+        "n_selected": { "type": "integer", "minimum": 0 },
+        "data_status": { "$ref": "#/$defs/dataStatus" },
+        "selected_atoms": {
+          "description": "Atoms in selection order (the pursuit's iteration order).",
+          "type": "array",
+          "items": { "$ref": "#/$defs/coneAtom" }
+        },
+        "coefficient_sum": { "type": ["number", "null"] },
+        "top_coefficient": { "type": ["number", "null"] },
+        "concentration": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "properties": {
+            "herfindahl": { "type": "number" },
+            "top1_share": { "type": "number" },
+            "n_nonzero": { "type": "integer" }
+          }
+        },
+        "reconstruction": {
+          "type": "object",
+          "required": ["target_norm", "residual_norm", "relative_residual", "explained_fraction"],
+          "additionalProperties": false,
+          "properties": {
+            "target_norm": { "type": "number" },
+            "residual_norm": { "type": "number" },
+            "relative_residual": { "type": "number" },
+            "explained_fraction": { "type": "number" }
+          }
+        },
+        "cone_signature_digest": { "type": ["string", "null"] },
+        "source_provenance": {
+          "description": "Exact source: run id, artifact file, record index, algorithm settings, dictionary provenance.",
+          "type": "object"
+        }
+      }
+    },
+
+    "coneAtom": {
+      "type": "object",
+      "required": ["token_id", "label", "coefficient", "is_output_token", "is_effective"],
+      "additionalProperties": false,
+      "properties": {
+        "token_id": { "type": "integer" },
+        "label": { "type": "string" },
+        "coefficient": { "type": "number" },
+        "is_output_token": {
+          "description": "True when the atom's token id equals the model's measured top-1 at this example/position.",
+          "type": "boolean"
+        },
+        "is_effective": { "description": "Coefficient strictly positive after refinement.", "type": "boolean" },
+        "coefficient_share": { "type": ["number", "null"] },
+        "nuisance": {
+          "description": "Frequency/nuisance metadata when available from analysis reports; null otherwise.",
+          "type": ["object", "null"]
+        }
+      }
+    },
+
+    "pursuitTrace": {
+      "type": "object",
+      "required": ["example_id", "layer", "position", "steps", "stop_reason", "per_step_coefficients_available", "data_status"],
+      "additionalProperties": false,
+      "properties": {
+        "example_id": { "type": "string" },
+        "layer": { "type": "integer" },
+        "position": { "type": "integer" },
+        "requested_k": { "type": "integer" },
+        "n_iterations": { "type": "integer" },
+        "stop_reason": { "type": "string" },
+        "data_status": { "$ref": "#/$defs/dataStatus" },
+        "per_step_coefficients_available": {
+          "description": "False for the completed text run: only residual-norm history, selection order, and final coefficients were recorded. Do not fabricate per-step coefficients.",
+          "type": "boolean"
+        },
+        "initial_residual_norm": { "type": "number" },
+        "target_norm": { "type": "number" },
+        "steps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["step", "added_token_id", "added_label", "residual_norm", "relative_residual"],
+            "additionalProperties": false,
+            "properties": {
+              "step": { "type": "integer", "minimum": 1 },
+              "added_token_id": { "type": "integer" },
+              "added_label": { "type": "string" },
+              "support_after": { "type": "array", "items": { "type": "integer" } },
+              "residual_norm": { "type": "number" },
+              "relative_residual": { "type": "number" },
+              "explained_fraction": { "type": ["number", "null"] },
+              "coefficients_after": {
+                "description": "Per-step coefficient vector when recoverable; null when the run recorded final coefficients only.",
+                "type": ["array", "null"],
+                "items": { "type": "number" }
+              },
+              "final_coefficient_zero": {
+                "description": "Whether this atom's coefficient is zero in the FINAL solution (per-step zeroing is not recorded).",
+                "type": ["boolean", "null"]
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "trajectoryTransition": {
+      "type": "object",
+      "required": ["example_id", "position", "layer_from", "layer_to", "jaccard", "weighted_similarity", "data_status"],
+      "additionalProperties": false,
+      "properties": {
+        "example_id": { "type": "string" },
+        "position": { "type": "integer" },
+        "layer_from": { "type": "integer" },
+        "layer_to": { "type": "integer" },
+        "retained_atoms": { "type": "array", "items": { "$ref": "#/$defs/labelledToken" } },
+        "entered_atoms": { "type": "array", "items": { "$ref": "#/$defs/labelledToken" } },
+        "exited_atoms": { "type": "array", "items": { "$ref": "#/$defs/labelledToken" } },
+        "jaccard": { "type": "number", "minimum": 0, "maximum": 1 },
+        "weighted_similarity": { "type": "number" },
+        "explained_fraction_from": { "type": ["number", "null"] },
+        "explained_fraction_to": { "type": ["number", "null"] },
+        "delta_explained_fraction": { "type": ["number", "null"] },
+        "output_token_persistence": {
+          "description": "Whether the model's measured top-1 token is in the cone at each end; null when the output token is unknown.",
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "properties": {
+            "in_from": { "type": "boolean" },
+            "in_to": { "type": "boolean" }
+          }
+        },
+        "data_status": { "$ref": "#/$defs/dataStatus" }
+      }
+    },
+
+    "labelledToken": {
+      "type": "object",
+      "required": ["token_id", "label"],
+      "additionalProperties": false,
+      "properties": {
+        "token_id": { "type": "integer" },
+        "label": { "type": "string" }
+      }
+    },
+
+    "causalRecord": {
+      "type": "object",
+      "required": ["condition_id", "example_id", "layer", "position", "target_kind", "multiplier", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "condition_id": { "description": "Deterministic ID from jlens.interventions.condition_id().", "type": "string" },
+        "example_id": { "type": "string" },
+        "layer": { "type": "integer" },
+        "position": { "type": "integer" },
+        "target_kind": { "enum": ["output_atom_contribution", "top_non_output_atom_contribution", "full_cone_reconstruction", "isotropic_random_direction", "nuisance_direction", "cross_prompt_cone"] },
+        "atom_token_id": { "type": ["integer", "null"] },
+        "atom_label": { "type": ["string", "null"] },
+        "multiplier": { "type": "number" },
+        "status": { "$ref": "#/$defs/dataStatus" },
+        "norm_preserving": { "type": ["boolean", "null"] },
+        "delta_norm": { "type": ["number", "null"] },
+        "activation_norm": { "type": ["number", "null"] },
+        "delta_to_activation_ratio": { "type": ["number", "null"] },
+        "target_token_id": { "type": ["integer", "null"] },
+        "target_token": { "type": ["string", "null"] },
+        "target_logit_before": { "type": ["number", "null"] },
+        "target_logit_after": { "type": ["number", "null"] },
+        "target_logit_delta": { "type": ["number", "null"] },
+        "target_rank_before": { "type": ["integer", "null"] },
+        "target_rank_after": { "type": ["integer", "null"] },
+        "target_prob_before": { "type": ["number", "null"] },
+        "target_prob_after": { "type": ["number", "null"] },
+        "top1_before": { "type": ["object", "null"] },
+        "top1_after": { "type": ["object", "null"] },
+        "top10_before": { "type": ["array", "null"], "items": { "$ref": "#/$defs/tokenScore" } },
+        "top10_after": { "type": ["array", "null"], "items": { "$ref": "#/$defs/tokenScore" } },
+        "top10_overlap": { "type": ["number", "null"] },
+        "kl_divergence_after_vs_before": { "type": ["number", "null"] },
+        "completion_before": { "type": ["string", "null"] },
+        "completion_after": { "type": ["string", "null"] },
+        "control_family": {
+          "description": "Present on control conditions: which family this control belongs to.",
+          "type": ["string", "null"]
+        },
+        "matched_target_condition_id": {
+          "description": "For controls: the targeted condition this control is norm-matched to.",
+          "type": ["string", "null"]
+        },
+        "provenance": { "type": ["object", "null"] }
+      }
+    }
+  }
+}

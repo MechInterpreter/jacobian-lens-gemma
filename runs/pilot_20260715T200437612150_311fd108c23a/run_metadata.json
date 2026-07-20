@@ -1,0 +1,1813 @@
+{
+  "written_utc": "2026-07-15T22:47:47+00:00",
+  "run_id": "pilot_20260715T200437612150_311fd108c23a",
+  "run_dir": "/content/drive/MyDrive/jacobian-lens-gemma/runs/pilot_20260715T200437612150_311fd108c23a",
+  "mode": "pilot",
+  "config": {
+    "mode": "pilot",
+    "model": {
+      "repo_id": "google/gemma-4-E4B-it",
+      "revision": null,
+      "tokenizer_repo_id": null,
+      "tokenizer_revision": null,
+      "dtype": "bfloat16",
+      "device_map": null,
+      "allow_model_load": false,
+      "expect_n_layers": 42,
+      "expect_d_model": 2560,
+      "expect_vocab_size": 262144
+    },
+    "sites": {
+      "source_site": "block_output",
+      "target_site": "block_output",
+      "source_layers": [
+        3,
+        7,
+        14,
+        21,
+        28,
+        35,
+        38
+      ],
+      "target_layer": 41
+    },
+    "positions": {
+      "skip_first": 16,
+      "source_rule": "all positions t with skip_first <= t < seq_len - 1",
+      "target_rule": "cotangents at every valid position; causality zeroes t' < t, so the source gradient is sum over t' >= t"
+    },
+    "fitting": {
+      "prompt_source": "wikitext",
+      "prompts_path": null,
+      "n_prompts": 100,
+      "max_seq_len": 128,
+      "dim_batch": 8,
+      "seed": 42,
+      "checkpoint_every": 5
+    },
+    "eval": {
+      "prompts_path": "configs/prompts/eval_prompts.json",
+      "top_k": 10,
+      "control_seed": 1234
+    },
+    "paths": {
+      "checkpoint": "artifacts/pilot/ckpt.pt",
+      "output_dir": "artifacts/pilot"
+    }
+  },
+  "config_fingerprint": "sha256:311fd108c23a1bd8869c8bbb3e19013660a41fcbdb249710707d9edd65f4dc22",
+  "model_revision": "fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd",
+  "load_info": {
+    "model_repo_id": "google/gemma-4-E4B-it",
+    "model_revision": "fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd",
+    "tokenizer_repo_id": "google/gemma-4-E4B-it",
+    "tokenizer_revision": "fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd",
+    "tokenizer_class": "GemmaTokenizer",
+    "dtype": "torch.bfloat16",
+    "device_map": "cuda",
+    "transformers_version": "5.12.1",
+    "torch_version": "2.11.0+cu128"
+  },
+  "architecture_report": {
+    "model_class": "Gemma4ForConditionalGeneration",
+    "text_model_type": "gemma4_text",
+    "layout_path": "model.language_model",
+    "n_layers": 42,
+    "d_model": 2560,
+    "vocab_size": 262144,
+    "dense": true,
+    "tied_unembedding": true,
+    "final_logit_softcapping": 30.0,
+    "hidden_size_per_layer_input": 256,
+    "num_kv_shared_layers": 18,
+    "sliding_window": 512,
+    "n_full_attention_layers": 7,
+    "layer_scalars": [
+      0.06103515625,
+      0.16015625,
+      0.83984375,
+      0.7109375,
+      0.5859375,
+      0.60546875,
+      0.55859375,
+      0.671875,
+      0.228515625,
+      0.4140625,
+      0.62109375,
+      0.51953125,
+      0.74609375,
+      0.7109375,
+      0.671875,
+      0.5390625,
+      0.63671875,
+      0.423828125,
+      0.54296875,
+      0.51171875,
+      0.431640625,
+      0.4609375,
+      0.1572265625,
+      0.0654296875,
+      0.50390625,
+      0.71484375,
+      0.71484375,
+      0.69140625,
+      0.61328125,
+      0.419921875,
+      0.7109375,
+      0.81640625,
+      0.8515625,
+      0.82421875,
+      0.8359375,
+      0.8359375,
+      0.85546875,
+      0.88671875,
+      0.8828125,
+      0.85546875,
+      0.80859375,
+      0.4453125
+    ],
+    "layer_scalars_all_unit": false,
+    "params_frozen": true,
+    "dtype": "torch.bfloat16",
+    "device": "cuda:0",
+    "bos_token_id": 2,
+    "bos_prepended_by_tokenizer": false,
+    "encode_starts_with_bos": true,
+    "warnings": [
+      "layer_scalar deviates from 1.0 (min=0.0610352, max=0.886719); recorded, not fatal — the scalar is part of the block output the lens reads"
+    ]
+  },
+  "probe": {
+    "dim_batch": 8,
+    "max_seq_len": 48,
+    "seq_len": 48,
+    "n_valid_positions": 31,
+    "source_layers": [
+      3,
+      7,
+      14,
+      21,
+      28,
+      35,
+      38
+    ],
+    "wall_seconds": 36.38,
+    "jacobian_shapes": {
+      "3": [
+        2560,
+        2560
+      ],
+      "7": [
+        2560,
+        2560
+      ],
+      "14": [
+        2560,
+        2560
+      ],
+      "21": [
+        2560,
+        2560
+      ],
+      "28": [
+        2560,
+        2560
+      ],
+      "35": [
+        2560,
+        2560
+      ],
+      "38": [
+        2560,
+        2560
+      ]
+    },
+    "all_finite": true,
+    "peak_cuda_memory_gb": 16.84
+  },
+  "fit_runtime_seconds": 9665.4,
+  "prompt_hashes": [
+    "a13e92ce18d8dd6a",
+    "a03fba1a21229a3b",
+    "029f79969f9b843a",
+    "8cba9771b9d248ac",
+    "cf7e76fa2a086aeb",
+    "1dda2576c6f5e067",
+    "9769cfd75c11d452",
+    "0fb2eefcd3ee1830",
+    "c34ace46a9dcd4e1",
+    "26cdc10c6f86aa74",
+    "62d91bacceda549e",
+    "1cbdbd8a9ec33929",
+    "afe6aa6553cff81e",
+    "054b9a6e96a6ede6",
+    "57c8d81d200bd115",
+    "e0089c9f892080d6",
+    "f64313e475941154",
+    "1cae39570e3e9259",
+    "215fc68a11408411",
+    "7a3f428e39481439",
+    "80b56f6410e549a3",
+    "31701fbaaf18d372",
+    "cb38c00eb0a00815",
+    "ad2f981f235bbaa2",
+    "9b4ecde1e5df4788",
+    "74d85b5fc19dde47",
+    "419b8a5d9d39d696",
+    "ef8050e0a574782d",
+    "7fb2dcb7536f7cca",
+    "bf1d18754dfcb282",
+    "fccc3e51d08fa95f",
+    "0837b066f6401e1a",
+    "146d71210189dc8b",
+    "4184aeaaa190042d",
+    "1e9643d5457ce437",
+    "cd4b7da4968555ab",
+    "9f79776ec63b1241",
+    "610bfb8dd8d3009c",
+    "45608c8f7fe6c6e8",
+    "26cd7f60bc422de8",
+    "a5f1e85632b1a0b3",
+    "58afcfaa422822db",
+    "8429692df2cdbf4d",
+    "6f6960b074dcd5d5",
+    "67e28c052a2a6a78",
+    "3e8f8defaddd9a68",
+    "d00345cb5de4d608",
+    "4a2542fe2a7e7220",
+    "d861f8bfb13d9f60",
+    "95277e076322a07b",
+    "bcd8d53d5393342a",
+    "098db0145bb733bf",
+    "bd00807b618ddda1",
+    "09f000d3d76a6132",
+    "b4126054351236e0",
+    "fa633f955b034aa1",
+    "63e4f72c55a0f59b",
+    "471ab05aaf96d1f4",
+    "5232f5b091f85293",
+    "b8eb097d67e2908a",
+    "5087c129c6efe5f1",
+    "7f66fd253fc19ad6",
+    "bfd6b40c35945f4c",
+    "6960e7ec31e9cb44",
+    "36920bb5cf273936",
+    "2dc54e0682e8846d",
+    "4cc94fb71c97907b",
+    "8207f58eeebcbb16",
+    "9e8ee9efe814b155",
+    "c45d191f24ede6db",
+    "338d6ee35db356c2",
+    "58c99fbe34adef19",
+    "01e49aa1fd41946a",
+    "17133e09be8c320c",
+    "a430fd674270bbd5",
+    "6936d9020c9b06f9",
+    "fdd6090ed6093f6e",
+    "3e0e97fe4a5cc88c",
+    "b069d7b4b0e9c427",
+    "55133e8858e5523d",
+    "62550e02da26329b",
+    "4e51ec0672f9bf59",
+    "ced7d168175387fe",
+    "e4be6aa54eeeb331",
+    "df3e990ba5d5c189",
+    "4d3537ea1afafca2",
+    "c08ca316f40daf24",
+    "32d24689fa64868f",
+    "d69e928a8707059c",
+    "abb3e1448f018b5f",
+    "e0a9a7ac628f9833",
+    "1623544dd834a65c",
+    "d0712a730df5af1f",
+    "513b5609e000912d",
+    "a726fc2087341c1d",
+    "375a2d251a5953fd",
+    "276b1fb4fc5eb6d8",
+    "fb6c7fcdf405e4c8",
+    "4195fdfa32dd8e08",
+    "a0550c0dafbf46b0"
+  ],
+  "eval_readouts": [
+    {
+      "slug": "multihop-currency",
+      "format": "plain",
+      "position": -2,
+      "model_top1": " is",
+      "layers": {
+        "3": {
+          "jlens_top5": [
+            "ologis",
+            "guy",
+            "goat",
+            "anyone",
+            "vius"
+          ],
+          "jlens_top1_logit_pre": 68.0,
+          "jlens_top1_logit_capped": 29.362165451049805,
+          "logit_lens_top5": [
+            "張り",
+            " Auff",
+            "�",
+            "Ữ",
+            " مر"
+          ]
+        },
+        "7": {
+          "jlens_top5": [
+            " ,",
+            " .",
+            " .\"",
+            " eight",
+            " ،"
+          ],
+          "jlens_top1_logit_pre": 79.5,
+          "jlens_top1_logit_capped": 29.70199203491211,
+          "logit_lens_top5": [
+            "wedge",
+            "errors",
+            "相",
+            "hete",
+            " đất"
+          ]
+        },
+        "14": {
+          "jlens_top5": [
+            "Italian",
+            " Italian",
+            " Italy",
+            " italian",
+            "Italy"
+          ],
+          "jlens_top1_logit_pre": 96.0,
+          "jlens_top1_logit_capped": 29.90047264099121,
+          "logit_lens_top5": [
+            "Green",
+            "机",
+            "tattoo",
+            "رسی",
+            "Select"
+          ]
+        },
+        "21": {
+          "jlens_top5": [
+            " Italy",
+            " Italian",
+            "Italy",
+            " italiano",
+            " italian"
+          ],
+          "jlens_top1_logit_pre": 94.5,
+          "jlens_top1_logit_capped": 29.890024185180664,
+          "logit_lens_top5": [
+            " golfer",
+            "defer",
+            "ду",
+            "床上",
+            "क्रम"
+          ]
+        },
+        "28": {
+          "jlens_top5": [
+            " was",
+            " is",
+            " became",
+            " were",
+            " came"
+          ],
+          "jlens_top1_logit_pre": 102.5,
+          "jlens_top1_logit_capped": 29.935434341430664,
+          "logit_lens_top5": [
+            "色は",
+            "是因為",
+            " 사람은",
+            " составляет",
+            " coordenadas"
+          ]
+        },
+        "35": {
+          "jlens_top5": [
+            " is",
+            " shoe",
+            " shoes",
+            " boots",
+            " footwear"
+          ],
+          "jlens_top1_logit_pre": 99.5,
+          "jlens_top1_logit_capped": 29.921157836914062,
+          "logit_lens_top5": [
+            " boots",
+            "靴",
+            "鞋",
+            " shoe",
+            " shoes"
+          ]
+        },
+        "38": {
+          "jlens_top5": [
+            " is",
+            " shoe",
+            " boots",
+            " boot",
+            " are"
+          ],
+          "jlens_top1_logit_pre": 81.0,
+          "jlens_top1_logit_capped": 29.730222702026367,
+          "logit_lens_top5": [
+            " is",
+            " boots",
+            " shoe",
+            "靴",
+            " footwear"
+          ]
+        }
+      }
+    },
+    {
+      "slug": "multihop-currency",
+      "format": "plain",
+      "position": -1,
+      "model_top1": " the",
+      "layers": {
+        "3": {
+          "jlens_top5": [
+            " gonna",
+            " basically",
+            " thats",
+            "ft",
+            " kinda"
+          ],
+          "jlens_top1_logit_pre": 80.0,
+          "jlens_top1_logit_capped": 29.711713790893555,
+          "logit_lens_top5": [
+            " Cann",
+            " stir",
+            " Mannes",
+            "urne",
+            "嗣"
+          ]
+        },
+        "7": {
+          "jlens_top5": [
+            " recognised",
+            "ised",
+            " whilst",
+            " thats",
+            " kinda"
+          ],
+          "jlens_top1_logit_pre": 64.0,
+          "jlens_top1_logit_capped": 29.169937133789062,
+          "logit_lens_top5": [
+            "ago",
+            "稀",
+            " Cann",
+            "ර",
+            " Ris"
+          ]
+        },
+        "14": {
+          "jlens_top5": [
+            " countries",
+            " country",
+            " nation",
+            " nations",
+            "两国"
+          ],
+          "jlens_top1_logit_pre": 78.5,
+          "jlens_top1_logit_capped": 29.681554794311523,
+          "logit_lens_top5": [
+            "Select",
+            "select",
+            "Green",
+            "别",
+            "side"
+          ]
+        },
+        "21": {
+          "jlens_top5": [
+            " country",
+            " countries",
+            " Italy",
+            " France",
+            " continent"
+          ],
+          "jlens_top1_logit_pre": 83.5,
+          "jlens_top1_logit_capped": 29.771480560302734,
+          "logit_lens_top5": [
+            "ders",
+            "ativas",
+            "ду",
+            " komp",
+            "共"
+          ]
+        },
+        "28": {
+          "jlens_top5": [
+            " Spanish",
+            " Columbus",
+            " called",
+            " Colombian",
+            " Louisiana"
+          ],
+          "jlens_top1_logit_pre": 55.0,
+          "jlens_top1_logit_capped": 28.504533767700195,
+          "logit_lens_top5": [
+            " currency",
+            " forex",
+            "鈔",
+            " 단위",
+            " 무엇"
+          ]
+        },
+        "35": {
+          "jlens_top5": [
+            " Euros",
+            " euro",
+            " Euro",
+            " euros",
+            "欧元"
+          ],
+          "jlens_top1_logit_pre": 111.0,
+          "jlens_top1_logit_capped": 29.963346481323242,
+          "logit_lens_top5": [
+            " Euros",
+            " euro",
+            " euros",
+            " Euro",
+            "欧元"
+          ]
+        },
+        "38": {
+          "jlens_top5": [
+            " Euro",
+            " Euros",
+            " euros",
+            " euro",
+            "欧元"
+          ],
+          "jlens_top1_logit_pre": 66.0,
+          "jlens_top1_logit_capped": 29.272293090820312,
+          "logit_lens_top5": [
+            " Euro",
+            " euros",
+            " Euros",
+            " euro",
+            "欧元"
+          ]
+        }
+      }
+    },
+    {
+      "slug": "capital-france",
+      "format": "plain",
+      "position": -2,
+      "model_top1": " Paris",
+      "layers": {
+        "3": {
+          "jlens_top5": [
+            " guys",
+            " basically",
+            " okay",
+            " kids",
+            " guy"
+          ],
+          "jlens_top1_logit_pre": 76.5,
+          "jlens_top1_logit_capped": 29.636411666870117,
+          "logit_lens_top5": [
+            " Beg",
+            "骚",
+            "నే",
+            " lev",
+            " mammoth"
+          ]
+        },
+        "7": {
+          "jlens_top5": [
+            " basically",
+            " really",
+            " mainly",
+            " probably",
+            " very"
+          ],
+          "jlens_top1_logit_pre": 69.5,
+          "jlens_top1_logit_capped": 29.422279357910156,
+          "logit_lens_top5": [
+            " औ",
+            " Eing",
+            " وبين",
+            " Tit",
+            " набу"
+          ]
+        },
+        "14": {
+          "jlens_top5": [
+            " city",
+            "首都",
+            " cities",
+            " cityName",
+            " metropolis"
+          ],
+          "jlens_top1_logit_pre": 96.0,
+          "jlens_top1_logit_capped": 29.90047264099121,
+          "logit_lens_top5": [
+            "ाम्",
+            "TAM",
+            "rä",
+            "common",
+            "Automat"
+          ]
+        },
+        "21": {
+          "jlens_top5": [
+            " metropolis",
+            " city",
+            " Paris",
+            " cityName",
+            " cities"
+          ],
+          "jlens_top1_logit_pre": 65.5,
+          "jlens_top1_logit_capped": 29.247936248779297,
+          "logit_lens_top5": [
+            "ostante",
+            " rele",
+            " God",
+            "god",
+            " độ"
+          ]
+        },
+        "28": {
+          "jlens_top5": [
+            " Alexandria",
+            " Jerusalem",
+            " Columbus",
+            " Florence",
+            " called"
+          ],
+          "jlens_top1_logit_pre": 48.5,
+          "jlens_top1_logit_capped": 27.72417449951172,
+          "logit_lens_top5": [
+            "東京",
+            "在北京",
+            " 東京",
+            " શહે",
+            " city"
+          ]
+        },
+        "35": {
+          "jlens_top5": [
+            " Paris",
+            " Parisian",
+            "Paris",
+            "巴黎",
+            " París"
+          ],
+          "jlens_top1_logit_pre": 132.0,
+          "jlens_top1_logit_capped": 29.990957260131836,
+          "logit_lens_top5": [
+            " Paris",
+            " Parisian",
+            "Paris",
+            "巴黎",
+            " París"
+          ]
+        },
+        "38": {
+          "jlens_top5": [
+            " Paris",
+            " Parisian",
+            "Paris",
+            "巴黎",
+            "パリ"
+          ],
+          "jlens_top1_logit_pre": 100.0,
+          "jlens_top1_logit_capped": 29.92374038696289,
+          "logit_lens_top5": [
+            " Paris",
+            "Paris",
+            "パリ",
+            " Parisian",
+            "巴黎"
+          ]
+        }
+      }
+    },
+    {
+      "slug": "capital-france",
+      "format": "plain",
+      "position": -1,
+      "model_top1": " Paris",
+      "layers": {
+        "3": {
+          "jlens_top5": [
+            " anymore",
+            " gonna",
+            " guy",
+            " guys",
+            " nowadays"
+          ],
+          "jlens_top1_logit_pre": 86.0,
+          "jlens_top1_logit_capped": 29.80644989013672,
+          "logit_lens_top5": [
+            "నే",
+            " Beg",
+            " inde",
+            " grac",
+            " zaś"
+          ]
+        },
+        "7": {
+          "jlens_top5": [
+            " eight",
+            " Eight",
+            " recognised",
+            " whilst",
+            " learnt"
+          ],
+          "jlens_top1_logit_pre": 56.25,
+          "jlens_top1_logit_capped": 28.621356964111328,
+          "logit_lens_top5": [
+            "isms",
+            "wel",
+            "င်း",
+            "危",
+            "jor"
+          ]
+        },
+        "14": {
+          "jlens_top5": [
+            " cityName",
+            " city",
+            "ponym",
+            " name",
+            "cityName"
+          ],
+          "jlens_top1_logit_pre": 80.0,
+          "jlens_top1_logit_capped": 29.711713790893555,
+          "logit_lens_top5": [
+            "\\\".",
+            "껐",
+            "集",
+            "../../",
+            "빵"
+          ]
+        },
+        "21": {
+          "jlens_top5": [
+            "的名字",
+            " name",
+            " NAME",
+            "newName",
+            "ListName"
+          ],
+          "jlens_top1_logit_pre": 86.0,
+          "jlens_top1_logit_capped": 29.80644989013672,
+          "logit_lens_top5": [
+            " %+",
+            "defer",
+            "øg",
+            " выгод",
+            " God"
+          ]
+        },
+        "28": {
+          "jlens_top5": [
+            " Alexandria",
+            " Columbus",
+            " Florence",
+            " Brighton",
+            " Victoria"
+          ],
+          "jlens_top1_logit_pre": 54.25,
+          "jlens_top1_logit_capped": 28.429866790771484,
+          "logit_lens_top5": [
+            " cityName",
+            "://$",
+            " accordingly",
+            " Lumpur",
+            " иначе"
+          ]
+        },
+        "35": {
+          "jlens_top5": [
+            " Paris",
+            " Parisian",
+            "Paris",
+            "巴黎",
+            " París"
+          ],
+          "jlens_top1_logit_pre": 135.0,
+          "jlens_top1_logit_capped": 29.992597579956055,
+          "logit_lens_top5": [
+            " Paris",
+            " Parisian",
+            "Paris",
+            "巴黎",
+            " París"
+          ]
+        },
+        "38": {
+          "jlens_top5": [
+            " Paris",
+            " Parisian",
+            "Paris",
+            "巴黎",
+            "パリ"
+          ],
+          "jlens_top1_logit_pre": 101.5,
+          "jlens_top1_logit_capped": 29.930988311767578,
+          "logit_lens_top5": [
+            " Paris",
+            "Paris",
+            "パリ",
+            "巴黎",
+            " Parisian"
+          ]
+        }
+      }
+    },
+    {
+      "slug": "antonym",
+      "format": "plain",
+      "position": -2,
+      "model_top1": " to",
+      "layers": {
+        "3": {
+          "jlens_top5": [
+            " colours",
+            " gonna",
+            " colour",
+            " grosse",
+            " labours"
+          ],
+          "jlens_top1_logit_pre": 75.0,
+          "jlens_top1_logit_capped": 29.59842872619629,
+          "logit_lens_top5": [
+            "olyte",
+            " wyst",
+            "ogar",
+            " cul",
+            " dim"
+          ]
+        },
+        "7": {
+          "jlens_top5": [
+            " recognised",
+            " whilst",
+            " centre",
+            " realised",
+            " organised"
+          ],
+          "jlens_top1_logit_pre": 77.5,
+          "jlens_top1_logit_capped": 29.659727096557617,
+          "logit_lens_top5": [
+            "яз",
+            " औ",
+            " Gass",
+            "稀",
+            "חי"
+          ]
+        },
+        "14": {
+          "jlens_top5": [
+            " sideways",
+            " opposites",
+            " جغ",
+            " directional",
+            " inverse"
+          ],
+          "jlens_top1_logit_pre": 44.25,
+          "jlens_top1_logit_capped": 27.015810012817383,
+          "logit_lens_top5": [
+            "Green",
+            "ے۔",
+            "グリーン",
+            "rast",
+            "\\\"."
+          ]
+        },
+        "21": {
+          "jlens_top5": [
+            " .\"",
+            " .",
+            " #\"",
+            " ,",
+            " \".\""
+          ],
+          "jlens_top1_logit_pre": 43.25,
+          "jlens_top1_logit_capped": 26.820981979370117,
+          "logit_lens_top5": [
+            "Bol",
+            " bol",
+            "Defer",
+            "繰",
+            " Bol"
+          ]
+        },
+        "28": {
+          "jlens_top5": [
+            " opposed",
+            " to",
+            " toward",
+            " conversely",
+            " opposite"
+          ],
+          "jlens_top1_logit_pre": 51.0,
+          "jlens_top1_logit_capped": 28.062271118164062,
+          "logit_lens_top5": [
+            " opposed",
+            " toward",
+            " to",
+            "ano",
+            " kepada"
+          ]
+        },
+        "35": {
+          "jlens_top5": [
+            " to",
+            "to",
+            " то",
+            "到",
+            " opposite"
+          ],
+          "jlens_top1_logit_pre": 53.5,
+          "jlens_top1_logit_capped": 28.35157585144043,
+          "logit_lens_top5": [
+            " to",
+            "To",
+            "to",
+            " तो",
+            " то"
+          ]
+        },
+        "38": {
+          "jlens_top5": [
+            " to",
+            "to",
+            " то",
+            " To",
+            "到"
+          ],
+          "jlens_top1_logit_pre": 59.5,
+          "jlens_top1_logit_capped": 28.884929656982422,
+          "logit_lens_top5": [
+            " to",
+            "to",
+            "To",
+            " то",
+            " To"
+          ]
+        }
+      }
+    },
+    {
+      "slug": "antonym",
+      "format": "plain",
+      "position": -1,
+      "model_top1": " right",
+      "layers": {
+        "3": {
+          "jlens_top5": [
+            " goin",
+            " Tues",
+            "fte",
+            " tih",
+            " 있어서"
+          ],
+          "jlens_top1_logit_pre": 70.0,
+          "jlens_top1_logit_capped": 29.441041946411133,
+          "logit_lens_top5": [
+            " capac",
+            "င်",
+            " chap",
+            " inde",
+            " tun"
+          ]
+        },
+        "7": {
+          "jlens_top5": [
+            " Eight",
+            " eight",
+            " whilst",
+            " utilising",
+            "8"
+          ],
+          "jlens_top1_logit_pre": 58.75,
+          "jlens_top1_logit_capped": 28.828874588012695,
+          "logit_lens_top5": [
+            " गले",
+            " მის",
+            "essional",
+            "UEL",
+            "urne"
+          ]
+        },
+        "14": {
+          "jlens_top5": [
+            " reversal",
+            " Orientation",
+            " reversed",
+            " directional",
+            " orientation"
+          ],
+          "jlens_top1_logit_pre": 48.75,
+          "jlens_top1_logit_capped": 27.760385513305664,
+          "logit_lens_top5": [
+            "Green",
+            "。”",
+            "グリーン",
+            "……”",
+            "linear"
+          ]
+        },
+        "21": {
+          "jlens_top5": [
+            " opposites",
+            " reversal",
+            " Opposite",
+            " anton",
+            " antagonistic"
+          ],
+          "jlens_top1_logit_pre": 86.0,
+          "jlens_top1_logit_capped": 29.80644989013672,
+          "logit_lens_top5": [
+            "defer",
+            "睁",
+            " Erst",
+            " độ",
+            " Incre"
+          ]
+        },
+        "28": {
+          "jlens_top5": [
+            " another",
+            " opposites",
+            " vice",
+            " tropics",
+            " anymore"
+          ],
+          "jlens_top1_logit_pre": 65.5,
+          "jlens_top1_logit_capped": 29.247936248779297,
+          "logit_lens_top5": [
+            " reciprocal",
+            " Conversely",
+            " विपरीत",
+            " reciproc",
+            " NASA"
+          ]
+        },
+        "35": {
+          "jlens_top5": [
+            " right",
+            "右",
+            "right",
+            " Right",
+            " 右"
+          ],
+          "jlens_top1_logit_pre": 106.0,
+          "jlens_top1_logit_capped": 29.94886016845703,
+          "logit_lens_top5": [
+            " right",
+            " Right",
+            "Right",
+            "right",
+            "右"
+          ]
+        },
+        "38": {
+          "jlens_top5": [
+            " right",
+            "右",
+            "right",
+            " Right",
+            " derecha"
+          ],
+          "jlens_top1_logit_pre": 68.0,
+          "jlens_top1_logit_capped": 29.362165451049805,
+          "logit_lens_top5": [
+            " right",
+            "right",
+            " Right",
+            "Right",
+            "右"
+          ]
+        }
+      }
+    },
+    {
+      "slug": "counting",
+      "format": "plain",
+      "position": -2,
+      "model_top1": " is",
+      "layers": {
+        "3": {
+          "jlens_top5": [
+            "maybe",
+            " guys",
+            "lots",
+            " anymore",
+            "ってた"
+          ],
+          "jlens_top1_logit_pre": 68.0,
+          "jlens_top1_logit_capped": 29.362165451049805,
+          "logit_lens_top5": [
+            "骚",
+            " dim",
+            "నే",
+            "ารา",
+            "яз"
+          ]
+        },
+        "7": {
+          "jlens_top5": [
+            " mentioned",
+            " mentioning",
+            " basically",
+            " mention",
+            " summarised"
+          ],
+          "jlens_top1_logit_pre": 54.25,
+          "jlens_top1_logit_capped": 28.429866790771484,
+          "logit_lens_top5": [
+            " వా",
+            " লাগ",
+            " dip",
+            " strip",
+            "eres"
+          ]
+        },
+        "14": {
+          "jlens_top5": [
+            " alphabetically",
+            " mentioning",
+            " mentioned",
+            " List",
+            " names"
+          ],
+          "jlens_top1_logit_pre": 69.0,
+          "jlens_top1_logit_capped": 29.402891159057617,
+          "logit_lens_top5": [
+            "ے۔",
+            "徒",
+            "side",
+            "अलग",
+            "äänt"
+          ]
+        },
+        "21": {
+          "jlens_top5": [
+            " List",
+            "List",
+            " newList",
+            " LIST",
+            " myList"
+          ],
+          "jlens_top1_logit_pre": 86.5,
+          "jlens_top1_logit_capped": 29.812776565551758,
+          "logit_lens_top5": [
+            "oretically",
+            "วัติ",
+            " %+",
+            "릇",
+            " деревя"
+          ]
+        },
+        "28": {
+          "jlens_top5": [
+            " was",
+            " is",
+            " became",
+            " were",
+            " are"
+          ],
+          "jlens_top1_logit_pre": 129.0,
+          "jlens_top1_logit_capped": 29.988956451416016,
+          "logit_lens_top5": [
+            " adalah",
+            "คือ",
+            " είναι",
+            "是一個",
+            "是"
+          ]
+        },
+        "35": {
+          "jlens_top5": [
+            " is",
+            " was",
+            " are",
+            "は",
+            " adalah"
+          ],
+          "jlens_top1_logit_pre": 91.5,
+          "jlens_top1_logit_capped": 29.8657283782959,
+          "logit_lens_top5": [
+            " is",
+            " are",
+            " adalah",
+            "は",
+            " है"
+          ]
+        },
+        "38": {
+          "jlens_top5": [
+            " is",
+            " are",
+            "是",
+            " adalah",
+            "的是"
+          ],
+          "jlens_top1_logit_pre": 71.5,
+          "jlens_top1_logit_capped": 29.493785858154297,
+          "logit_lens_top5": [
+            " is",
+            " are",
+            "是",
+            " 것은",
+            "的是"
+          ]
+        }
+      }
+    },
+    {
+      "slug": "counting",
+      "format": "plain",
+      "position": -1,
+      "model_top1": " ",
+      "layers": {
+        "3": {
+          "jlens_top5": [
+            " whereas",
+            " 있어서",
+            " till",
+            "所で",
+            " gonna"
+          ],
+          "jlens_top1_logit_pre": 74.5,
+          "jlens_top1_logit_capped": 29.584911346435547,
+          "logit_lens_top5": [
+            "ารา",
+            " خلاف",
+            "INGO",
+            "领",
+            "opat"
+          ]
+        },
+        "7": {
+          "jlens_top5": [
+            " recognised",
+            " organised",
+            " realised",
+            " centre",
+            " utilising"
+          ],
+          "jlens_top1_logit_pre": 74.5,
+          "jlens_top1_logit_capped": 29.584911346435547,
+          "logit_lens_top5": [
+            " औ",
+            "nu",
+            " وبين",
+            "retr",
+            " سان"
+          ]
+        },
+        "14": {
+          "jlens_top5": [
+            " numberOf",
+            " number",
+            "numberOf",
+            " Anzahl",
+            "NumberOf"
+          ],
+          "jlens_top1_logit_pre": 87.5,
+          "jlens_top1_logit_capped": 29.824813842773438,
+          "logit_lens_top5": [
+            "side",
+            "実",
+            "ाम्",
+            "linear",
+            "Green"
+          ]
+        },
+        "21": {
+          "jlens_top5": [
+            " numberOf",
+            " countable",
+            " counting",
+            " number",
+            " counted"
+          ],
+          "jlens_top1_logit_pre": 81.5,
+          "jlens_top1_logit_capped": 29.739030838012695,
+          "logit_lens_top5": [
+            "畢",
+            "靠",
+            "ду",
+            " đốc",
+            "defer"
+          ]
+        },
+        "28": {
+          "jlens_top5": [
+            ":",
+            " seven",
+            " five",
+            " six",
+            " three"
+          ],
+          "jlens_top1_logit_pre": 99.5,
+          "jlens_top1_logit_capped": 29.921157836914062,
+          "logit_lens_top5": [
+            " काउंट",
+            "數量",
+            " संख्या",
+            " количество",
+            "จำนวน"
+          ]
+        },
+        "35": {
+          "jlens_top5": [
+            ":",
+            " ",
+            " five",
+            " seven",
+            " counted"
+          ],
+          "jlens_top1_logit_pre": 82.5,
+          "jlens_top1_logit_capped": 29.75579261779785,
+          "logit_lens_top5": [
+            " five",
+            " counted",
+            " cinco",
+            " seven",
+            " countable"
+          ]
+        },
+        "38": {
+          "jlens_top5": [
+            " ",
+            ":",
+            " five",
+            " counted",
+            " count"
+          ],
+          "jlens_top1_logit_pre": 59.0,
+          "jlens_top1_logit_capped": 28.847858428955078,
+          "logit_lens_top5": [
+            " five",
+            " counted",
+            " ",
+            " cinco",
+            " خمس"
+          ]
+        }
+      }
+    },
+    {
+      "slug": "chat-multihop-currency",
+      "format": "chat",
+      "position": -2,
+      "model_top1": " Euro",
+      "layers": {
+        "3": {
+          "jlens_top5": [
+            " 。",
+            " ।",
+            " ,",
+            " 」",
+            " ，"
+          ],
+          "jlens_top1_logit_pre": 50.75,
+          "jlens_top1_logit_capped": 28.03077507019043,
+          "logit_lens_top5": [
+            "ඟ",
+            " mull",
+            " singular",
+            " tons",
+            " pint"
+          ]
+        },
+        "7": {
+          "jlens_top5": [
+            "Model",
+            " ,",
+            " ८",
+            "￼",
+            "、《"
+          ],
+          "jlens_top1_logit_pre": 43.75,
+          "jlens_top1_logit_capped": 26.91985321044922,
+          "logit_lens_top5": [
+            "intang",
+            "واره",
+            " leagues",
+            "ันท",
+            "ጣ"
+          ]
+        },
+        "14": {
+          "jlens_top5": [
+            " ,",
+            " linux",
+            "Computational",
+            "Google",
+            " Youtube"
+          ],
+          "jlens_top1_logit_pre": 55.25,
+          "jlens_top1_logit_capped": 28.52864646911621,
+          "logit_lens_top5": [
+            "type",
+            "common",
+            " Ort",
+            "rä",
+            " pur"
+          ]
+        },
+        "21": {
+          "jlens_top5": [
+            " جوجل",
+            "<turn|>",
+            " गूगल",
+            " Gemma",
+            " گوگل"
+          ],
+          "jlens_top1_logit_pre": 47.75,
+          "jlens_top1_logit_capped": 27.61213493347168,
+          "logit_lens_top5": [
+            " inbox",
+            "接種",
+            "brado",
+            " InnoDB",
+            " đốc"
+          ]
+        },
+        "28": {
+          "jlens_top5": [
+            " Spanish",
+            "Spanish",
+            " Colombian",
+            " French",
+            " Colombia"
+          ],
+          "jlens_top1_logit_pre": 67.5,
+          "jlens_top1_logit_capped": 29.340782165527344,
+          "logit_lens_top5": [
+            "鈔",
+            " €,",
+            " dollars",
+            " rupees",
+            " euro"
+          ]
+        },
+        "35": {
+          "jlens_top5": [
+            " Euro",
+            " Euros",
+            " euro",
+            "Euro",
+            " euros"
+          ],
+          "jlens_top1_logit_pre": 135.0,
+          "jlens_top1_logit_capped": 29.992597579956055,
+          "logit_lens_top5": [
+            " Euro",
+            " euro",
+            " Euros",
+            "Euro",
+            " euros"
+          ]
+        },
+        "38": {
+          "jlens_top5": [
+            " Euro",
+            "Euro",
+            " Euros",
+            " euro",
+            "欧元"
+          ],
+          "jlens_top1_logit_pre": 93.5,
+          "jlens_top1_logit_capped": 29.882455825805664,
+          "logit_lens_top5": [
+            " Euro",
+            "Euro",
+            " euro",
+            " Euros",
+            " euros"
+          ]
+        }
+      }
+    },
+    {
+      "slug": "chat-multihop-currency",
+      "format": "chat",
+      "position": -1,
+      "model_top1": "Euro",
+      "layers": {
+        "3": {
+          "jlens_top5": [
+            " .",
+            " ,",
+            " )",
+            " 。",
+            " </"
+          ],
+          "jlens_top1_logit_pre": 61.75,
+          "jlens_top1_logit_capped": 29.037757873535156,
+          "logit_lens_top5": [
+            "ญ",
+            " वा",
+            "糠",
+            "ඟ",
+            " кри"
+          ]
+        },
+        "7": {
+          "jlens_top5": [
+            ".",
+            " @",
+            " eight",
+            " Eight",
+            "8"
+          ],
+          "jlens_top1_logit_pre": 53.25,
+          "jlens_top1_logit_capped": 28.32464599609375,
+          "logit_lens_top5": [
+            " 식으로",
+            "cha",
+            " الق",
+            " Verm",
+            " خلاف"
+          ]
+        },
+        "14": {
+          "jlens_top5": [
+            "Trivia",
+            "UNKNOWN",
+            " Trivia",
+            " trivia",
+            "Incorrect"
+          ],
+          "jlens_top1_logit_pre": 33.5,
+          "jlens_top1_logit_capped": 24.19219207763672,
+          "logit_lens_top5": [
+            "trait",
+            "Green",
+            "tail",
+            "dal",
+            "Select"
+          ]
+        },
+        "21": {
+          "jlens_top5": [
+            "<turn|>",
+            "<eos>",
+            "```",
+            " الاجابه",
+            "nesium"
+          ],
+          "jlens_top1_logit_pre": 63.5,
+          "jlens_top1_logit_capped": 29.142202377319336,
+          "logit_lens_top5": [
+            " InnoDB",
+            " günlük",
+            " độ",
+            "ယ",
+            " boot"
+          ]
+        },
+        "28": {
+          "jlens_top5": [
+            "Spanish",
+            "Brazilian",
+            "Colombia",
+            "Portuguese",
+            "Colomb"
+          ],
+          "jlens_top1_logit_pre": 52.5,
+          "jlens_top1_logit_capped": 28.24126625061035,
+          "logit_lens_top5": [
+            " euro",
+            " currency",
+            " euros",
+            "鈔",
+            " rupee"
+          ]
+        },
+        "35": {
+          "jlens_top5": [
+            " Euros",
+            " Euro",
+            " euro",
+            " euros",
+            "欧元"
+          ],
+          "jlens_top1_logit_pre": 101.0,
+          "jlens_top1_logit_capped": 29.928651809692383,
+          "logit_lens_top5": [
+            " Euro",
+            " euro",
+            " Euros",
+            " euros",
+            "Euro"
+          ]
+        },
+        "38": {
+          "jlens_top5": [
+            " Euro",
+            "Euro",
+            " euro",
+            "欧元",
+            " Euros"
+          ],
+          "jlens_top1_logit_pre": 68.0,
+          "jlens_top1_logit_capped": 29.362165451049805,
+          "logit_lens_top5": [
+            "Euro",
+            " Euro",
+            " euro",
+            "euro",
+            "欧元"
+          ]
+        }
+      }
+    }
+  ],
+  "control_rows": [
+    {
+      "layer": 3,
+      "J-lens": {
+        "overlap": 0.0,
+        "rank_of_model_top1": 23422
+      },
+      "logit-lens": {
+        "overlap": 0.0,
+        "rank_of_model_top1": 25671
+      },
+      "permuted": {
+        "overlap": 0.0,
+        "rank_of_model_top1": 93091
+      },
+      "random": {
+        "overlap": 0.0,
+        "rank_of_model_top1": 198331
+      },
+      "wrong_layer": {
+        "overlap": 0.0,
+        "rank_of_model_top1": 1762
+      }
+    },
+    {
+      "layer": 7,
+      "J-lens": {
+        "overlap": 0.0,
+        "rank_of_model_top1": 824
+      },
+      "logit-lens": {
+        "overlap": 0.0,
+        "rank_of_model_top1": 54024
+      },
+      "permuted": {
+        "overlap": 0.0,
+        "rank_of_model_top1": 53437
+      },
+      "random": {
+        "overlap": 0.0,
+        "rank_of_model_top1": 4080
+      },
+      "wrong_layer": {
+        "overlap": 0.0,
+        "rank_of_model_top1": 7947
+      }
+    },
+    {
+      "layer": 14,
+      "J-lens": {
+        "overlap": 0.05,
+        "rank_of_model_top1": 35572
+      },
+      "logit-lens": {
+        "overlap": 0.0,
+        "rank_of_model_top1": 70932
+      },
+      "permuted": {
+        "overlap": 0.0,
+        "rank_of_model_top1": 204397
+      },
+      "random": {
+        "overlap": 0.0,
+        "rank_of_model_top1": 25885
+      },
+      "wrong_layer": {
+        "overlap": 0.05,
+        "rank_of_model_top1": 32569
+      }
+    },
+    {
+      "layer": 21,
+      "J-lens": {
+        "overlap": 0.05,
+        "rank_of_model_top1": 18842
+      },
+      "logit-lens": {
+        "overlap": 0.0,
+        "rank_of_model_top1": 112694
+      },
+      "permuted": {
+        "overlap": 0.0,
+        "rank_of_model_top1": 209056
+      },
+      "random": {
+        "overlap": 0.0,
+        "rank_of_model_top1": 240277
+      },
+      "wrong_layer": {
+        "overlap": 0.15,
+        "rank_of_model_top1": 1131
+      }
+    },
+    {
+      "layer": 28,
+      "J-lens": {
+        "overlap": 0.1,
+        "rank_of_model_top1": 5205
+      },
+      "logit-lens": {
+        "overlap": 0.0,
+        "rank_of_model_top1": 85662
+      },
+      "permuted": {
+        "overlap": 0.0,
+        "rank_of_model_top1": 170479
+      },
+      "random": {
+        "overlap": 0.0,
+        "rank_of_model_top1": 131744
+      },
+      "wrong_layer": {
+        "overlap": 0.1,
+        "rank_of_model_top1": 78113
+      }
+    },
+    {
+      "layer": 35,
+      "J-lens": {
+        "overlap": 0.2,
+        "rank_of_model_top1": 510
+      },
+      "logit-lens": {
+        "overlap": 0.2,
+        "rank_of_model_top1": 1344
+      },
+      "permuted": {
+        "overlap": 0.0,
+        "rank_of_model_top1": 132405
+      },
+      "random": {
+        "overlap": 0.0,
+        "rank_of_model_top1": 15936
+      },
+      "wrong_layer": {
+        "overlap": 0.2,
+        "rank_of_model_top1": 175
+      }
+    },
+    {
+      "layer": 38,
+      "J-lens": {
+        "overlap": 0.2,
+        "rank_of_model_top1": 12
+      },
+      "logit-lens": {
+        "overlap": 0.2,
+        "rank_of_model_top1": 54
+      },
+      "permuted": {
+        "overlap": 0.0,
+        "rank_of_model_top1": 64015
+      },
+      "random": {
+        "overlap": 0.0,
+        "rank_of_model_top1": 22715
+      },
+      "wrong_layer": {
+        "overlap": 0.0,
+        "rank_of_model_top1": 260183
+      }
+    }
+  ],
+  "artifact_paths": {
+    "lens": "/content/drive/MyDrive/jacobian-lens-gemma/runs/pilot_20260715T200437612150_311fd108c23a/artifacts/lens.pt",
+    "checkpoint": "/content/drive/MyDrive/jacobian-lens-gemma/runs/pilot_20260715T200437612150_311fd108c23a/checkpoints/ckpt.pt",
+    "fit_metadata": "/content/drive/MyDrive/jacobian-lens-gemma/runs/pilot_20260715T200437612150_311fd108c23a/artifacts/fit_metadata.json",
+    "eval_metadata": "/content/drive/MyDrive/jacobian-lens-gemma/runs/pilot_20260715T200437612150_311fd108c23a/artifacts/eval_metadata.json"
+  },
+  "environment": {
+    "python": "3.12.13",
+    "platform": "Linux-6.6.122+-x86_64-with-glibc2.35",
+    "torch": "2.11.0+cu128",
+    "transformers": "5.12.1",
+    "cuda_available": true,
+    "device_name": "NVIDIA L4",
+    "upstream_repo": "https://github.com/anthropics/jacobian-lens",
+    "upstream_commit": "581d398613e5602a5af361e1c34d3a92ea82ba8e",
+    "local_commit": "541b0b343a7497991ab57a518d805b1cce1da68c"
+  }
+}

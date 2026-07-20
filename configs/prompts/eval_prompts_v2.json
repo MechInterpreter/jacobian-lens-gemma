@@ -1,0 +1,244 @@
+{
+  "description": "Categorized held-out evaluation prompts (v2), applied AFTER fitting; never part of the fitted Jacobian corpus and disjoint from the WikiText fitting distribution. Deterministic, lightweight, self-contained probe set — NOT a comprehensive benchmark. Plain-text and chat-templated prompts are evaluated and aggregated separately (chat entries are rendered with the tokenizer's chat template at eval time). 'positions' use Python indexing into the tokenized sequence. Loaded by jlens.evaluation.load_eval_prompts_v2.",
+  "version": 2,
+  "plain": [
+    {
+      "slug": "factual-gold-symbol",
+      "category": "factual",
+      "text": "The chemical symbol for the element gold is",
+      "positions": [-2, -1]
+    },
+    {
+      "slug": "factual-mercury",
+      "category": "factual",
+      "text": "The planet closest to the Sun is called",
+      "positions": [-2, -1]
+    },
+    {
+      "slug": "factual-shakespeare",
+      "category": "factual",
+      "text": "The author of the play Romeo and Juliet is William",
+      "positions": [-2, -1]
+    },
+    {
+      "slug": "factual-canberra",
+      "category": "factual",
+      "text": "The capital city of Australia is",
+      "positions": [-2, -1]
+    },
+    {
+      "slug": "factual-pacific",
+      "category": "factual",
+      "text": "The largest ocean on Earth is the",
+      "positions": [-2, -1]
+    },
+    {
+      "slug": "factual-photosynthesis",
+      "category": "factual",
+      "text": "The process by which plants convert sunlight into chemical energy is called",
+      "positions": [-2, -1]
+    },
+    {
+      "slug": "multihop-madrid-language",
+      "category": "multihop",
+      "text": "Fact: The language spoken in the country whose capital is Madrid is",
+      "positions": [-2, -1]
+    },
+    {
+      "slug": "multihop-sushi-currency",
+      "category": "multihop",
+      "text": "Fact: The currency used in the country famous for sushi and Mount Fuji is the",
+      "positions": [-2, -1]
+    },
+    {
+      "slug": "multihop-cairo-continent",
+      "category": "multihop",
+      "text": "Fact: The continent containing the country whose capital is Cairo is",
+      "positions": [-2, -1]
+    },
+    {
+      "slug": "multihop-eiffel-capital",
+      "category": "multihop",
+      "text": "Fact: The capital of the country where the Eiffel Tower stands is",
+      "positions": [-2, -1]
+    },
+    {
+      "slug": "multihop-kangaroo-hemisphere",
+      "category": "multihop",
+      "text": "Fact: The hemisphere containing the country famous for kangaroos is the",
+      "positions": [-2, -1]
+    },
+    {
+      "slug": "association-storm",
+      "category": "association",
+      "text": "Thunder, lightning, dark clouds, and heavy rain are all features of a",
+      "positions": [-2, -1]
+    },
+    {
+      "slug": "association-doctor",
+      "category": "association",
+      "text": "Stethoscope, scrubs, hospital, patients: the profession being described is",
+      "positions": [-2, -1]
+    },
+    {
+      "slug": "association-violin",
+      "category": "association",
+      "text": "Strings, a bow, an orchestra seat, a Stradivarius: the instrument is the",
+      "positions": [-2, -1]
+    },
+    {
+      "slug": "association-desert",
+      "category": "association",
+      "text": "Sand, dunes, camels, and scorching heat define the landscape known as the",
+      "positions": [-2, -1]
+    },
+    {
+      "slug": "association-birthday",
+      "category": "association",
+      "text": "Candles, cake, presents, and balloons: it must be someone's",
+      "positions": [-2, -1]
+    },
+    {
+      "slug": "antonym-tall-short",
+      "category": "antonym",
+      "text": "Hot is to cold as tall is to",
+      "positions": [-2, -1]
+    },
+    {
+      "slug": "antonym-early-late",
+      "category": "antonym",
+      "text": "The opposite of early is",
+      "positions": [-2, -1]
+    },
+    {
+      "slug": "antonym-north-south",
+      "category": "antonym",
+      "text": "Up is to down as north is to",
+      "positions": [-2, -1]
+    },
+    {
+      "slug": "antonym-fast-slow",
+      "category": "antonym",
+      "text": "Big is to small as fast is to",
+      "positions": [-2, -1]
+    },
+    {
+      "slug": "antonym-victory-defeat",
+      "category": "antonym",
+      "text": "The opposite of victory is",
+      "positions": [-2, -1]
+    },
+    {
+      "slug": "counting-colors-three",
+      "category": "counting",
+      "text": "The colors red, green, and blue form a list whose length is",
+      "positions": [-2, -1]
+    },
+    {
+      "slug": "counting-days-four",
+      "category": "counting",
+      "text": "Monday, Tuesday, Wednesday, Thursday: the number of days just listed is",
+      "positions": [-2, -1]
+    },
+    {
+      "slug": "counting-triangle-sides",
+      "category": "counting",
+      "text": "The number of sides on a triangle is",
+      "positions": [-2, -1]
+    },
+    {
+      "slug": "counting-week-days",
+      "category": "counting",
+      "text": "The number of days in a week is",
+      "positions": [-2, -1]
+    },
+    {
+      "slug": "syntactic-plural-child",
+      "category": "syntactic",
+      "text": "The plural of the word 'child' is",
+      "positions": [-2, -1]
+    },
+    {
+      "slug": "syntactic-past-go",
+      "category": "syntactic",
+      "text": "The past tense of the verb 'to go' is",
+      "positions": [-2, -1]
+    },
+    {
+      "slug": "syntactic-numbered-list",
+      "category": "syntactic",
+      "text": "Shopping list:\n1. eggs\n2. milk\n3. bread\n4.",
+      "positions": [-2, -1]
+    },
+    {
+      "slug": "syntactic-roses-blue",
+      "category": "syntactic",
+      "text": "Roses are red, violets are",
+      "positions": [-2, -1]
+    },
+    {
+      "slug": "syntactic-alphabet",
+      "category": "syntactic",
+      "text": "A B C D E F",
+      "positions": [-2, -1]
+    }
+  ],
+  "chat": [
+    {
+      "slug": "chat-factual-gold",
+      "category": "factual",
+      "user": "Answer with one word. What is the chemical symbol for gold?",
+      "assistant_prefill": "",
+      "positions": [-2, -1]
+    },
+    {
+      "slug": "chat-factual-canberra",
+      "category": "factual",
+      "user": "Answer with one word. What is the capital city of Australia?",
+      "assistant_prefill": "",
+      "positions": [-2, -1]
+    },
+    {
+      "slug": "chat-multihop-sushi-currency",
+      "category": "multihop",
+      "user": "Answer with a single word. What currency is used in the country famous for sushi and Mount Fuji?",
+      "assistant_prefill": "",
+      "positions": [-2, -1]
+    },
+    {
+      "slug": "chat-association-desert",
+      "category": "association",
+      "user": "One word only. Sand, dunes, camels, scorching heat: what kind of place is this?",
+      "assistant_prefill": "",
+      "positions": [-2, -1]
+    },
+    {
+      "slug": "chat-antonym-early",
+      "category": "antonym",
+      "user": "Answer with one word. What is the opposite of early?",
+      "assistant_prefill": "",
+      "positions": [-2, -1]
+    },
+    {
+      "slug": "chat-counting-triangle",
+      "category": "counting",
+      "user": "Answer with a single word. How many sides does a triangle have?",
+      "assistant_prefill": "",
+      "positions": [-2, -1]
+    },
+    {
+      "slug": "chat-syntactic-plural-child",
+      "category": "syntactic",
+      "user": "Answer with one word. What is the plural of 'child'?",
+      "assistant_prefill": "",
+      "positions": [-2, -1]
+    },
+    {
+      "slug": "chat-antonym-north",
+      "category": "antonym",
+      "user": "One word. Up is to down as north is to what?",
+      "assistant_prefill": "",
+      "positions": [-2, -1]
+    }
+  ]
+}

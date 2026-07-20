@@ -1,0 +1,2564 @@
+{
+ "by_k": {
+  "10": {
+   "n_records": 380,
+   "non_singleton_groups_at_detail_threshold": [
+    {
+     "members": [
+      {
+       "format": "chat",
+       "position": -1,
+       "prompt_slug": "chat-factual-canberra",
+       "top_atoms": [
+        {
+         "label": "Trivia",
+         "token_id": 231323
+        },
+        {
+         "label": "Swift",
+         "token_id": 53028
+        },
+        {
+         "label": "UNKNOWN",
+         "token_id": 146233
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -1,
+       "prompt_slug": "chat-antonym-early",
+       "top_atoms": [
+        {
+         "label": "Trivia",
+         "token_id": 231323
+        },
+        {
+         "label": " whispering",
+         "token_id": 146526
+        },
+        {
+         "label": "UNKNOWN",
+         "token_id": 146233
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -1,
+       "prompt_slug": "chat-syntactic-plural-child",
+       "top_atoms": [
+        {
+         "label": "Trivia",
+         "token_id": 231323
+        },
+        {
+         "label": "UNKNOWN",
+         "token_id": 146233
+        },
+        {
+         "label": " சொல்ல",
+         "token_id": 37395
+        }
+       ]
+      }
+     ],
+     "size": 3,
+     "stratum": {
+      "format": "chat",
+      "layer": 14,
+      "position": -1,
+      "requested_k": 10
+     }
+    },
+    {
+     "members": [
+      {
+       "format": "chat",
+       "position": -1,
+       "prompt_slug": "chat-multihop-sushi-currency",
+       "top_atoms": [
+        {
+         "label": "Trivia",
+         "token_id": 231323
+        },
+        {
+         "label": " glimmer",
+         "token_id": 166235
+        },
+        {
+         "label": "UNKNOWN",
+         "token_id": 146233
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -1,
+       "prompt_slug": "chat-counting-triangle",
+       "top_atoms": [
+        {
+         "label": "Trivia",
+         "token_id": 231323
+        },
+        {
+         "label": " concisely",
+         "token_id": 214219
+        },
+        {
+         "label": " बर्फ",
+         "token_id": 94201
+        }
+       ]
+      }
+     ],
+     "size": 2,
+     "stratum": {
+      "format": "chat",
+      "layer": 14,
+      "position": -1,
+      "requested_k": 10
+     }
+    },
+    {
+     "members": [
+      {
+       "format": "chat",
+       "position": -1,
+       "prompt_slug": "chat-antonym-early",
+       "top_atoms": [
+        {
+         "label": "<turn|>",
+         "token_id": 106
+        },
+        {
+         "label": " unrival",
+         "token_id": 126910
+        },
+        {
+         "label": " spelling",
+         "token_id": 49248
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -1,
+       "prompt_slug": "chat-counting-triangle",
+       "top_atoms": [
+        {
+         "label": "<turn|>",
+         "token_id": 106
+        },
+        {
+         "label": " unrival",
+         "token_id": 126910
+        },
+        {
+         "label": " spelling",
+         "token_id": 49248
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -1,
+       "prompt_slug": "chat-syntactic-plural-child",
+       "top_atoms": [
+        {
+         "label": "<turn|>",
+         "token_id": 106
+        },
+        {
+         "label": " unrival",
+         "token_id": 126910
+        },
+        {
+         "label": " spelling",
+         "token_id": 49248
+        }
+       ]
+      }
+     ],
+     "size": 3,
+     "stratum": {
+      "format": "chat",
+      "layer": 21,
+      "position": -1,
+      "requested_k": 10
+     }
+    },
+    {
+     "members": [
+      {
+       "format": "chat",
+       "position": -1,
+       "prompt_slug": "chat-factual-gold",
+       "top_atoms": [
+        {
+         "label": " unrival",
+         "token_id": 126910
+        },
+        {
+         "label": "<turn|>",
+         "token_id": 106
+        },
+        {
+         "label": "<eos>",
+         "token_id": 1
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -1,
+       "prompt_slug": "chat-factual-canberra",
+       "top_atoms": [
+        {
+         "label": "<eos>",
+         "token_id": 1
+        },
+        {
+         "label": "<turn|>",
+         "token_id": 106
+        },
+        {
+         "label": " unrival",
+         "token_id": 126910
+        }
+       ]
+      }
+     ],
+     "size": 2,
+     "stratum": {
+      "format": "chat",
+      "layer": 21,
+      "position": -1,
+      "requested_k": 10
+     }
+    },
+    {
+     "members": [
+      {
+       "format": "chat",
+       "position": -2,
+       "prompt_slug": "chat-factual-gold",
+       "top_atoms": [
+        {
+         "label": " concisely",
+         "token_id": 214219
+        },
+        {
+         "label": "<turn|>",
+         "token_id": 106
+        },
+        {
+         "label": " aufgrund",
+         "token_id": 75252
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -2,
+       "prompt_slug": "chat-factual-canberra",
+       "top_atoms": [
+        {
+         "label": " concisely",
+         "token_id": 214219
+        },
+        {
+         "label": "<turn|>",
+         "token_id": 106
+        },
+        {
+         "label": " aufgrund",
+         "token_id": 75252
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -2,
+       "prompt_slug": "chat-multihop-sushi-currency",
+       "top_atoms": [
+        {
+         "label": "<turn|>",
+         "token_id": 106
+        },
+        {
+         "label": " concisely",
+         "token_id": 214219
+        },
+        {
+         "label": " aufgrund",
+         "token_id": 75252
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -2,
+       "prompt_slug": "chat-counting-triangle",
+       "top_atoms": [
+        {
+         "label": " concisely",
+         "token_id": 214219
+        },
+        {
+         "label": "<turn|>",
+         "token_id": 106
+        },
+        {
+         "label": " aufgrund",
+         "token_id": 75252
+        }
+       ]
+      }
+     ],
+     "size": 4,
+     "stratum": {
+      "format": "chat",
+      "layer": 21,
+      "position": -2,
+      "requested_k": 10
+     }
+    },
+    {
+     "members": [
+      {
+       "format": "chat",
+       "position": -2,
+       "prompt_slug": "chat-antonym-early",
+       "top_atoms": [
+        {
+         "label": " concisely",
+         "token_id": 214219
+        },
+        {
+         "label": "<turn|>",
+         "token_id": 106
+        },
+        {
+         "label": " Maverick",
+         "token_id": 153665
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -2,
+       "prompt_slug": "chat-syntactic-plural-child",
+       "top_atoms": [
+        {
+         "label": " concisely",
+         "token_id": 214219
+        },
+        {
+         "label": "<turn|>",
+         "token_id": 106
+        },
+        {
+         "label": " Maverick",
+         "token_id": 153665
+        }
+       ]
+      }
+     ],
+     "size": 2,
+     "stratum": {
+      "format": "chat",
+      "layer": 21,
+      "position": -2,
+      "requested_k": 10
+     }
+    },
+    {
+     "members": [
+      {
+       "format": "plain",
+       "position": -2,
+       "prompt_slug": "antonym-tall-short",
+       "top_atoms": [
+        {
+         "label": " to",
+         "token_id": 531
+        },
+        {
+         "label": " chock",
+         "token_id": 209375
+        },
+        {
+         "label": "…).",
+         "token_id": 155138
+        }
+       ]
+      },
+      {
+       "format": "plain",
+       "position": -2,
+       "prompt_slug": "antonym-north-south",
+       "top_atoms": [
+        {
+         "label": " to",
+         "token_id": 531
+        },
+        {
+         "label": " chock",
+         "token_id": 209375
+        },
+        {
+         "label": " transitory",
+         "token_id": 188729
+        }
+       ]
+      }
+     ],
+     "size": 2,
+     "stratum": {
+      "format": "plain",
+      "layer": 35,
+      "position": -2,
+      "requested_k": 10
+     }
+    },
+    {
+     "members": [
+      {
+       "format": "plain",
+       "position": -2,
+       "prompt_slug": "syntactic-plural-child",
+       "top_atoms": [
+        {
+         "label": " is",
+         "token_id": 563
+        },
+        {
+         "label": " irregular",
+         "token_id": 26237
+        },
+        {
+         "label": " zarówno",
+         "token_id": 132126
+        }
+       ]
+      },
+      {
+       "format": "plain",
+       "position": -2,
+       "prompt_slug": "syntactic-past-go",
+       "top_atoms": [
+        {
+         "label": " is",
+         "token_id": 563
+        },
+        {
+         "label": " irregular",
+         "token_id": 26237
+        },
+        {
+         "label": " in",
+         "token_id": 528
+        }
+       ]
+      }
+     ],
+     "size": 2,
+     "stratum": {
+      "format": "plain",
+      "layer": 35,
+      "position": -2,
+      "requested_k": 10
+     }
+    },
+    {
+     "members": [
+      {
+       "format": "plain",
+       "position": -2,
+       "prompt_slug": "multihop-eiffel-capital",
+       "top_atoms": [
+        {
+         "label": " is",
+         "token_id": 563
+        },
+        {
+         "label": "เป็น",
+         "token_id": 15319
+        },
+        {
+         "label": " மிக",
+         "token_id": 24024
+        }
+       ]
+      },
+      {
+       "format": "plain",
+       "position": -2,
+       "prompt_slug": "syntactic-plural-child",
+       "top_atoms": [
+        {
+         "label": " is",
+         "token_id": 563
+        },
+        {
+         "label": " irregular",
+         "token_id": 26237
+        },
+        {
+         "label": " மிக",
+         "token_id": 24024
+        }
+       ]
+      },
+      {
+       "format": "plain",
+       "position": -2,
+       "prompt_slug": "syntactic-past-go",
+       "top_atoms": [
+        {
+         "label": " is",
+         "token_id": 563
+        },
+        {
+         "label": " irregular",
+         "token_id": 26237
+        },
+        {
+         "label": " in",
+         "token_id": 528
+        }
+       ]
+      }
+     ],
+     "size": 3,
+     "stratum": {
+      "format": "plain",
+      "layer": 38,
+      "position": -2,
+      "requested_k": 10
+     }
+    },
+    {
+     "members": [
+      {
+       "format": "plain",
+       "position": -2,
+       "prompt_slug": "antonym-tall-short",
+       "top_atoms": [
+        {
+         "label": " to",
+         "token_id": 531
+        },
+        {
+         "label": " chock",
+         "token_id": 209375
+        },
+        {
+         "label": "…).",
+         "token_id": 155138
+        }
+       ]
+      },
+      {
+       "format": "plain",
+       "position": -2,
+       "prompt_slug": "antonym-north-south",
+       "top_atoms": [
+        {
+         "label": " to",
+         "token_id": 531
+        },
+        {
+         "label": " chock",
+         "token_id": 209375
+        },
+        {
+         "label": " প্রাধ",
+         "token_id": 207249
+        }
+       ]
+      },
+      {
+       "format": "plain",
+       "position": -2,
+       "prompt_slug": "antonym-fast-slow",
+       "top_atoms": [
+        {
+         "label": " to",
+         "token_id": 531
+        },
+        {
+         "label": " chock",
+         "token_id": 209375
+        },
+        {
+         "label": "…).",
+         "token_id": 155138
+        }
+       ]
+      }
+     ],
+     "size": 3,
+     "stratum": {
+      "format": "plain",
+      "layer": 38,
+      "position": -2,
+      "requested_k": 10
+     }
+    }
+   ],
+   "output_token_recurrence_top": [
+    {
+     "as_non_output_atom": 5,
+     "as_output_token": 26,
+     "label": " is",
+     "token_id": 563
+    },
+    {
+     "as_non_output_atom": 0,
+     "as_output_token": 7,
+     "label": " the",
+     "token_id": 506
+    },
+    {
+     "as_non_output_atom": 0,
+     "as_output_token": 6,
+     "label": " to",
+     "token_id": 531
+    },
+    {
+     "as_non_output_atom": 5,
+     "as_output_token": 6,
+     "label": " Canberra",
+     "token_id": 72710
+    },
+    {
+     "as_non_output_atom": 2,
+     "as_output_token": 6,
+     "label": " ",
+     "token_id": 236743
+    },
+    {
+     "as_non_output_atom": 7,
+     "as_output_token": 5,
+     "label": ".",
+     "token_id": 236761
+    },
+    {
+     "as_non_output_atom": 0,
+     "as_output_token": 4,
+     "label": " Mercury",
+     "token_id": 50144
+    },
+    {
+     "as_non_output_atom": 0,
+     "as_output_token": 4,
+     "label": " thunderstorm",
+     "token_id": 90419
+    },
+    {
+     "as_non_output_atom": 0,
+     "as_output_token": 3,
+     "label": " a",
+     "token_id": 496
+    },
+    {
+     "as_non_output_atom": 6,
+     "as_output_token": 3,
+     "label": " called",
+     "token_id": 2760
+    },
+    {
+     "as_non_output_atom": 2,
+     "as_output_token": 3,
+     "label": " birthday",
+     "token_id": 12089
+    },
+    {
+     "as_non_output_atom": 0,
+     "as_output_token": 3,
+     "label": " defeat",
+     "token_id": 22182
+    },
+    {
+     "as_non_output_atom": 3,
+     "as_output_token": 3,
+     "label": " Shakespeare",
+     "token_id": 36951
+    },
+    {
+     "as_non_output_atom": 0,
+     "as_output_token": 2,
+     "label": " that",
+     "token_id": 600
+    },
+    {
+     "as_non_output_atom": 1,
+     "as_output_token": 2,
+     "label": " F",
+     "token_id": 633
+    },
+    {
+     "as_non_output_atom": 0,
+     "as_output_token": 2,
+     "label": " are",
+     "token_id": 659
+    },
+    {
+     "as_non_output_atom": 0,
+     "as_output_token": 2,
+     "label": " '",
+     "token_id": 756
+    },
+    {
+     "as_non_output_atom": 0,
+     "as_output_token": 2,
+     "label": " short",
+     "token_id": 2822
+    },
+    {
+     "as_non_output_atom": 0,
+     "as_output_token": 2,
+     "label": " heart",
+     "token_id": 3710
+    },
+    {
+     "as_non_output_atom": 2,
+     "as_output_token": 2,
+     "label": " blue",
+     "token_id": 3730
+    }
+   ],
+   "threshold_sensitivity_frequency_adjusted": [
+    {
+     "max_group_size": 11,
+     "metric": "weighted_jaccard",
+     "n_groups": 318,
+     "n_non_singleton_groups": 19,
+     "n_records_in_non_singleton_groups": 81,
+     "threshold": 0.2
+    },
+    {
+     "max_group_size": 8,
+     "metric": "weighted_jaccard",
+     "n_groups": 332,
+     "n_non_singleton_groups": 15,
+     "n_records_in_non_singleton_groups": 63,
+     "threshold": 0.3
+    },
+    {
+     "max_group_size": 7,
+     "metric": "weighted_jaccard",
+     "n_groups": 352,
+     "n_non_singleton_groups": 13,
+     "n_records_in_non_singleton_groups": 41,
+     "threshold": 0.4
+    },
+    {
+     "max_group_size": 4,
+     "metric": "weighted_jaccard",
+     "n_groups": 367,
+     "n_non_singleton_groups": 9,
+     "n_records_in_non_singleton_groups": 22,
+     "threshold": 0.5
+    },
+    {
+     "max_group_size": 3,
+     "metric": "weighted_jaccard",
+     "n_groups": 372,
+     "n_non_singleton_groups": 6,
+     "n_records_in_non_singleton_groups": 14,
+     "threshold": 0.6
+    },
+    {
+     "max_group_size": 1,
+     "metric": "weighted_jaccard",
+     "n_groups": 380,
+     "n_non_singleton_groups": 0,
+     "n_records_in_non_singleton_groups": 0,
+     "threshold": 0.7
+    },
+    {
+     "max_group_size": 1,
+     "metric": "weighted_jaccard",
+     "n_groups": 380,
+     "n_non_singleton_groups": 0,
+     "n_records_in_non_singleton_groups": 0,
+     "threshold": 0.8
+    },
+    {
+     "max_group_size": 1,
+     "metric": "weighted_jaccard",
+     "n_groups": 380,
+     "n_non_singleton_groups": 0,
+     "n_records_in_non_singleton_groups": 0,
+     "threshold": 0.9
+    }
+   ],
+   "threshold_sensitivity_raw": [
+    {
+     "max_group_size": 13,
+     "metric": "weighted_jaccard",
+     "n_groups": 306,
+     "n_non_singleton_groups": 24,
+     "n_records_in_non_singleton_groups": 98,
+     "threshold": 0.2
+    },
+    {
+     "max_group_size": 11,
+     "metric": "weighted_jaccard",
+     "n_groups": 324,
+     "n_non_singleton_groups": 15,
+     "n_records_in_non_singleton_groups": 71,
+     "threshold": 0.3
+    },
+    {
+     "max_group_size": 8,
+     "metric": "weighted_jaccard",
+     "n_groups": 340,
+     "n_non_singleton_groups": 14,
+     "n_records_in_non_singleton_groups": 54,
+     "threshold": 0.4
+    },
+    {
+     "max_group_size": 4,
+     "metric": "weighted_jaccard",
+     "n_groups": 364,
+     "n_non_singleton_groups": 10,
+     "n_records_in_non_singleton_groups": 26,
+     "threshold": 0.5
+    },
+    {
+     "max_group_size": 4,
+     "metric": "weighted_jaccard",
+     "n_groups": 367,
+     "n_non_singleton_groups": 9,
+     "n_records_in_non_singleton_groups": 22,
+     "threshold": 0.6
+    },
+    {
+     "max_group_size": 2,
+     "metric": "weighted_jaccard",
+     "n_groups": 379,
+     "n_non_singleton_groups": 1,
+     "n_records_in_non_singleton_groups": 2,
+     "threshold": 0.7
+    },
+    {
+     "max_group_size": 1,
+     "metric": "weighted_jaccard",
+     "n_groups": 380,
+     "n_non_singleton_groups": 0,
+     "n_records_in_non_singleton_groups": 0,
+     "threshold": 0.8
+    },
+    {
+     "max_group_size": 1,
+     "metric": "weighted_jaccard",
+     "n_groups": 380,
+     "n_non_singleton_groups": 0,
+     "n_records_in_non_singleton_groups": 0,
+     "threshold": 0.9
+    }
+   ]
+  },
+  "16": {
+   "n_records": 380,
+   "non_singleton_groups_at_detail_threshold": [
+    {
+     "members": [
+      {
+       "format": "chat",
+       "position": -1,
+       "prompt_slug": "chat-factual-canberra",
+       "top_atoms": [
+        {
+         "label": "Trivia",
+         "token_id": 231323
+        },
+        {
+         "label": "Swift",
+         "token_id": 53028
+        },
+        {
+         "label": " concisely",
+         "token_id": 214219
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -1,
+       "prompt_slug": "chat-multihop-sushi-currency",
+       "top_atoms": [
+        {
+         "label": "Trivia",
+         "token_id": 231323
+        },
+        {
+         "label": " glimmer",
+         "token_id": 166235
+        },
+        {
+         "label": " concisely",
+         "token_id": 214219
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -1,
+       "prompt_slug": "chat-antonym-early",
+       "top_atoms": [
+        {
+         "label": "Trivia",
+         "token_id": 231323
+        },
+        {
+         "label": " whispering",
+         "token_id": 146526
+        },
+        {
+         "label": " concisely",
+         "token_id": 214219
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -1,
+       "prompt_slug": "chat-counting-triangle",
+       "top_atoms": [
+        {
+         "label": "Trivia",
+         "token_id": 231323
+        },
+        {
+         "label": " concisely",
+         "token_id": 214219
+        },
+        {
+         "label": " बर्फ",
+         "token_id": 94201
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -1,
+       "prompt_slug": "chat-syntactic-plural-child",
+       "top_atoms": [
+        {
+         "label": "Trivia",
+         "token_id": 231323
+        },
+        {
+         "label": " concisely",
+         "token_id": 214219
+        },
+        {
+         "label": "UNKNOWN",
+         "token_id": 146233
+        }
+       ]
+      }
+     ],
+     "size": 5,
+     "stratum": {
+      "format": "chat",
+      "layer": 14,
+      "position": -1,
+      "requested_k": 16
+     }
+    },
+    {
+     "members": [
+      {
+       "format": "chat",
+       "position": -2,
+       "prompt_slug": "chat-antonym-early",
+       "top_atoms": [
+        {
+         "label": "Microsoft",
+         "token_id": 18801
+        },
+        {
+         "label": "<|channel>",
+         "token_id": 100
+        },
+        {
+         "label": " অভ্যন্তরীণ",
+         "token_id": 99221
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -2,
+       "prompt_slug": "chat-counting-triangle",
+       "top_atoms": [
+        {
+         "label": "Microsoft",
+         "token_id": 18801
+        },
+        {
+         "label": " Siri",
+         "token_id": 101118
+        },
+        {
+         "label": " translucent",
+         "token_id": 89820
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -2,
+       "prompt_slug": "chat-syntactic-plural-child",
+       "top_atoms": [
+        {
+         "label": "Microsoft",
+         "token_id": 18801
+        },
+        {
+         "label": "<|channel>",
+         "token_id": 100
+        },
+        {
+         "label": " Siri",
+         "token_id": 101118
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -2,
+       "prompt_slug": "chat-antonym-north",
+       "top_atoms": [
+        {
+         "label": "<|channel>",
+         "token_id": 100
+        },
+        {
+         "label": " অভ্যন্তরীণ",
+         "token_id": 99221
+        },
+        {
+         "label": " Siri",
+         "token_id": 101118
+        }
+       ]
+      }
+     ],
+     "size": 4,
+     "stratum": {
+      "format": "chat",
+      "layer": 14,
+      "position": -2,
+      "requested_k": 16
+     }
+    },
+    {
+     "members": [
+      {
+       "format": "chat",
+       "position": -1,
+       "prompt_slug": "chat-factual-gold",
+       "top_atoms": [
+        {
+         "label": "<turn|>",
+         "token_id": 106
+        },
+        {
+         "label": " unrival",
+         "token_id": 126910
+        },
+        {
+         "label": "<eos>",
+         "token_id": 1
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -1,
+       "prompt_slug": "chat-factual-canberra",
+       "top_atoms": [
+        {
+         "label": "<turn|>",
+         "token_id": 106
+        },
+        {
+         "label": "<eos>",
+         "token_id": 1
+        },
+        {
+         "label": " unrival",
+         "token_id": 126910
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -1,
+       "prompt_slug": "chat-multihop-sushi-currency",
+       "top_atoms": [
+        {
+         "label": "<turn|>",
+         "token_id": 106
+        },
+        {
+         "label": "<eos>",
+         "token_id": 1
+        },
+        {
+         "label": " unrival",
+         "token_id": 126910
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -1,
+       "prompt_slug": "chat-antonym-early",
+       "top_atoms": [
+        {
+         "label": "<turn|>",
+         "token_id": 106
+        },
+        {
+         "label": " unrival",
+         "token_id": 126910
+        },
+        {
+         "label": " spelling",
+         "token_id": 49248
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -1,
+       "prompt_slug": "chat-counting-triangle",
+       "top_atoms": [
+        {
+         "label": "<turn|>",
+         "token_id": 106
+        },
+        {
+         "label": " unrival",
+         "token_id": 126910
+        },
+        {
+         "label": " spelling",
+         "token_id": 49248
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -1,
+       "prompt_slug": "chat-syntactic-plural-child",
+       "top_atoms": [
+        {
+         "label": "<turn|>",
+         "token_id": 106
+        },
+        {
+         "label": " spelling",
+         "token_id": 49248
+        },
+        {
+         "label": " unrival",
+         "token_id": 126910
+        }
+       ]
+      }
+     ],
+     "size": 6,
+     "stratum": {
+      "format": "chat",
+      "layer": 21,
+      "position": -1,
+      "requested_k": 16
+     }
+    },
+    {
+     "members": [
+      {
+       "format": "chat",
+       "position": -2,
+       "prompt_slug": "chat-factual-gold",
+       "top_atoms": [
+        {
+         "label": " concisely",
+         "token_id": 214219
+        },
+        {
+         "label": "<turn|>",
+         "token_id": 106
+        },
+        {
+         "label": " aufgrund",
+         "token_id": 75252
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -2,
+       "prompt_slug": "chat-factual-canberra",
+       "top_atoms": [
+        {
+         "label": " concisely",
+         "token_id": 214219
+        },
+        {
+         "label": "<turn|>",
+         "token_id": 106
+        },
+        {
+         "label": " aufgrund",
+         "token_id": 75252
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -2,
+       "prompt_slug": "chat-multihop-sushi-currency",
+       "top_atoms": [
+        {
+         "label": "<turn|>",
+         "token_id": 106
+        },
+        {
+         "label": " concisely",
+         "token_id": 214219
+        },
+        {
+         "label": " aufgrund",
+         "token_id": 75252
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -2,
+       "prompt_slug": "chat-antonym-early",
+       "top_atoms": [
+        {
+         "label": " concisely",
+         "token_id": 214219
+        },
+        {
+         "label": "<turn|>",
+         "token_id": 106
+        },
+        {
+         "label": " aufgrund",
+         "token_id": 75252
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -2,
+       "prompt_slug": "chat-counting-triangle",
+       "top_atoms": [
+        {
+         "label": "<turn|>",
+         "token_id": 106
+        },
+        {
+         "label": " concisely",
+         "token_id": 214219
+        },
+        {
+         "label": " aufgrund",
+         "token_id": 75252
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -2,
+       "prompt_slug": "chat-syntactic-plural-child",
+       "top_atoms": [
+        {
+         "label": " concisely",
+         "token_id": 214219
+        },
+        {
+         "label": "<turn|>",
+         "token_id": 106
+        },
+        {
+         "label": " glimmer",
+         "token_id": 166235
+        }
+       ]
+      }
+     ],
+     "size": 6,
+     "stratum": {
+      "format": "chat",
+      "layer": 21,
+      "position": -2,
+      "requested_k": 16
+     }
+    },
+    {
+     "members": [
+      {
+       "format": "plain",
+       "position": -2,
+       "prompt_slug": "antonym-tall-short",
+       "top_atoms": [
+        {
+         "label": " to",
+         "token_id": 531
+        },
+        {
+         "label": " chock",
+         "token_id": 209375
+        },
+        {
+         "label": "…).",
+         "token_id": 155138
+        }
+       ]
+      },
+      {
+       "format": "plain",
+       "position": -2,
+       "prompt_slug": "antonym-north-south",
+       "top_atoms": [
+        {
+         "label": " to",
+         "token_id": 531
+        },
+        {
+         "label": " chock",
+         "token_id": 209375
+        },
+        {
+         "label": "…).",
+         "token_id": 155138
+        }
+       ]
+      },
+      {
+       "format": "plain",
+       "position": -2,
+       "prompt_slug": "antonym-fast-slow",
+       "top_atoms": [
+        {
+         "label": " to",
+         "token_id": 531
+        },
+        {
+         "label": " chock",
+         "token_id": 209375
+        },
+        {
+         "label": "…).",
+         "token_id": 155138
+        }
+       ]
+      }
+     ],
+     "size": 3,
+     "stratum": {
+      "format": "plain",
+      "layer": 38,
+      "position": -2,
+      "requested_k": 16
+     }
+    },
+    {
+     "members": [
+      {
+       "format": "plain",
+       "position": -2,
+       "prompt_slug": "syntactic-plural-child",
+       "top_atoms": [
+        {
+         "label": " is",
+         "token_id": 563
+        },
+        {
+         "label": " irregular",
+         "token_id": 26237
+        },
+        {
+         "label": " in",
+         "token_id": 528
+        }
+       ]
+      },
+      {
+       "format": "plain",
+       "position": -2,
+       "prompt_slug": "syntactic-past-go",
+       "top_atoms": [
+        {
+         "label": " is",
+         "token_id": 563
+        },
+        {
+         "label": " irregular",
+         "token_id": 26237
+        },
+        {
+         "label": " in",
+         "token_id": 528
+        }
+       ]
+      }
+     ],
+     "size": 2,
+     "stratum": {
+      "format": "plain",
+      "layer": 38,
+      "position": -2,
+      "requested_k": 16
+     }
+    }
+   ],
+   "output_token_recurrence_top": [
+    {
+     "as_non_output_atom": 8,
+     "as_output_token": 26,
+     "label": " is",
+     "token_id": 563
+    },
+    {
+     "as_non_output_atom": 0,
+     "as_output_token": 7,
+     "label": " the",
+     "token_id": 506
+    },
+    {
+     "as_non_output_atom": 0,
+     "as_output_token": 6,
+     "label": " to",
+     "token_id": 531
+    },
+    {
+     "as_non_output_atom": 5,
+     "as_output_token": 6,
+     "label": " Canberra",
+     "token_id": 72710
+    },
+    {
+     "as_non_output_atom": 3,
+     "as_output_token": 6,
+     "label": " ",
+     "token_id": 236743
+    },
+    {
+     "as_non_output_atom": 10,
+     "as_output_token": 5,
+     "label": ".",
+     "token_id": 236761
+    },
+    {
+     "as_non_output_atom": 0,
+     "as_output_token": 4,
+     "label": " Mercury",
+     "token_id": 50144
+    },
+    {
+     "as_non_output_atom": 6,
+     "as_output_token": 4,
+     "label": " Sahara",
+     "token_id": 87762
+    },
+    {
+     "as_non_output_atom": 0,
+     "as_output_token": 4,
+     "label": " thunderstorm",
+     "token_id": 90419
+    },
+    {
+     "as_non_output_atom": 0,
+     "as_output_token": 3,
+     "label": " a",
+     "token_id": 496
+    },
+    {
+     "as_non_output_atom": 9,
+     "as_output_token": 3,
+     "label": " called",
+     "token_id": 2760
+    },
+    {
+     "as_non_output_atom": 2,
+     "as_output_token": 3,
+     "label": " located",
+     "token_id": 5628
+    },
+    {
+     "as_non_output_atom": 0,
+     "as_output_token": 3,
+     "label": " Africa",
+     "token_id": 7959
+    },
+    {
+     "as_non_output_atom": 2,
+     "as_output_token": 3,
+     "label": " birthday",
+     "token_id": 12089
+    },
+    {
+     "as_non_output_atom": 0,
+     "as_output_token": 3,
+     "label": " defeat",
+     "token_id": 22182
+    },
+    {
+     "as_non_output_atom": 5,
+     "as_output_token": 3,
+     "label": " Shakespeare",
+     "token_id": 36951
+    },
+    {
+     "as_non_output_atom": 0,
+     "as_output_token": 2,
+     "label": " that",
+     "token_id": 600
+    },
+    {
+     "as_non_output_atom": 1,
+     "as_output_token": 2,
+     "label": " F",
+     "token_id": 633
+    },
+    {
+     "as_non_output_atom": 0,
+     "as_output_token": 2,
+     "label": " are",
+     "token_id": 659
+    },
+    {
+     "as_non_output_atom": 0,
+     "as_output_token": 2,
+     "label": " '",
+     "token_id": 756
+    }
+   ],
+   "threshold_sensitivity_frequency_adjusted": [
+    {
+     "max_group_size": 11,
+     "metric": "weighted_jaccard",
+     "n_groups": 318,
+     "n_non_singleton_groups": 17,
+     "n_records_in_non_singleton_groups": 79,
+     "threshold": 0.2
+    },
+    {
+     "max_group_size": 8,
+     "metric": "weighted_jaccard",
+     "n_groups": 338,
+     "n_non_singleton_groups": 15,
+     "n_records_in_non_singleton_groups": 57,
+     "threshold": 0.3
+    },
+    {
+     "max_group_size": 6,
+     "metric": "weighted_jaccard",
+     "n_groups": 355,
+     "n_non_singleton_groups": 9,
+     "n_records_in_non_singleton_groups": 34,
+     "threshold": 0.4
+    },
+    {
+     "max_group_size": 6,
+     "metric": "weighted_jaccard",
+     "n_groups": 361,
+     "n_non_singleton_groups": 6,
+     "n_records_in_non_singleton_groups": 25,
+     "threshold": 0.5
+    },
+    {
+     "max_group_size": 3,
+     "metric": "weighted_jaccard",
+     "n_groups": 374,
+     "n_non_singleton_groups": 4,
+     "n_records_in_non_singleton_groups": 10,
+     "threshold": 0.6
+    },
+    {
+     "max_group_size": 2,
+     "metric": "weighted_jaccard",
+     "n_groups": 379,
+     "n_non_singleton_groups": 1,
+     "n_records_in_non_singleton_groups": 2,
+     "threshold": 0.7
+    },
+    {
+     "max_group_size": 1,
+     "metric": "weighted_jaccard",
+     "n_groups": 380,
+     "n_non_singleton_groups": 0,
+     "n_records_in_non_singleton_groups": 0,
+     "threshold": 0.8
+    },
+    {
+     "max_group_size": 1,
+     "metric": "weighted_jaccard",
+     "n_groups": 380,
+     "n_non_singleton_groups": 0,
+     "n_records_in_non_singleton_groups": 0,
+     "threshold": 0.9
+    }
+   ],
+   "threshold_sensitivity_raw": [
+    {
+     "max_group_size": 13,
+     "metric": "weighted_jaccard",
+     "n_groups": 307,
+     "n_non_singleton_groups": 19,
+     "n_records_in_non_singleton_groups": 92,
+     "threshold": 0.2
+    },
+    {
+     "max_group_size": 11,
+     "metric": "weighted_jaccard",
+     "n_groups": 327,
+     "n_non_singleton_groups": 13,
+     "n_records_in_non_singleton_groups": 66,
+     "threshold": 0.3
+    },
+    {
+     "max_group_size": 8,
+     "metric": "weighted_jaccard",
+     "n_groups": 346,
+     "n_non_singleton_groups": 12,
+     "n_records_in_non_singleton_groups": 46,
+     "threshold": 0.4
+    },
+    {
+     "max_group_size": 6,
+     "metric": "weighted_jaccard",
+     "n_groups": 360,
+     "n_non_singleton_groups": 6,
+     "n_records_in_non_singleton_groups": 26,
+     "threshold": 0.5
+    },
+    {
+     "max_group_size": 5,
+     "metric": "weighted_jaccard",
+     "n_groups": 369,
+     "n_non_singleton_groups": 5,
+     "n_records_in_non_singleton_groups": 16,
+     "threshold": 0.6
+    },
+    {
+     "max_group_size": 2,
+     "metric": "weighted_jaccard",
+     "n_groups": 379,
+     "n_non_singleton_groups": 1,
+     "n_records_in_non_singleton_groups": 2,
+     "threshold": 0.7
+    },
+    {
+     "max_group_size": 1,
+     "metric": "weighted_jaccard",
+     "n_groups": 380,
+     "n_non_singleton_groups": 0,
+     "n_records_in_non_singleton_groups": 0,
+     "threshold": 0.8
+    },
+    {
+     "max_group_size": 1,
+     "metric": "weighted_jaccard",
+     "n_groups": 380,
+     "n_non_singleton_groups": 0,
+     "n_records_in_non_singleton_groups": 0,
+     "threshold": 0.9
+    }
+   ]
+  },
+  "25": {
+   "n_records": 380,
+   "non_singleton_groups_at_detail_threshold": [
+    {
+     "members": [
+      {
+       "format": "chat",
+       "position": -1,
+       "prompt_slug": "chat-factual-canberra",
+       "top_atoms": [
+        {
+         "label": "Trivia",
+         "token_id": 231323
+        },
+        {
+         "label": "Swift",
+         "token_id": 53028
+        },
+        {
+         "label": " concisely",
+         "token_id": 214219
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -1,
+       "prompt_slug": "chat-multihop-sushi-currency",
+       "top_atoms": [
+        {
+         "label": "Trivia",
+         "token_id": 231323
+        },
+        {
+         "label": " glimmer",
+         "token_id": 166235
+        },
+        {
+         "label": "avoid",
+         "token_id": 54670
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -1,
+       "prompt_slug": "chat-counting-triangle",
+       "top_atoms": [
+        {
+         "label": "Trivia",
+         "token_id": 231323
+        },
+        {
+         "label": " concisely",
+         "token_id": 214219
+        },
+        {
+         "label": " बर्फ",
+         "token_id": 94201
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -1,
+       "prompt_slug": "chat-syntactic-plural-child",
+       "top_atoms": [
+        {
+         "label": "Trivia",
+         "token_id": 231323
+        },
+        {
+         "label": " concisely",
+         "token_id": 214219
+        },
+        {
+         "label": "UNKNOWN",
+         "token_id": 146233
+        }
+       ]
+      }
+     ],
+     "size": 4,
+     "stratum": {
+      "format": "chat",
+      "layer": 14,
+      "position": -1,
+      "requested_k": 25
+     }
+    },
+    {
+     "members": [
+      {
+       "format": "chat",
+       "position": -2,
+       "prompt_slug": "chat-factual-gold",
+       "top_atoms": [
+        {
+         "label": " Siri",
+         "token_id": 101118
+        },
+        {
+         "label": "Microsoft",
+         "token_id": 18801
+        },
+        {
+         "label": "<|channel>",
+         "token_id": 100
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -2,
+       "prompt_slug": "chat-antonym-early",
+       "top_atoms": [
+        {
+         "label": "Microsoft",
+         "token_id": 18801
+        },
+        {
+         "label": "<|channel>",
+         "token_id": 100
+        },
+        {
+         "label": " Siri",
+         "token_id": 101118
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -2,
+       "prompt_slug": "chat-counting-triangle",
+       "top_atoms": [
+        {
+         "label": "Microsoft",
+         "token_id": 18801
+        },
+        {
+         "label": " translucent",
+         "token_id": 89820
+        },
+        {
+         "label": " Siri",
+         "token_id": 101118
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -2,
+       "prompt_slug": "chat-syntactic-plural-child",
+       "top_atoms": [
+        {
+         "label": "Microsoft",
+         "token_id": 18801
+        },
+        {
+         "label": "<|channel>",
+         "token_id": 100
+        },
+        {
+         "label": " Siri",
+         "token_id": 101118
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -2,
+       "prompt_slug": "chat-antonym-north",
+       "top_atoms": [
+        {
+         "label": "<|channel>",
+         "token_id": 100
+        },
+        {
+         "label": " translucent",
+         "token_id": 89820
+        },
+        {
+         "label": " Siri",
+         "token_id": 101118
+        }
+       ]
+      }
+     ],
+     "size": 5,
+     "stratum": {
+      "format": "chat",
+      "layer": 14,
+      "position": -2,
+      "requested_k": 25
+     }
+    },
+    {
+     "members": [
+      {
+       "format": "chat",
+       "position": -2,
+       "prompt_slug": "chat-factual-canberra",
+       "top_atoms": [
+        {
+         "label": " Siri",
+         "token_id": 101118
+        },
+        {
+         "label": "<|channel>",
+         "token_id": 100
+        },
+        {
+         "label": "Microsoft",
+         "token_id": 18801
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -2,
+       "prompt_slug": "chat-multihop-sushi-currency",
+       "top_atoms": [
+        {
+         "label": " Siri",
+         "token_id": 101118
+        },
+        {
+         "label": "<|channel>",
+         "token_id": 100
+        },
+        {
+         "label": " translucent",
+         "token_id": 89820
+        }
+       ]
+      }
+     ],
+     "size": 2,
+     "stratum": {
+      "format": "chat",
+      "layer": 14,
+      "position": -2,
+      "requested_k": 25
+     }
+    },
+    {
+     "members": [
+      {
+       "format": "chat",
+       "position": -1,
+       "prompt_slug": "chat-factual-gold",
+       "top_atoms": [
+        {
+         "label": "<turn|>",
+         "token_id": 106
+        },
+        {
+         "label": " unrival",
+         "token_id": 126910
+        },
+        {
+         "label": "<eos>",
+         "token_id": 1
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -1,
+       "prompt_slug": "chat-factual-canberra",
+       "top_atoms": [
+        {
+         "label": "<turn|>",
+         "token_id": 106
+        },
+        {
+         "label": "<eos>",
+         "token_id": 1
+        },
+        {
+         "label": " unrival",
+         "token_id": 126910
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -1,
+       "prompt_slug": "chat-multihop-sushi-currency",
+       "top_atoms": [
+        {
+         "label": "<turn|>",
+         "token_id": 106
+        },
+        {
+         "label": " unrival",
+         "token_id": 126910
+        },
+        {
+         "label": "<eos>",
+         "token_id": 1
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -1,
+       "prompt_slug": "chat-antonym-early",
+       "top_atoms": [
+        {
+         "label": "<turn|>",
+         "token_id": 106
+        },
+        {
+         "label": " unrival",
+         "token_id": 126910
+        },
+        {
+         "label": " spelling",
+         "token_id": 49248
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -1,
+       "prompt_slug": "chat-counting-triangle",
+       "top_atoms": [
+        {
+         "label": "<turn|>",
+         "token_id": 106
+        },
+        {
+         "label": " unrival",
+         "token_id": 126910
+        },
+        {
+         "label": " spelling",
+         "token_id": 49248
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -1,
+       "prompt_slug": "chat-syntactic-plural-child",
+       "top_atoms": [
+        {
+         "label": "<turn|>",
+         "token_id": 106
+        },
+        {
+         "label": " spelling",
+         "token_id": 49248
+        },
+        {
+         "label": " unrival",
+         "token_id": 126910
+        }
+       ]
+      }
+     ],
+     "size": 6,
+     "stratum": {
+      "format": "chat",
+      "layer": 21,
+      "position": -1,
+      "requested_k": 25
+     }
+    },
+    {
+     "members": [
+      {
+       "format": "chat",
+       "position": -2,
+       "prompt_slug": "chat-factual-gold",
+       "top_atoms": [
+        {
+         "label": " concisely",
+         "token_id": 214219
+        },
+        {
+         "label": "<turn|>",
+         "token_id": 106
+        },
+        {
+         "label": " Flynn",
+         "token_id": 86873
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -2,
+       "prompt_slug": "chat-factual-canberra",
+       "top_atoms": [
+        {
+         "label": " concisely",
+         "token_id": 214219
+        },
+        {
+         "label": "<turn|>",
+         "token_id": 106
+        },
+        {
+         "label": " aufgrund",
+         "token_id": 75252
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -2,
+       "prompt_slug": "chat-multihop-sushi-currency",
+       "top_atoms": [
+        {
+         "label": "<turn|>",
+         "token_id": 106
+        },
+        {
+         "label": " concisely",
+         "token_id": 214219
+        },
+        {
+         "label": " aufgrund",
+         "token_id": 75252
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -2,
+       "prompt_slug": "chat-antonym-early",
+       "top_atoms": [
+        {
+         "label": " concisely",
+         "token_id": 214219
+        },
+        {
+         "label": "<turn|>",
+         "token_id": 106
+        },
+        {
+         "label": " Flynn",
+         "token_id": 86873
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -2,
+       "prompt_slug": "chat-counting-triangle",
+       "top_atoms": [
+        {
+         "label": "<turn|>",
+         "token_id": 106
+        },
+        {
+         "label": " concisely",
+         "token_id": 214219
+        },
+        {
+         "label": " aufgrund",
+         "token_id": 75252
+        }
+       ]
+      },
+      {
+       "format": "chat",
+       "position": -2,
+       "prompt_slug": "chat-syntactic-plural-child",
+       "top_atoms": [
+        {
+         "label": " concisely",
+         "token_id": 214219
+        },
+        {
+         "label": "<turn|>",
+         "token_id": 106
+        },
+        {
+         "label": " کازخستان",
+         "token_id": 203955
+        }
+       ]
+      }
+     ],
+     "size": 6,
+     "stratum": {
+      "format": "chat",
+      "layer": 21,
+      "position": -2,
+      "requested_k": 25
+     }
+    },
+    {
+     "members": [
+      {
+       "format": "plain",
+       "position": -2,
+       "prompt_slug": "antonym-tall-short",
+       "top_atoms": [
+        {
+         "label": " to",
+         "token_id": 531
+        },
+        {
+         "label": " chock",
+         "token_id": 209375
+        },
+        {
+         "label": "…).",
+         "token_id": 155138
+        }
+       ]
+      },
+      {
+       "format": "plain",
+       "position": -2,
+       "prompt_slug": "antonym-north-south",
+       "top_atoms": [
+        {
+         "label": " to",
+         "token_id": 531
+        },
+        {
+         "label": "…).",
+         "token_id": 155138
+        },
+        {
+         "label": " chock",
+         "token_id": 209375
+        }
+       ]
+      },
+      {
+       "format": "plain",
+       "position": -2,
+       "prompt_slug": "antonym-fast-slow",
+       "top_atoms": [
+        {
+         "label": " to",
+         "token_id": 531
+        },
+        {
+         "label": " chock",
+         "token_id": 209375
+        },
+        {
+         "label": "…).",
+         "token_id": 155138
+        }
+       ]
+      }
+     ],
+     "size": 3,
+     "stratum": {
+      "format": "plain",
+      "layer": 38,
+      "position": -2,
+      "requested_k": 25
+     }
+    },
+    {
+     "members": [
+      {
+       "format": "plain",
+       "position": -2,
+       "prompt_slug": "syntactic-plural-child",
+       "top_atoms": [
+        {
+         "label": " is",
+         "token_id": 563
+        },
+        {
+         "label": " irregular",
+         "token_id": 26237
+        },
+        {
+         "label": " in",
+         "token_id": 528
+        }
+       ]
+      },
+      {
+       "format": "plain",
+       "position": -2,
+       "prompt_slug": "syntactic-past-go",
+       "top_atoms": [
+        {
+         "label": " is",
+         "token_id": 563
+        },
+        {
+         "label": " irregular",
+         "token_id": 26237
+        },
+        {
+         "label": " in",
+         "token_id": 528
+        }
+       ]
+      }
+     ],
+     "size": 2,
+     "stratum": {
+      "format": "plain",
+      "layer": 38,
+      "position": -2,
+      "requested_k": 25
+     }
+    }
+   ],
+   "output_token_recurrence_top": [
+    {
+     "as_non_output_atom": 11,
+     "as_output_token": 26,
+     "label": " is",
+     "token_id": 563
+    },
+    {
+     "as_non_output_atom": 0,
+     "as_output_token": 8,
+     "label": " the",
+     "token_id": 506
+    },
+    {
+     "as_non_output_atom": 0,
+     "as_output_token": 6,
+     "label": " to",
+     "token_id": 531
+    },
+    {
+     "as_non_output_atom": 5,
+     "as_output_token": 6,
+     "label": " Canberra",
+     "token_id": 72710
+    },
+    {
+     "as_non_output_atom": 4,
+     "as_output_token": 6,
+     "label": " ",
+     "token_id": 236743
+    },
+    {
+     "as_non_output_atom": 0,
+     "as_output_token": 5,
+     "label": " Mercury",
+     "token_id": 50144
+    },
+    {
+     "as_non_output_atom": 21,
+     "as_output_token": 5,
+     "label": ".",
+     "token_id": 236761
+    },
+    {
+     "as_non_output_atom": 0,
+     "as_output_token": 4,
+     "label": " '",
+     "token_id": 756
+    },
+    {
+     "as_non_output_atom": 0,
+     "as_output_token": 4,
+     "label": " defeat",
+     "token_id": 22182
+    },
+    {
+     "as_non_output_atom": 6,
+     "as_output_token": 4,
+     "label": " Sahara",
+     "token_id": 87762
+    },
+    {
+     "as_non_output_atom": 1,
+     "as_output_token": 4,
+     "label": " thunderstorm",
+     "token_id": 90419
+    },
+    {
+     "as_non_output_atom": 0,
+     "as_output_token": 3,
+     "label": " a",
+     "token_id": 496
+    },
+    {
+     "as_non_output_atom": 0,
+     "as_output_token": 3,
+     "label": " are",
+     "token_id": 659
+    },
+    {
+     "as_non_output_atom": 14,
+     "as_output_token": 3,
+     "label": " called",
+     "token_id": 2760
+    },
+    {
+     "as_non_output_atom": 5,
+     "as_output_token": 3,
+     "label": " located",
+     "token_id": 5628
+    },
+    {
+     "as_non_output_atom": 0,
+     "as_output_token": 3,
+     "label": " Africa",
+     "token_id": 7959
+    },
+    {
+     "as_non_output_atom": 2,
+     "as_output_token": 3,
+     "label": " birthday",
+     "token_id": 12089
+    },
+    {
+     "as_non_output_atom": 5,
+     "as_output_token": 3,
+     "label": " Shakespeare",
+     "token_id": 36951
+    },
+    {
+     "as_non_output_atom": 0,
+     "as_output_token": 2,
+     "label": " that",
+     "token_id": 600
+    },
+    {
+     "as_non_output_atom": 1,
+     "as_output_token": 2,
+     "label": " F",
+     "token_id": 633
+    }
+   ],
+   "threshold_sensitivity_frequency_adjusted": [
+    {
+     "max_group_size": 10,
+     "metric": "weighted_jaccard",
+     "n_groups": 317,
+     "n_non_singleton_groups": 18,
+     "n_records_in_non_singleton_groups": 81,
+     "threshold": 0.2
+    },
+    {
+     "max_group_size": 8,
+     "metric": "weighted_jaccard",
+     "n_groups": 340,
+     "n_non_singleton_groups": 13,
+     "n_records_in_non_singleton_groups": 53,
+     "threshold": 0.3
+    },
+    {
+     "max_group_size": 7,
+     "metric": "weighted_jaccard",
+     "n_groups": 354,
+     "n_non_singleton_groups": 8,
+     "n_records_in_non_singleton_groups": 34,
+     "threshold": 0.4
+    },
+    {
+     "max_group_size": 6,
+     "metric": "weighted_jaccard",
+     "n_groups": 363,
+     "n_non_singleton_groups": 5,
+     "n_records_in_non_singleton_groups": 22,
+     "threshold": 0.5
+    },
+    {
+     "max_group_size": 5,
+     "metric": "weighted_jaccard",
+     "n_groups": 373,
+     "n_non_singleton_groups": 4,
+     "n_records_in_non_singleton_groups": 11,
+     "threshold": 0.6
+    },
+    {
+     "max_group_size": 2,
+     "metric": "weighted_jaccard",
+     "n_groups": 379,
+     "n_non_singleton_groups": 1,
+     "n_records_in_non_singleton_groups": 2,
+     "threshold": 0.7
+    },
+    {
+     "max_group_size": 1,
+     "metric": "weighted_jaccard",
+     "n_groups": 380,
+     "n_non_singleton_groups": 0,
+     "n_records_in_non_singleton_groups": 0,
+     "threshold": 0.8
+    },
+    {
+     "max_group_size": 1,
+     "metric": "weighted_jaccard",
+     "n_groups": 380,
+     "n_non_singleton_groups": 0,
+     "n_records_in_non_singleton_groups": 0,
+     "threshold": 0.9
+    }
+   ],
+   "threshold_sensitivity_raw": [
+    {
+     "max_group_size": 13,
+     "metric": "weighted_jaccard",
+     "n_groups": 304,
+     "n_non_singleton_groups": 19,
+     "n_records_in_non_singleton_groups": 95,
+     "threshold": 0.2
+    },
+    {
+     "max_group_size": 10,
+     "metric": "weighted_jaccard",
+     "n_groups": 328,
+     "n_non_singleton_groups": 12,
+     "n_records_in_non_singleton_groups": 64,
+     "threshold": 0.3
+    },
+    {
+     "max_group_size": 8,
+     "metric": "weighted_jaccard",
+     "n_groups": 343,
+     "n_non_singleton_groups": 12,
+     "n_records_in_non_singleton_groups": 49,
+     "threshold": 0.4
+    },
+    {
+     "max_group_size": 6,
+     "metric": "weighted_jaccard",
+     "n_groups": 359,
+     "n_non_singleton_groups": 7,
+     "n_records_in_non_singleton_groups": 28,
+     "threshold": 0.5
+    },
+    {
+     "max_group_size": 6,
+     "metric": "weighted_jaccard",
+     "n_groups": 368,
+     "n_non_singleton_groups": 5,
+     "n_records_in_non_singleton_groups": 17,
+     "threshold": 0.6
+    },
+    {
+     "max_group_size": 2,
+     "metric": "weighted_jaccard",
+     "n_groups": 377,
+     "n_non_singleton_groups": 3,
+     "n_records_in_non_singleton_groups": 6,
+     "threshold": 0.7
+    },
+    {
+     "max_group_size": 1,
+     "metric": "weighted_jaccard",
+     "n_groups": 380,
+     "n_non_singleton_groups": 0,
+     "n_records_in_non_singleton_groups": 0,
+     "threshold": 0.8
+    },
+    {
+     "max_group_size": 1,
+     "metric": "weighted_jaccard",
+     "n_groups": 380,
+     "n_non_singleton_groups": 0,
+     "n_records_in_non_singleton_groups": 0,
+     "threshold": 0.9
+    }
+   ]
+  }
+ },
+ "detail_threshold": 0.5,
+ "metric": "weighted_jaccard",
+ "note": "Connected components under pairwise similarity >= threshold, within (layer, k, format, position) strata. Similarity groups, not validated concept clusters.",
+ "schema": "jlens.analysis.similarity_groups.v1",
+ "strata": [
+  "layer",
+  "requested_k",
+  "format",
+  "position"
+ ]
+}

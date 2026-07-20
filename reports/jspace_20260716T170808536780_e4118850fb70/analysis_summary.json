@@ -1,0 +1,270 @@
+{
+ "exact_signature_repeats": {
+  "k10": 0,
+  "k16": 0,
+  "k25": 0
+ },
+ "explained_fraction_mean": {
+  "layer14_k10": 0.0016971081495285034,
+  "layer14_k16": 0.0017657068214918439,
+  "layer14_k25": 0.0017935759142825478,
+  "layer21_k10": 2.2707016844498484e-05,
+  "layer21_k16": 2.3823819662395278e-05,
+  "layer21_k25": 2.433751758776213e-05,
+  "layer28_k10": 0.007296899431630185,
+  "layer28_k16": 0.007763896333543878,
+  "layer28_k25": 0.008057933888937297,
+  "layer35_k10": 0.0167870443118246,
+  "layer35_k16": 0.01745905295798653,
+  "layer35_k25": 0.017819472049411974,
+  "layer38_k10": 0.015140557759686521,
+  "layer38_k16": 0.015592289598364579,
+  "layer38_k25": 0.01581771593344839
+ },
+ "final_transition_weighted_similarity_mean": {
+  "k10": 0.7470386039786525,
+  "k16": 0.7742184509527418,
+  "k25": 0.8093504295911986
+ },
+ "integrity_clean": true,
+ "k_values": [
+  10,
+  16,
+  25
+ ],
+ "layers": [
+  14,
+  21,
+  28,
+  35,
+  38
+ ],
+ "lens_fingerprint": "sha256:7229c7562d1d55420b70abb13f481934649c4b01417bd851e97cedb47c96f474",
+ "lens_matrix_statistics": {
+  "lens_path": "lens.pt",
+  "n_prompts": 100,
+  "note": "Statistics of the fitted J_l matrices only. The J-space atoms (rows of W_U @ J_l) additionally require Gemma's unembedding matrix, which is not available without loading the model; atom-level norms are therefore not recomputable offline.",
+  "per_layer": {
+   "14": {
+    "all_finite": true,
+    "col_norm_quartiles": [
+     0.010688753798604012,
+     0.013421853072941303,
+     0.030378250405192375
+    ],
+    "diagonal_mass": 0.0003821087011601776,
+    "effective_rank_entropy": 548.5736694335938,
+    "effective_rank_participation_ratio": 274.6286926269531,
+    "frobenius_norm": 3.4541895389556885,
+    "row_norm_max": 1.39102303981781,
+    "row_norm_quartiles": [
+     0.047234103083610535,
+     0.05476155877113342,
+     0.06486138701438904
+    ],
+    "singular_values": {
+     "median": 0.0025031035766005516,
+     "top1": 1.5164695978164673,
+     "top10": 0.4063986539840698,
+     "top100": 0.14550000429153442
+    },
+    "spectral_norm": 1.5164695978164673
+   },
+   "21": {
+    "all_finite": true,
+    "col_norm_quartiles": [
+     0.05858969688415527,
+     0.0756606012582779,
+     0.30819007754325867
+    ],
+    "diagonal_mass": 0.00037938362220302224,
+    "effective_rank_entropy": 362.0436096191406,
+    "effective_rank_participation_ratio": 247.0717315673828,
+    "frobenius_norm": 188.7220916748047,
+    "row_norm_max": 61.768978118896484,
+    "row_norm_quartiles": [
+     2.774688482284546,
+     3.2467241287231445,
+     3.8247666358947754
+    ],
+    "singular_values": {
+     "median": 0.01912938803434372,
+     "top1": 65.58992767333984,
+     "top10": 21.959259033203125,
+     "top100": 10.004576683044434
+    },
+    "spectral_norm": 65.58992767333984
+   },
+   "28": {
+    "all_finite": true,
+    "col_norm_quartiles": [
+     0.044468533247709274,
+     0.05253715068101883,
+     0.06628821045160294
+    ],
+    "diagonal_mass": 0.009246192872524261,
+    "effective_rank_entropy": 1026.363037109375,
+    "effective_rank_participation_ratio": 312.4382019042969,
+    "frobenius_norm": 4.9969329833984375,
+    "row_norm_max": 3.0898241996765137,
+    "row_norm_quartiles": [
+     0.04200731962919235,
+     0.04978767782449722,
+     0.06391683220863342
+    ],
+    "singular_values": {
+     "median": 0.01571747101843357,
+     "top1": 3.239149332046509,
+     "top10": 0.5482325553894043,
+     "top100": 0.12695884704589844
+    },
+    "spectral_norm": 3.239149332046509
+   },
+   "3": {
+    "all_finite": true,
+    "col_norm_quartiles": [
+     0.005471019074320793,
+     0.014759620651602745,
+     0.14655953645706177
+    ],
+    "diagonal_mass": 0.0008882766123861074,
+    "effective_rank_entropy": 434.4046630859375,
+    "effective_rank_participation_ratio": 121.00630950927734,
+    "frobenius_norm": 8.461867332458496,
+    "row_norm_max": 3.445679187774658,
+    "row_norm_quartiles": [
+     0.09284013509750366,
+     0.11748230457305908,
+     0.15653172135353088
+    ],
+    "singular_values": {
+     "median": 0.0013723199954256415,
+     "top1": 5.881830215454102,
+     "top10": 0.6935104131698608,
+     "top100": 0.19576625525951385
+    },
+    "spectral_norm": 5.881830215454102
+   },
+   "35": {
+    "all_finite": true,
+    "col_norm_quartiles": [
+     0.23409676551818848,
+     0.24092251062393188,
+     0.2535113990306854
+    ],
+    "diagonal_mass": 0.04921156167984009,
+    "effective_rank_entropy": 2346.33447265625,
+    "effective_rank_participation_ratio": 2052.76708984375,
+    "frobenius_norm": 12.806004524230957,
+    "row_norm_max": 4.0083770751953125,
+    "row_norm_quartiles": [
+     0.2292972058057785,
+     0.23373913764953613,
+     0.2398347109556198
+    ],
+    "singular_values": {
+     "median": 0.2216956913471222,
+     "top1": 4.117003440856934,
+     "top10": 0.5599884986877441,
+     "top100": 0.36568230390548706
+    },
+    "spectral_norm": 4.117003440856934
+   },
+   "38": {
+    "all_finite": true,
+    "col_norm_quartiles": [
+     0.3394872546195984,
+     0.34649547934532166,
+     0.35864296555519104
+    ],
+    "diagonal_mass": 0.05941057577729225,
+    "effective_rank_entropy": 2393.338623046875,
+    "effective_rank_participation_ratio": 2203.34912109375,
+    "frobenius_norm": 18.085847854614258,
+    "row_norm_max": 4.3296589851379395,
+    "row_norm_quartiles": [
+     0.33468183875083923,
+     0.33930420875549316,
+     0.3459058701992035
+    ],
+    "singular_values": {
+     "median": 0.3292740285396576,
+     "top1": 4.4633073806762695,
+     "top10": 0.7661579847335815,
+     "top100": 0.4999569058418274
+    },
+    "spectral_norm": 4.4633073806762695
+   },
+   "7": {
+    "all_finite": true,
+    "col_norm_quartiles": [
+     0.005028384737670422,
+     0.013645434752106667,
+     0.10052073001861572
+    ],
+    "diagonal_mass": 0.0005700141191482544,
+    "effective_rank_entropy": 296.7791748046875,
+    "effective_rank_participation_ratio": 117.2320785522461,
+    "frobenius_norm": 12.263571739196777,
+    "row_norm_max": 4.83983039855957,
+    "row_norm_quartiles": [
+     0.17026224732398987,
+     0.19693979620933533,
+     0.23244446516036987
+    ],
+    "singular_values": {
+     "median": 0.001598163740709424,
+     "top1": 5.437522888183594,
+     "top10": 2.0552752017974854,
+     "top100": 0.26745766401290894
+    },
+    "spectral_norm": 5.437522888183594
+   }
+  },
+  "source_layers": [
+   3,
+   7,
+   14,
+   21,
+   28,
+   35,
+   38
+  ]
+ },
+ "model_revision": "fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd",
+ "n_integrity_issues": 0,
+ "output_token_inclusion_rate": {
+  "layer14_k10_chat": 0.0,
+  "layer14_k10_plain": 0.05,
+  "layer14_k16_chat": 0.0,
+  "layer14_k16_plain": 0.08333333333333333,
+  "layer14_k25_chat": 0.0,
+  "layer14_k25_plain": 0.1,
+  "layer21_k10_chat": 0.0,
+  "layer21_k10_plain": 0.03333333333333333,
+  "layer21_k16_chat": 0.0,
+  "layer21_k16_plain": 0.05,
+  "layer21_k25_chat": 0.0,
+  "layer21_k25_plain": 0.05,
+  "layer28_k10_chat": 0.0,
+  "layer28_k10_plain": 0.06666666666666667,
+  "layer28_k16_chat": 0.0,
+  "layer28_k16_plain": 0.08333333333333333,
+  "layer28_k25_chat": 0.0,
+  "layer28_k25_plain": 0.11666666666666667,
+  "layer35_k10_chat": 0.3125,
+  "layer35_k10_plain": 0.9166666666666666,
+  "layer35_k16_chat": 0.3125,
+  "layer35_k16_plain": 0.9166666666666666,
+  "layer35_k25_chat": 0.375,
+  "layer35_k25_plain": 0.9666666666666667,
+  "layer38_k10_chat": 0.3125,
+  "layer38_k10_plain": 0.9833333333333333,
+  "layer38_k16_chat": 0.3125,
+  "layer38_k16_plain": 0.9833333333333333,
+  "layer38_k25_chat": 0.5625,
+  "layer38_k25_plain": 0.9833333333333333
+ },
+ "run_id": "jspace_20260716T170808536780_e4118850fb70",
+ "schema": "jlens.analysis.summary.v1"
+}

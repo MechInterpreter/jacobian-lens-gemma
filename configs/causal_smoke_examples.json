@@ -1,0 +1,34 @@
+{
+  "description": "Deterministic example manifest for the causal steering smoke run. Selected from the completed jspace run's measured records (runs/jspace_20260716T170808536780_e4118850fb70): every entry has the model's top-1 output token inside its k=10 cone at BOTH layers 35 and 38 (so the output-atom family is runnable), and the four entries deliberately span strong, semantic, chat, and weak agreement regimes. Position -1 only; -2 records exist in the run but add little to a smoke study.",
+  "version": 1,
+  "examples": [
+    {
+      "slug": "factual-canberra",
+      "prompt_hash": "26682621dffc6240",
+      "format": "plain",
+      "positions": [-1],
+      "selection_reason": "Strong output-aligned factual case: layer-38 J-lens rank of the model top-1 (' Canberra') is 0, the output atom is effective in the k=10 cone at layers 35 and 38, and layer-35 explained fraction (0.0225) is the highest among factual prompts. The cleanest place to see an output-atom effect if one exists."
+    },
+    {
+      "slug": "association-storm",
+      "prompt_hash": "98fa3775103e1918",
+      "format": "plain",
+      "positions": [-1],
+      "selection_reason": "Non-output semantic case: the model predicts ' a' before ' thunderstorm' completes, and the cone carries semantic weather associates alongside the output token (rank 1 at layer 38). The top non-output atom here is a semantically meaningful target, not a filler."
+    },
+    {
+      "slug": "chat-antonym-early",
+      "prompt_hash": "b7bcacca49f62cb5",
+      "format": "chat",
+      "positions": [-1],
+      "selection_reason": "Chat-formatted case: the only chat example with the output atom effective in a steering-layer cone (layer 35; at layer 38 the output atom is absent and the output-atom family is skipped there, leaving 115 total conditions). Layer-38 J-lens rank 3. Tests that intervention machinery behaves on chat-templated sequences."
+    },
+    {
+      "slug": "association-doctor",
+      "prompt_hash": "c31507fd75b45bbb",
+      "format": "plain",
+      "positions": [-1],
+      "selection_reason": "Weak/incoherent control case: the model's top-1 is the filler ' that' and the layer-38 J-lens rank is 20 — the weakest agreement among examples where all three intervention families are still runnable. If steering only 'works' where the lens already agrees with the model, this example should show it."
+    }
+  ]
+}
