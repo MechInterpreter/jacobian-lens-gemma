@@ -24,7 +24,86 @@ reference implementation to Gemma 4 E4B.
   retains Anthropic PBC copyright notices; files new in this fork are marked in
   their headers.
 
-## The explorer at a glance
+## Explorer
+
+The browser application displays exported research artifacts rather than loading Gemma or running experiments in the browser.
+
+### Text
+
+The text view displays a comprehensive breakdown of a measured model state for a chosen prompt. It shows the prompt and recorded token position, the model prediction, and the J-lens approximation. You can use the layer selection to inspect the sparse cone at different depths, along with reconstruction diagnostics, provenance, and detailed gradient-pursuit information and cross-layer trajectories.
+
+<p align="center">
+  <img
+    src="docs/assets/explorer/text-overview.png"
+    alt="Text explorer overview showing the selected prompt, layer rail, prediction panel, and sparse cone"
+    width="100%"
+  >
+</p>
+*Text explorer overview: browsing measured records for a text prompt, comparing model vs J-lens predictions, and examining the k=10 sparse cone.*
+
+<p align="center">
+  <img
+    src="docs/assets/explorer/text-details.png"
+    alt="Text explorer details showing gradient-pursuit playback and cross-layer trajectory"
+    width="100%"
+  >
+</p>
+*Text explorer details: replaying the sparse gradient pursuit and tracing the cross-layer trajectory of retained atoms.*
+
+### Image
+
+The current image view demonstrates the multimodal UI scaffolding using a placeholder image and synthetic fixture data. It prepares the explorer for measured multimodal records; currently, the view is strictly fixture-backed until the capture notebook is run.
+
+<p align="center">
+  <img
+    src="docs/assets/explorer/image-overview.png"
+    alt="Image explorer overview showing the placeholder UI with an image input and synthetic data"
+    width="100%"
+  >
+</p>
+*Image explorer overview showing the placeholder UI before a measured run completes.*
+
+<p align="center">
+  <img
+    src="docs/assets/explorer/image-details.png"
+    alt="Image explorer details showing the placeholder cross-layer panels"
+    width="100%"
+  >
+</p>
+*Image explorer details showing the synthetic UI fixtures for gradient pursuit and trajectories.*
+
+### Audio
+
+The current audio view demonstrates the multimodal UI scaffolding using a placeholder audio player and synthetic fixture data. It prepares the explorer for measured multimodal records; currently, the view is strictly fixture-backed until the capture notebook is run.
+
+<p align="center">
+  <img
+    src="docs/assets/explorer/audio-overview.png"
+    alt="Audio explorer overview showing the placeholder UI with an audio player and synthetic data"
+    width="100%"
+  >
+</p>
+*Audio explorer overview showing the placeholder UI before a measured run completes.*
+
+<p align="center">
+  <img
+    src="docs/assets/explorer/audio-details.png"
+    alt="Audio explorer details showing the placeholder cross-layer panels"
+    width="100%"
+  >
+</p>
+*Audio explorer details showing the synthetic UI fixtures for gradient pursuit and trajectories.*
+
+## Current data status
+
+| Area | Current status | What is shown |
+|---|---|---|
+| Text | Measured | Completed jspace run (20-example demo bundle) |
+| Image | Fixture-backed | Synthetic UI fixture until multimodal capture notebook is run |
+| Audio | Fixture-backed | Synthetic UI fixture until multimodal capture notebook is run |
+| Causal interventions | Pending run | Synthetic UI fixture or missing data until causal smoke notebook is run |
+
+## How the explorer fits into the research pipeline
 
 ```mermaid
 flowchart LR
@@ -52,36 +131,20 @@ flowchart LR
     bundle --> app
 ```
 
-**End-user flow:** choose a saved example → inspect input and token/position
-metadata → select a layer → compare model vs J-lens predictions → inspect the
-k=10 sparse cone → replay the gradient pursuit step by step → compare cones
-across layers → open measured steering results vs matched controls → switch
-between Text / Image / Audio.
+At a logical level, the data pipeline flows as follows:
 
-### Screenshots
+Prompt or multimodal input
+→ Gemma activations
+→ fitted J-lens transport
+→ J-space dictionary
+→ nonnegative sparse pursuit
+→ cone and trajectory records
+→ deterministic JSON export
+→ static React explorer
 
-*(Capture after `npm run build`; serve `explorer/dist/` and load the demo.)*
+The explorer is a visualization layer; it does not recompute the model, nor does it replace Gemma's forward computation. Token-readable atoms are interpretability readouts, not automatically proven semantic concepts. Causal claims require measured interventions and controls.
 
-| Screenshot | How to capture |
-|---|---|
-| `docs/img/explorer_text.png` | Text tab, `factual-canberra`, layer 38: cone panel + pursuit player visible |
-| `docs/img/explorer_trajectory.png` | Same example, cross-layer trajectory panel (L35→L38 retained atoms highlighted) |
-| `docs/img/explorer_causal.png` | Causal panel after merging a measured causal bundle (multiplier −1 vs control) |
-| `docs/img/explorer_image.png` | Image tab with a real captured example (post multimodal run) |
-
-Do not screenshot fixture data as if it were results — the UI badges make the
-distinction visible; keep the badge in frame.
-
-### Feature status: measured vs planned
-
-| Feature | Data behind it today |
-|---|---|
-| Example browser, input viewer, layer rail, predictions, cones, pursuit playback, trajectories (Text) | **Measured** — completed jspace run (20-example demo bundle committed) |
-| Causal steering panel | **Schema + UI complete**; shows *No causal data available* or a loudly-badged synthetic fixture until `notebooks/gemma_4_e4b_jspace_causal_smoke.ipynb` is run |
-| Image / Audio tabs | **Schema + UI complete**; loudly-badged synthetic fixture until `notebooks/gemma_4_e4b_multimodal_jlens_capture.ipynb` is run |
-
-The frontend automatically prefers measured bundles: files placed under
-`explorer/public/data/measured/` (git-ignored) silently replace the fixtures.
+The frontend automatically prefers measured bundles: files placed under `explorer/public/data/measured/` (git-ignored) silently replace the fixtures.
 
 ## Explorer: install, develop, build
 
