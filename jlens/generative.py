@@ -870,3 +870,218 @@ NEUTRAL_PROMPTS: dict[str, str] = {
     ),
     "shortest-label-is": "The shortest label for the internal representation is:",
 }
+
+
+# ------------------------------------------------------------- aggregation
+
+
+def _mean(values: Sequence[float | None]) -> float | None:
+    present = [v for v in values if v is not None]
+    return sum(present) / len(present) if present else None
+
+
+def summarize_by_condition(records: Sequence[dict]) -> list[dict]:
+    """Per-condition aggregate of scored records: mean/min/max target
+    log-probability improvement over zero, specificity over the unrelated
+    cone, recovery rates, and mean KL. Purely descriptive."""
+    groups: dict[str, list[dict]] = {}
+    for record in records:
+        groups.setdefault(record["vector_condition"], []).append(record)
+    out = []
+    for condition in sorted(groups):
+        rows = groups[condition]
+        deltas = [
+            r["delta_logprob_vs_zero"]
+            for r in rows
+            if r.get("delta_logprob_vs_zero") is not None
+        ]
+        decoded = [r for r in rows if r.get("target_recovered_exact") is not None]
+        exact = [r for r in decoded if r.get("target_recovered_exact")]
+        substring = [r for r in decoded if r.get("target_recovered_substring")]
+        out.append(
+            {
+                "vector_condition": condition,
+                "n_records": len(rows),
+                "mean_delta_vs_zero": _mean(deltas),
+                "min_delta_vs_zero": min(deltas) if deltas else None,
+                "max_delta_vs_zero": max(deltas) if deltas else None,
+                "mean_specificity_vs_unrelated": _mean(
+                    [r.get("delta_logprob_vs_unrelated") for r in rows]
+                ),
+                "mean_kl_from_baseline": _mean(
+                    [r.get("kl_divergence_from_baseline") for r in rows]
+                ),
+                "n_decoded": len(decoded),
+                "exact_recovery_rate": len(exact) / len(decoded) if decoded else None,
+                "substring_recovery_rate": (
+                    len(substring) / len(decoded) if decoded else None
+                ),
+            }
+        )
+    return out
+
+
+def _matches(
+    record: dict, *, source_layer: int, ratio: float, schedule_kind: str
+) -> bool:
+    return (
+        record.get("source_layer") == source_layer
+        and record.get("requested_ratio") == ratio
+        and record.get("steering_schedule", {}).get("kind") == schedule_kind
+    )
+
+
+def choose_calibration(records: Sequence[dict], *, condition: str = "full_cone") -> dict:
+    """Pick the (source_layer, ratio, schedule kind) with the best mean
+    target-log-probability improvement over zero for ``condition`` — the dev
+    split's calibration step. Fails loudly with no scored candidates."""
+    candidates: dict[tuple, list[float]] = {}
+    for record in records:
+        if record.get("vector_condition") != condition:
+            continue
+        delta = record.get("delta_logprob_vs_zero")
+        if delta is None:
+            continue
+        key = (
+            record["source_layer"],
+            record["requested_ratio"],
+            record["steering_schedule"]["kind"],
+        )
+        candidates.setdefault(key, []).append(delta)
+    if not candidates:
+        raise GenerativeError(f"no scored {condition!r} records to calibrate on")
+    scored = {key: _mean(values) for key, values in candidates.items()}
+    best = max(sorted(scored), key=lambda key: scored[key])
+    return {
+        "condition": condition,
+        "source_layer": best[0],
+        "ratio": best[1],
+        "schedule_kind": best[2],
+        "mean_delta_vs_zero": scored[best],
+        "n_records": len(candidates[best]),
+    }
+
+
+#: Controls the correct vector must beat, per example, for a "go" verdict.
+GONOGO_CONTROLS = (
+    "random_matched_norm",
+    "shuffled",
+    "sign_reversed",
+    "unrelated_cone",
+)
+
+
+def per_example_verdicts(
+    records: Sequence[dict],
+    *,
+    source_layer: int,
+    ratio: float,
+    schedule_kind: str,
+    correct_condition: str = "full_cone",
+) -> list[dict]:
+    """Per-example go/no-go criteria at one calibrated operating point.
+
+    For each example: does ``correct_condition`` beat zero and every control
+    in :data:`GONOGO_CONTROLS` on target log-probability, on more than one
+    neutral prompt; was the target recovered (exact or substring) by
+    decoding; and how does it compare to ``raw_activation`` transplantation?
+    """
+    by_example: dict[str, list[dict]] = {}
+    for record in records:
+        at_point = _matches(
+            record, source_layer=source_layer, ratio=ratio, schedule_kind=schedule_kind
+        )
+        if at_point or record.get("vector_condition") in ("none", "zero"):
+            by_example.setdefault(record["example_id"], []).append(record)
+    verdicts = []
+    for example_id in sorted(by_example):
+        rows = by_example[example_id]
+
+        def rows_for(condition: str, rows: list[dict] = rows) -> list[dict]:
+            return [r for r in rows if r["vector_condition"] == condition]
+
+        correct = rows_for(correct_condition)
+        if not correct:
+            continue
+        beats_zero_prompts = [
+            r["neutral_prompt_id"]
+            for r in correct
+            if (r.get("delta_logprob_vs_zero") or 0) > 0
+        ]
+        correct_mean = _mean([r.get("total_logprob") for r in correct])
+        beats_controls: dict[str, bool | None] = {}
+        for control in GONOGO_CONTROLS:
+            totals = [
+                r["total_logprob"]
+                for r in rows_for(control)
+                if r.get("total_logprob") is not None
+            ]
+            if not totals or correct_mean is None:
+                beats_controls[control] = None
+            else:
+                beats_controls[control] = correct_mean > _mean(totals)
+        recovered = [
+            r
+            for r in correct
+            if r.get("target_recovered_exact") or r.get("target_recovered_substring")
+        ]
+        raw_mean = _mean([r.get("total_logprob") for r in rows_for("raw_activation")])
+        verdicts.append(
+            {
+                "example_id": example_id,
+                "correct_condition": correct_condition,
+                "n_neutral_prompts_scored": len(correct),
+                "n_prompts_beating_zero": len(beats_zero_prompts),
+                "beats_zero_on_majority": len(beats_zero_prompts) * 2 > len(correct),
+                "survives_multiple_prompts": len(beats_zero_prompts) >= 2,
+                "beats_controls": beats_controls,
+                "beats_all_controls": all(v is True for v in beats_controls.values()),
+                "recovered_any": bool(recovered),
+                "mean_total_logprob_correct": correct_mean,
+                "mean_total_logprob_raw_activation": raw_mean,
+                "jspace_vs_raw_activation": (
+                    None
+                    if correct_mean is None or raw_mean is None
+                    else correct_mean - raw_mean
+                ),
+            }
+        )
+    return verdicts
+
+
+def gonogo_report(verdicts: Sequence[dict]) -> dict:
+    """Aggregate per-example verdicts into the go/no-go summary. ``go`` is
+    True when a clear majority of examples pass the joint criterion (beats
+    zero on a majority of prompts, beats every control, and survives more
+    than one neutral prompt)."""
+    if not verdicts:
+        raise GenerativeError("no verdicts to aggregate")
+    passing = [
+        v
+        for v in verdicts
+        if v["beats_zero_on_majority"]
+        and v["beats_all_controls"]
+        and v["survives_multiple_prompts"]
+    ]
+    recovered = [v for v in verdicts if v["recovered_any"]]
+    competitive = [
+        v
+        for v in verdicts
+        if v["jspace_vs_raw_activation"] is not None
+        and v["jspace_vs_raw_activation"] >= 0
+    ]
+    n = len(verdicts)
+    return {
+        "n_examples": n,
+        "n_passing_joint_criterion": len(passing),
+        "passing_fraction": len(passing) / n,
+        "n_recovered_any": len(recovered),
+        "recovery_fraction": len(recovered) / n,
+        "n_jspace_competitive_with_raw": len(competitive),
+        "go": len(passing) * 2 > n,
+        "criteria": (
+            "majority of examples: correct vector beats zero on a majority of "
+            "neutral prompts, beats random/shuffled/sign-reversed/unrelated "
+            "controls, and survives >= 2 neutral prompts"
+        ),
+    }

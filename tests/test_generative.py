@@ -622,3 +622,114 @@ def test_generative_config_validation_fails_loudly():
     bad["steering"]["schedules"].append({"kind": "linear"})
     with pytest.raises(ValueError, match="schedules"):
         validate_generative_config(bad)
+
+
+# -------------------------------------------------------------- aggregation
+
+
+def _record(
+    example_id="ex1",
+    condition="full_cone",
+    layer=21,
+    ratio=0.5,
+    schedule="prompt_only",
+    prompt_id="label-colon",
+    total=-4.0,
+    delta_zero=None,
+    exact=None,
+    substring=None,
+):
+    return {
+        "vector_condition": condition,
+        "example_id": example_id,
+        "source_layer": layer,
+        "requested_ratio": ratio,
+        "steering_schedule": {"kind": schedule, "decay": None},
+        "neutral_prompt_id": prompt_id,
+        "total_logprob": total,
+        "delta_logprob_vs_zero": delta_zero,
+        "delta_logprob_vs_unrelated": None,
+        "kl_divergence_from_baseline": 0.1,
+        "target_recovered_exact": exact,
+        "target_recovered_substring": substring,
+    }
+
+
+def test_summarize_by_condition():
+    from jlens.generative import summarize_by_condition
+
+    records = [
+        _record(delta_zero=2.0, exact=True, substring=True),
+        _record(delta_zero=1.0, exact=False, substring=False),
+        _record(condition="zero", total=-6.0),
+    ]
+    summary = {s["vector_condition"]: s for s in summarize_by_condition(records)}
+    assert summary["full_cone"]["mean_delta_vs_zero"] == pytest.approx(1.5)
+    assert summary["full_cone"]["exact_recovery_rate"] == pytest.approx(0.5)
+    assert summary["zero"]["n_records"] == 1
+    assert summary["zero"]["mean_delta_vs_zero"] is None
+
+
+def test_choose_calibration_picks_best_operating_point():
+    from jlens.generative import GenerativeError, choose_calibration
+
+    records = [
+        _record(layer=14, ratio=0.5, delta_zero=0.5),
+        _record(layer=21, ratio=1.0, delta_zero=3.0),
+        _record(layer=21, ratio=1.0, delta_zero=1.0, prompt_id="other"),
+        _record(layer=28, ratio=2.0, delta_zero=-1.0),
+    ]
+    best = choose_calibration(records)
+    assert (best["source_layer"], best["ratio"]) == (21, 1.0)
+    assert best["mean_delta_vs_zero"] == pytest.approx(2.0)
+    with pytest.raises(GenerativeError):
+        choose_calibration([], condition="full_cone")
+
+
+def test_per_example_verdicts_and_gonogo():
+    from jlens.generative import gonogo_report, per_example_verdicts
+
+    def battery(example_id, strong: bool):
+        correct_total = -2.0 if strong else -9.0
+        rows = [
+            _record(
+                example_id,
+                "full_cone",
+                total=correct_total,
+                delta_zero=3.0 if strong else -1.0,
+                prompt_id=p,
+                exact=strong,
+                substring=strong,
+            )
+            for p in ("label-colon", "answer-four-words")
+        ]
+        for control in (
+            "random_matched_norm",
+            "shuffled",
+            "sign_reversed",
+            "unrelated_cone",
+            "raw_activation",
+        ):
+            rows.append(_record(example_id, control, total=-5.0))
+        rows.append(_record(example_id, "zero", total=-5.0, ratio=None))
+        return rows
+
+    records = battery("ex-strong", True) + battery("ex-weak", False)
+    verdicts = per_example_verdicts(
+        records, source_layer=21, ratio=0.5, schedule_kind="prompt_only"
+    )
+    by_id = {v["example_id"]: v for v in verdicts}
+    assert by_id["ex-strong"]["beats_all_controls"] is True
+    assert by_id["ex-strong"]["survives_multiple_prompts"] is True
+    assert by_id["ex-strong"]["recovered_any"] is True
+    assert by_id["ex-strong"]["jspace_vs_raw_activation"] == pytest.approx(3.0)
+    assert by_id["ex-weak"]["beats_all_controls"] is False
+    assert by_id["ex-weak"]["recovered_any"] is False
+
+    report = gonogo_report(verdicts)
+    assert report["n_examples"] == 2
+    assert report["n_passing_joint_criterion"] == 1
+    assert report["go"] is False  # 1 of 2 is not a clear majority
+
+    solo = gonogo_report([by_id["ex-strong"]])
+    assert solo["go"] is True
