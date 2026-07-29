@@ -1,0 +1,168 @@
+{
+  "description": "Controlled multi-token concept benchmark for the generative J-cone steering validation. Each example names a concept whose surface form spans multiple tokenizer pieces. 'dev' is the calibration split (layer/strength search); 'heldout' is scored only after calibration is frozen. target_token_ids are resolved at run time against the pinned Gemma tokenizer (with the leading space as written in target_phrase) and recorded in every result; they are null here so the manifest stays tokenizer-revision-agnostic. control_prompt is a syntactically matched prompt evoking a different concept, used by the activation_diff condition. manual_subcone, when non-null, maps a source layer (as a string key) to indices into the example's active generator list (selection order); it names a candidate semantic group, not a proven binding.",
+  "version": 1,
+  "dev": [
+    {
+      "example_id": "dev-split-photosynthesis",
+      "category": "split_word",
+      "source_prompt": "The process by which green plants use sunlight to make sugar from carbon dioxide and water is called",
+      "control_prompt": "The process by which cells break down glucose to release stored chemical energy is called",
+      "target_phrase": " photosynthesis",
+      "target_token_ids": null,
+      "extraction_position": -1,
+      "manual_subcone": null
+    },
+    {
+      "example_id": "dev-split-serendipity",
+      "category": "split_word",
+      "source_prompt": "The word for finding something wonderful purely by happy accident is",
+      "control_prompt": "The word for a feeling of deep sadness and loss is",
+      "target_phrase": " serendipity",
+      "target_token_ids": null,
+      "extraction_position": -1,
+      "manual_subcone": null
+    },
+    {
+      "example_id": "dev-compound-birdhouse",
+      "category": "compound_word",
+      "source_prompt": "A small wooden box mounted on a pole for birds to nest in is called a",
+      "control_prompt": "A small glass tank filled with water for keeping fish is called an",
+      "target_phrase": " birdhouse",
+      "target_token_ids": null,
+      "extraction_position": -1,
+      "manual_subcone": null
+    },
+    {
+      "example_id": "dev-compound-toothbrush",
+      "category": "compound_word",
+      "source_prompt": "The small brush with a long handle used to clean your teeth every morning is called a",
+      "control_prompt": "The small comb with a short handle used to tidy your hair every morning is called a",
+      "target_phrase": " toothbrush",
+      "target_token_ids": null,
+      "extraction_position": -1,
+      "manual_subcone": null
+    },
+    {
+      "example_id": "dev-entity-mandela",
+      "category": "named_entity",
+      "source_prompt": "The anti-apartheid leader who became South Africa's first Black president in 1994 was",
+      "control_prompt": "The civil rights leader who delivered the famous I Have a Dream speech in 1963 was",
+      "target_phrase": " Nelson Mandela",
+      "target_token_ids": null,
+      "extraction_position": -1,
+      "manual_subcone": null
+    },
+    {
+      "example_id": "dev-entity-everest",
+      "category": "named_entity",
+      "source_prompt": "The tallest mountain above sea level on Earth, on the border of Nepal and Tibet, is",
+      "control_prompt": "The deepest oceanic trench on Earth, in the western Pacific Ocean, is",
+      "target_phrase": " Mount Everest",
+      "target_token_ids": null,
+      "extraction_position": -1,
+      "manual_subcone": null
+    },
+    {
+      "example_id": "dev-phrase-solar-eclipse",
+      "category": "noun_phrase",
+      "source_prompt": "When the Moon passes between the Sun and the Earth and briefly blocks the sunlight, we call the event a",
+      "control_prompt": "When the Earth passes between the Sun and the Moon and casts its shadow on the Moon, we call the event a",
+      "target_phrase": " solar eclipse",
+      "target_token_ids": null,
+      "extraction_position": -1,
+      "manual_subcone": null
+    },
+    {
+      "example_id": "dev-phrase-climate-change",
+      "category": "noun_phrase",
+      "source_prompt": "The long-term warming of the planet driven by greenhouse gas emissions is known as",
+      "control_prompt": "The gradual increase in the general price level of goods and services is known as",
+      "target_phrase": " climate change",
+      "target_token_ids": null,
+      "extraction_position": -1,
+      "manual_subcone": null
+    }
+  ],
+  "heldout": [
+    {
+      "example_id": "held-split-metamorphosis",
+      "category": "split_word",
+      "source_prompt": "The biological transformation of a caterpillar into a butterfly is called",
+      "control_prompt": "The biological process by which one cell divides into two identical cells is called",
+      "target_phrase": " metamorphosis",
+      "target_token_ids": null,
+      "extraction_position": -1,
+      "manual_subcone": null
+    },
+    {
+      "example_id": "held-split-cryptocurrency",
+      "category": "split_word",
+      "source_prompt": "A digital currency secured by cryptography and recorded on a decentralized ledger is called a",
+      "control_prompt": "A government-issued paper currency backed by a central bank is called a",
+      "target_phrase": " cryptocurrency",
+      "target_token_ids": null,
+      "extraction_position": -1,
+      "manual_subcone": null
+    },
+    {
+      "example_id": "held-compound-lighthouse",
+      "category": "compound_word",
+      "source_prompt": "The tall coastal tower with a rotating beacon that warns ships away from rocks is called a",
+      "control_prompt": "The tall city tower with a large clock face visible from the street is called a",
+      "target_phrase": " lighthouse",
+      "target_token_ids": null,
+      "extraction_position": -1,
+      "manual_subcone": null
+    },
+    {
+      "example_id": "held-compound-waterfall",
+      "category": "compound_word",
+      "source_prompt": "A place where a river plunges straight down over a rocky cliff is called a",
+      "control_prompt": "A place where a river splits into many slow channels before reaching the sea is called a",
+      "target_phrase": " waterfall",
+      "target_token_ids": null,
+      "extraction_position": -1,
+      "manual_subcone": null
+    },
+    {
+      "example_id": "held-entity-einstein",
+      "category": "named_entity",
+      "source_prompt": "The physicist who developed the theory of general relativity and won the 1921 Nobel Prize was",
+      "control_prompt": "The naturalist who developed the theory of evolution by natural selection was",
+      "target_phrase": " Albert Einstein",
+      "target_token_ids": null,
+      "extraction_position": -1,
+      "manual_subcone": null
+    },
+    {
+      "example_id": "held-entity-amazon",
+      "category": "named_entity",
+      "source_prompt": "The river carrying more water than any other on Earth, flowing through the South American rainforest, is the",
+      "control_prompt": "The longest river in Africa, flowing north through Egypt to the Mediterranean, is the",
+      "target_phrase": " Amazon River",
+      "target_token_ids": null,
+      "extraction_position": -1,
+      "manual_subcone": null
+    },
+    {
+      "example_id": "held-phrase-black-hole",
+      "category": "noun_phrase",
+      "source_prompt": "A region of spacetime where gravity is so strong that not even light can escape is called a",
+      "control_prompt": "A rapidly spinning collapsed star that emits regular pulses of radio waves is called a",
+      "target_phrase": " black hole",
+      "target_token_ids": null,
+      "extraction_position": -1,
+      "manual_subcone": null
+    },
+    {
+      "example_id": "held-phrase-immune-system",
+      "category": "noun_phrase",
+      "source_prompt": "The network of white blood cells and antibodies that defends the body against infection is called the",
+      "control_prompt": "The network of nerves and neurons that carries signals between the brain and the body is called the",
+      "target_phrase": " immune system",
+      "target_token_ids": null,
+      "extraction_position": -1,
+      "manual_subcone": null
+    }
+  ]
+}

@@ -387,6 +387,134 @@ def load_multimodal_config(path: str) -> dict:
     return config
 
 
+#: Schema for the generative J-cone steering validation config (frozen lens,
+#: fresh per-example pursuit, schedule-weighted steering of neutral
+#: verbalization prompts; see jlens.generative and
+#: scripts/run_generative_validation.py).
+_GENERATIVE_SCHEMA: tuple[tuple[str, tuple[type, ...], bool], ...] = (
+    ("mode", (str,), True),
+    ("model.repo_id", (str,), True),
+    ("model.revision", (str, type(None)), True),
+    ("model.dtype", (str,), True),
+    ("model.device_map", (str, type(None)), True),
+    ("model.allow_model_load", (bool,), True),
+    ("model.expect_n_layers", (int,), True),
+    ("model.expect_d_model", (int,), True),
+    ("model.expect_vocab_size", (int,), True),
+    ("lens.run_dir_name", (str,), True),
+    ("lens.artifact_relpath", (str,), True),
+    ("lens.expect_file_sha256", (str, type(None)), True),
+    ("lens.expect_model_revision", (str,), True),
+    ("lens.expect_source_layers", (list,), True),
+    ("lens.expect_n_prompts", (int,), True),
+    ("benchmark.manifest_path", (str,), True),
+    ("benchmark.split", (str,), True),
+    ("pursuit.k", (int,), True),
+    ("pursuit.normalize_atoms", (bool,), True),
+    ("pursuit.refine_steps", (int,), True),
+    ("pursuit.tol_relative_residual", (float, int), True),
+    ("pursuit.correlation_chunk_size", (int, type(None)), True),
+    ("pursuit.atoms_dtype", (str,), True),
+    ("steering.layers", (list,), True),
+    ("steering.strength_ratios", (list,), True),
+    ("steering.schedules", (list,), True),
+    ("steering.mass_thresholds", (list,), True),
+    ("steering.wrong_position_anchor", (int,), True),
+    ("steering.conditions", (list,), True),
+    ("decode.generate", (bool,), True),
+    ("decode.max_new_tokens", (int,), True),
+    ("decode.generate_conditions", (list,), True),
+    ("neutral_prompts", (list,), True),
+    ("eval.control_seed", (int,), True),
+    ("parity.max_abs_logit_diff_tol", (float, int), True),
+    ("paths.output_dir", (str,), True),
+)
+
+
+def validate_generative_config(config: dict) -> None:
+    """Structural validation of a generative validation config; raises
+    ``ValueError`` listing every problem."""
+    problems: list[str] = []
+    for dotted, types, required in _GENERATIVE_SCHEMA:
+        found, value = _get_dotted(config, dotted)
+        if not found:
+            if required:
+                problems.append(f"missing key: {dotted}")
+            continue
+        if not isinstance(value, types):
+            problems.append(
+                f"{dotted}: expected {'/'.join(t.__name__ for t in types)}, "
+                f"got {type(value).__name__} ({value!r})"
+            )
+    found, mode = _get_dotted(config, "mode")
+    if found and mode != "generative_validation":
+        problems.append(f"mode: {mode!r} must be 'generative_validation'")
+    found, split = _get_dotted(config, "benchmark.split")
+    if found and split not in ("dev", "heldout"):
+        problems.append(f"benchmark.split: {split!r} not in ('dev', 'heldout')")
+    found, layers = _get_dotted(config, "steering.layers")
+    _, fitted = _get_dotted(config, "lens.expect_source_layers")
+    if (
+        found
+        and isinstance(layers, list)
+        and isinstance(fitted, list)
+        and not set(layers) <= set(fitted)
+    ):
+        problems.append(
+            f"steering.layers {sorted(set(layers) - set(fitted))} not in "
+            f"lens.expect_source_layers"
+        )
+    if found and isinstance(layers, list) and len(layers) < 2:
+        problems.append(
+            "steering.layers needs at least 2 layers (the wrong_layer control "
+            "borrows the farthest other steering layer)"
+        )
+    found, ratios = _get_dotted(config, "steering.strength_ratios")
+    if found and isinstance(ratios, list):
+        if not ratios or not all(
+            isinstance(r, (int, float)) and r > 0 for r in ratios
+        ):
+            problems.append("steering.strength_ratios: must be positive numbers")
+    found, conditions = _get_dotted(config, "steering.conditions")
+    if found and isinstance(conditions, list):
+        from jlens.generative import VECTOR_CONDITIONS
+
+        unknown = [c for c in conditions if c not in VECTOR_CONDITIONS]
+        if unknown:
+            problems.append(
+                f"steering.conditions: unknown conditions {unknown}"
+            )
+        for gate in ("none", "zero"):
+            if gate not in conditions:
+                problems.append(
+                    f"steering.conditions must include {gate!r} (baseline/parity)"
+                )
+    found, schedules = _get_dotted(config, "steering.schedules")
+    if found and isinstance(schedules, list):
+        from jlens.generative import SCHEDULE_KINDS
+
+        for entry in schedules:
+            if not isinstance(entry, dict) or entry.get("kind") not in SCHEDULE_KINDS:
+                problems.append(
+                    f"steering.schedules: each entry needs kind in "
+                    f"{SCHEDULE_KINDS}, got {entry!r}"
+                )
+    if problems:
+        raise ValueError("invalid generative config:\n  " + "\n  ".join(problems))
+
+
+def load_generative_config(path: str) -> dict:
+    """Load and validate a YAML generative validation config."""
+    import yaml
+
+    with open(path, encoding="utf-8") as handle:
+        config = yaml.safe_load(handle)
+    if not isinstance(config, dict):
+        raise ValueError(f"{path}: top level must be a mapping")
+    validate_generative_config(config)
+    return config
+
+
 def execution_record(
     *,
     configured_allow_model_load: bool,

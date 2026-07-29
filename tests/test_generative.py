@@ -561,3 +561,64 @@ def test_make_generative_record_is_json_safe():
     assert record["steering_schedule"] == {"kind": "decaying", "decay": 0.7}
     assert record["total_logprob"] == -3.2
     json.dumps(record)  # must serialize
+
+
+# ------------------------------------------------------- shipped artifacts
+
+
+def test_shipped_benchmark_manifest_is_valid():
+    manifest = load_benchmark("configs/generative_benchmark.json")
+    assert len(manifest["dev"]) >= 6
+    assert len(manifest["heldout"]) >= 6
+    categories = {e["category"] for e in manifest["dev"] + manifest["heldout"]}
+    assert categories == {
+        "split_word",
+        "compound_word",
+        "named_entity",
+        "noun_phrase",
+    }
+    for example in manifest["dev"] + manifest["heldout"]:
+        # Multi-token concepts: at least two words or a long single word.
+        phrase = example["target_phrase"].strip()
+        assert len(phrase.split()) >= 2 or len(phrase) >= 9
+        assert example["target_phrase"].startswith(" ")
+
+
+def test_shipped_generative_config_is_valid():
+    pytest.importorskip("yaml")
+    from jlens.metadata import load_generative_config
+
+    config = load_generative_config("configs/gemma_generative_validation.yaml")
+    assert config["mode"] == "generative_validation"
+    assert set(config["steering"]["layers"]) <= set(
+        config["lens"]["expect_source_layers"]
+    )
+    assert config["model"]["allow_model_load"] is False
+
+
+def test_generative_config_validation_fails_loudly():
+    pytest.importorskip("yaml")
+    from jlens.metadata import load_generative_config, validate_generative_config
+
+    config = load_generative_config("configs/gemma_generative_validation.yaml")
+    import copy
+
+    bad = copy.deepcopy(config)
+    bad["steering"]["conditions"].remove("zero")
+    with pytest.raises(ValueError, match="zero"):
+        validate_generative_config(bad)
+
+    bad = copy.deepcopy(config)
+    bad["steering"]["layers"] = [9]
+    with pytest.raises(ValueError, match="steering.layers"):
+        validate_generative_config(bad)
+
+    bad = copy.deepcopy(config)
+    bad["benchmark"]["split"] = "test"
+    with pytest.raises(ValueError, match="split"):
+        validate_generative_config(bad)
+
+    bad = copy.deepcopy(config)
+    bad["steering"]["schedules"].append({"kind": "linear"})
+    with pytest.raises(ValueError, match="schedules"):
+        validate_generative_config(bad)
