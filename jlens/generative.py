@@ -62,6 +62,9 @@ GENERATIVE_RECORD_SCHEMA = "jlens.generative.record.v1"
 
 #: Steering-vector conditions every benchmark example supports. ``none`` runs
 #: without any hook; ``zero`` injects an exact zero (parity control);
+#: ``natural_scale`` is the full cone injected at **its own** norm with no
+#: rescaling, so the run records what the cone's intrinsic perturbation
+#: magnitude actually does (and what ratio it corresponds to);
 #: ``wrong_layer`` / ``wrong_position`` reuse the correct full-cone vector at
 #: an incorrect site (the vector builder returns the same delta; the runner
 #: moves the site).
@@ -69,6 +72,7 @@ VECTOR_CONDITIONS = (
     "none",
     "zero",
     "full_cone",
+    "natural_scale",
     "mass_subcone",
     "manual_subcone",
     "unrelated_cone",
@@ -723,7 +727,14 @@ def build_condition_vector(
             condition, torch.zeros(int(dim), dtype=torch.float32), {"hooked": True}
         )
 
-    if condition in ("full_cone", "wrong_layer", "wrong_position", "sign_reversed", "shuffled"):
+    if condition in (
+        "full_cone",
+        "natural_scale",
+        "wrong_layer",
+        "wrong_position",
+        "sign_reversed",
+        "shuffled",
+    ):
         q = weighted_reconstruction(
             need(atoms, "atoms"),
             need(token_ids, "token_ids"),
@@ -852,6 +863,7 @@ def make_generative_record(
     delta_vs_unrelated: float | None,
     kl_divergence: float | None,
     target_phrase: str,
+    target_token_strings: Sequence[str] | None = None,
     target_recovered_exact: bool | None,
     target_recovered_substring: bool | None,
     seed: int | None,
@@ -876,6 +888,12 @@ def make_generative_record(
         "receiving_activation_norm": hook_stats.get("anchor_activation_norm"),
         "vector_meta": vector_meta,
         "target_phrase": target_phrase,
+        # Segmentation is recorded alongside the ids (which arrive via
+        # `scoring`) so a reader can see how the phrase was split without
+        # needing the tokenizer.
+        "target_token_strings": (
+            None if target_token_strings is None else list(target_token_strings)
+        ),
         "delta_logprob_vs_zero": delta_vs_zero,
         "delta_logprob_vs_unrelated": delta_vs_unrelated,
         "kl_divergence_from_baseline": kl_divergence,
@@ -951,6 +969,140 @@ def load_benchmark(path: str) -> dict:
                     f"target phrase"
                 )
     return manifest
+
+
+#: Inclusive bounds on the token count of a main-benchmark target phrase.
+#:
+#: The lower bound is the whole point of the experiment: a single-token target
+#: cannot test multi-token target scoring, and — because every steering schedule
+#: injects identically at the prompt-final position and differs only at
+#: *generated* positions — prompt_only / constant / decaying necessarily produce
+#: identical target log-probabilities for it. Such an example silently
+#: contributes three duplicate rows and no schedule signal. (This is exactly
+#: what ``dev-split-photosynthesis`` did: it tokenized to the single id 93036.)
+#:
+#: The upper bound keeps teacher-forced totals comparable across examples; a
+#: very long target's summed log-probability is dominated by its length.
+MIN_TARGET_TOKENS = 2
+MAX_TARGET_TOKENS = 6
+
+
+def token_strings(tokenizer, token_ids: Sequence[int]) -> list[str]:
+    """Per-token surface strings for ``token_ids``, decoded one id at a time.
+
+    Recorded next to the ids so a reader can see *how* a phrase was segmented
+    without needing the tokenizer. Decoded individually on purpose: joint
+    decoding hides the boundaries, which are the thing under inspection.
+    """
+    return [tokenizer.decode([int(t)]) for t in token_ids]
+
+
+def validate_target_tokens(
+    examples: Sequence[dict],
+    tokenizer,
+    *,
+    resolve,
+    min_tokens: int = MIN_TARGET_TOKENS,
+    max_tokens: int = MAX_TARGET_TOKENS,
+) -> dict[str, dict]:
+    """Resolve every example's target against the **pinned** tokenizer and
+    require ``min_tokens <= n <= max_tokens``.
+
+    Call this after the model/tokenizer is loaded — the token count is a
+    property of the actual checkpoint's vocabulary, so it cannot be decided
+    when the manifest is written.
+
+    Args:
+        examples: Benchmark examples (``example_id``, ``target_phrase``, and an
+            optional pre-resolved ``target_token_ids``).
+        tokenizer: The pinned tokenizer.
+        resolve: ``(tokenizer, phrase) -> list[int]`` continuation tokenizer.
+        min_tokens: Inclusive lower bound (see :data:`MIN_TARGET_TOKENS`).
+        max_tokens: Inclusive upper bound.
+
+    Returns:
+        ``{example_id: {"target_token_ids": [...], "target_token_strings":
+        [...], "n_target_tokens": int}}``.
+
+    Raises:
+        GenerativeError: If any example violates the bound. The message lists
+            every offender with its id, phrase, token ids, and token strings, so
+            one run surfaces all of them rather than one per attempt.
+    """
+    if not 1 <= min_tokens <= max_tokens:
+        raise GenerativeError(
+            f"invalid bounds: min_tokens={min_tokens}, max_tokens={max_tokens}"
+        )
+    resolved: dict[str, dict] = {}
+    problems: list[str] = []
+    for example in examples:
+        example_id = example["example_id"]
+        phrase = example["target_phrase"]
+        ids = [int(t) for t in (example.get("target_token_ids") or resolve(
+            tokenizer, phrase
+        ))]
+        strings = token_strings(tokenizer, ids)
+        resolved[example_id] = {
+            "target_token_ids": ids,
+            "target_token_strings": strings,
+            "n_target_tokens": len(ids),
+        }
+        if not (min_tokens <= len(ids) <= max_tokens):
+            problems.append(
+                f"  {example_id}: target_phrase={phrase!r} tokenizes to "
+                f"{len(ids)} token(s) (need {min_tokens}-{max_tokens}); "
+                f"target_token_ids={ids}; token_strings={strings}"
+            )
+    if problems:
+        raise GenerativeError(
+            f"{len(problems)} benchmark target(s) violate the "
+            f"{min_tokens}-{max_tokens} token requirement under the pinned "
+            f"tokenizer:\n" + "\n".join(problems) + "\n"
+            "A single-token target cannot test multi-token scoring, and makes "
+            "every steering schedule produce identical target "
+            "log-probabilities. Revise the benchmark concept."
+        )
+    return resolved
+
+
+def select_split_examples(
+    manifest: dict, split: str, *, limit: int | None = None
+) -> tuple[list[dict], set[str]]:
+    """Examples to run for ``split``, plus the ids present only as
+    unrelated-cone donors.
+
+    The unrelated-cone control borrows another example's active cone, so at
+    least two examples must be present even when ``limit`` asks for one. The
+    extra example is always drawn **from the same split**: a development run
+    that borrowed a held-out example's cone would leak held-out information
+    into calibration, which is the whole thing the split exists to prevent.
+
+    Returns:
+        ``(examples, donor_only_ids)``. ``examples`` is the run list in order;
+        ids in ``donor_only_ids`` are scored for nobody — they exist purely to
+        donate a cone and must be skipped when emitting records.
+
+    Raises:
+        GenerativeError: If ``split`` is unknown, or has fewer than two
+            examples (no same-split donor exists, and crossing splits is not an
+            option).
+    """
+    if split not in manifest or not isinstance(manifest[split], list):
+        raise GenerativeError(f"manifest has no example list for split {split!r}")
+    available = manifest[split]
+    if len(available) < 2:
+        raise GenerativeError(
+            f"split {split!r} has {len(available)} example(s); the "
+            f"unrelated-cone control needs a second example from the *same* "
+            f"split (borrowing across splits would leak the other split)"
+        )
+    selected = available if limit is None else available[: max(int(limit), 1)]
+    donor_only: set[str] = set()
+    if len(selected) < 2:
+        donor = available[len(selected)]
+        selected = [*selected, donor]
+        donor_only.add(donor["example_id"])
+    return list(selected), donor_only
 
 
 #: Neutral verbalization prompts. None mentions any target concept; each ends

@@ -40,12 +40,60 @@ solve the binding problem.
    (for the configured subset) decode greedily **uncached** — every step is
    a full forward pass, so injection semantics are exact.
 
-Conditions: `none`, `zero` (parity), `full_cone`, `mass_subcone`
-(smallest subset covering 60/70/80% of positive coefficient mass),
-`manual_subcone` (manifest-provided indices), `unrelated_cone` (another
-example's cone), `random_matched_norm`, `shuffled` (coordinate
-permutation), `sign_reversed`, `wrong_layer`, `wrong_position`,
-`raw_activation`, `activation_diff` (source minus matched control prompt).
+Conditions: `none`, `zero` (parity), `full_cone`, `natural_scale` (the cone at
+its **own** norm, unscaled), `mass_subcone` (smallest subset covering 60/70/80%
+of positive coefficient mass), `manual_subcone` (manifest-provided indices),
+`unrelated_cone` (another example's cone, **from the same split**),
+`random_matched_norm`, `shuffled` (coordinate permutation), `sign_reversed`,
+`wrong_layer`, `wrong_position`, `raw_activation`, `activation_diff` (source
+minus matched control prompt).
+
+### Strength: the informative region is low
+
+Weighted J-cone reconstructions are intrinsically small relative to the
+receiving residual (layer-21 pilot cones explain ~1e-5 of it), so the sweep runs
+`0.01, 0.03, 0.05, 0.1, 0.25` — bracketing where the cone naturally sits — and
+retains `0.5, 1.0, 2.0` only as **stress tests**. At those magnitudes the
+injection dominates the residual, so an effect there says little about whether
+the cone means anything, and a failure there is not evidence against the
+hypothesis.
+
+`natural_scale` skips rescaling entirely and records `natural_delta_norm`,
+`receiving_activation_norm`, and `natural_ratio` — the measurement that says
+where the cone actually lives, rather than assuming a ratio. It carries
+`requested_ratio: null` and always decodes.
+
+### Benchmark requirements
+
+Enforced, not merely documented:
+
+- **Every target must tokenize to 2–6 tokens** under the pinned tokenizer,
+  checked by `jlens.generative.validate_target_tokens` after the model loads
+  (the count is a property of the checkpoint vocabulary). Violations abort the
+  run, listing every offender's example id, phrase, token ids, and token
+  strings. Check it in seconds beforehand with
+  `scripts/validate_benchmark_targets.py` (tokenizer only, no weights, no GPU).
+
+  A single-token target is not a small problem: it tests no multi-token scoring,
+  and because every schedule injects identically at the prompt-final position
+  and differs only at *generated* positions, it forces `prompt_only`,
+  `constant`, and `decaying` to identical target log-probabilities — three
+  duplicate rows and no schedule signal. `dev-split-photosynthesis` did exactly
+  this (single id 93036), so single common words were replaced with rarer,
+  morphologically complex forms.
+
+- **Unrelated-cone donors come from the same split**, via
+  `jlens.generative.select_split_examples`. `--limit-examples 1` used to leave
+  one dev example and fill the donor slot from `heldout`, so the dev smoke
+  borrowed `held-split-metamorphosis`. A development run must never read a
+  held-out example or vector. Each split now leads with multi-word targets so
+  `--smoke` (first example, second as donor) lands on genuinely multi-token
+  targets, and a split with fewer than two examples fails loudly rather than
+  reaching across.
+
+- **Target token strings are recorded** next to the ids in every record
+  (`target_token_strings`) and in `artifacts/targets.json`, so segmentation is
+  auditable without the tokenizer.
 
 Hard gates before any steering (any failure aborts): architecture
 verification, lens SHA-256 fingerprint, zero-vector logit parity within
@@ -208,6 +256,17 @@ colab exec -s jlens -f scripts/colab_smoke.py
 Prints a JSON report (versions, GPU, config/benchmark validation, mock test
 suite) and exits non-zero on failure.
 
+### Validate target tokenization (cheap; do this before any GPU run)
+
+```bash
+echo "import subprocess,os; os.chdir('/content/jacobian-lens-gemma'); subprocess.run(['python','scripts/validate_benchmark_targets.py','--config','configs/gemma_generative_validation.yaml'],check=True)" | colab exec -s jlens
+```
+
+Downloads the tokenizer only (no weights, no GPU) and applies the same 2–6 token
+requirement the run enforces, printing each target's count, ids, and per-token
+strings. Exits non-zero if any target violates it, so a bad concept costs
+seconds instead of a full run.
+
 ### Run the validation experiment
 
 ```bash
@@ -243,14 +302,15 @@ colab run --gpu L4 scripts/colab_smoke.py
 ## Outputs
 
 Each run directory contains `run_started.json`, `resolved_config.json`,
-`artifacts/gates.json`, `artifacts/pursuits.json` (active generator ids /
-labels / coefficients / explained fractions per example x layer),
-`artifacts/records.jsonl` (schema `jlens.generative.record.v1`: run id,
+`artifacts/gates.json`, `artifacts/targets.json` (validated target token ids,
+per-token strings, and counts per example), `artifacts/pursuits.json` (active
+generator ids / labels / coefficients / explained fractions per example x
+layer), `artifacts/records.jsonl` (schema `jlens.generative.record.v1`: run id,
 commit, model revision, example, layers/positions, condition, schedule,
 requested + measured ratios, vector + receiving norms, generator metadata,
-subset indices and mass thresholds, per-token and total target
-log-probabilities, deltas vs zero and vs unrelated, KL from baseline,
-generated tokens/text/stop reason, seeds), `artifacts/
+subset indices and mass thresholds, target token ids **and token strings**,
+per-token and total target log-probabilities, deltas vs zero and vs unrelated,
+KL from baseline, generated tokens/text/stop reason, seeds), `artifacts/
 summary_by_condition.json`, `artifacts/calibration.json` (dev),
 `artifacts/gonogo.json`, `summary.md`, `run_metadata.json` (environment,
 gates, wall time). No raw activation tensors are stored.

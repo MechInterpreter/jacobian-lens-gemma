@@ -203,15 +203,19 @@ def experiment(tmp_path):
     )
     lens.save(str(lens_dir / "lens.pt"))
 
+    # MockTokenizer is byte-level (one token per character), so target phrases
+    # are kept short to land inside the 2-6 token requirement the runner
+    # enforces. They are still genuinely multi-token, which is the point: the
+    # end-to-end run exercises multi-token target scoring.
     manifest = {
-        "version": 1,
+        "version": 2,
         "dev": [
             {
                 "example_id": "mock-a",
                 "category": "compound_word",
                 "source_prompt": "A house for birds is called a",
                 "control_prompt": "A tank for fish is called an",
-                "target_phrase": " birdhouse",
+                "target_phrase": " owl",
                 "target_token_ids": None,
                 "extraction_position": -1,
                 "manual_subcone": {"1": [0]},
@@ -221,13 +225,36 @@ def experiment(tmp_path):
                 "category": "noun_phrase",
                 "source_prompt": "A region light cannot escape is called a",
                 "control_prompt": None,
-                "target_phrase": " black hole",
+                "target_phrase": " void",
                 "target_token_ids": None,
                 "extraction_position": -1,
                 "manual_subcone": None,
             },
         ],
-        "heldout": [],
+        # A second split so cross-split donor leakage is detectable: if the
+        # runner ever borrowed across splits, these ids would appear in a dev run.
+        "heldout": [
+            {
+                "example_id": "held-x",
+                "category": "noun_phrase",
+                "source_prompt": "A held out source prompt is called a",
+                "control_prompt": None,
+                "target_phrase": " dusk",
+                "target_token_ids": None,
+                "extraction_position": -1,
+                "manual_subcone": None,
+            },
+            {
+                "example_id": "held-y",
+                "category": "named_entity",
+                "source_prompt": "Another held out source prompt is called a",
+                "control_prompt": None,
+                "target_phrase": " dawn",
+                "target_token_ids": None,
+                "extraction_position": -1,
+                "manual_subcone": None,
+            },
+        ],
     }
     manifest_path = tmp_path / "benchmark.json"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
@@ -299,6 +326,7 @@ def test_runner_end_to_end_on_mock(experiment, monkeypatch):
     artifacts = run_dir / "artifacts"
     for name in (
         "gates.json",
+        "targets.json",
         "pursuits.json",
         "records.jsonl",
         "summary_by_condition.json",
@@ -306,6 +334,14 @@ def test_runner_end_to_end_on_mock(experiment, monkeypatch):
         "gonogo.json",
     ):
         assert (artifacts / name).is_file(), name
+
+    # Validated target tokenization is recorded, ids and strings together.
+    targets = json.loads((artifacts / "targets.json").read_text(encoding="utf-8"))
+    assert set(targets) == {"mock-a", "mock-b"}
+    for entry in targets.values():
+        assert entry["n_target_tokens"] >= 2
+        assert len(entry["target_token_strings"]) == entry["n_target_tokens"]
+        assert len(entry["target_token_ids"]) == entry["n_target_tokens"]
 
     gates = json.loads((artifacts / "gates.json").read_text(encoding="utf-8"))
     assert gates["zero_parity_ok"] is True
@@ -320,11 +356,43 @@ def test_runner_end_to_end_on_mock(experiment, monkeypatch):
         if line.strip()
     ]
     assert records
+
+    # No held-out example may appear in a dev run, as a scored example or as an
+    # unrelated-cone donor. (The dev smoke previously borrowed
+    # held-split-metamorphosis for exactly that role.)
+    assert {r["example_id"] for r in records} == {"mock-a", "mock-b"}
+    assert not any(r["example_id"].startswith("held-") for r in records)
+
+    # Multi-token targets, with the segmentation recorded next to the ids.
+    for record in records:
+        assert len(record["target_token_ids"]) >= 2
+        assert record["target_token_strings"] is not None
+        assert len(record["target_token_strings"]) == len(record["target_token_ids"])
+
+    # natural_scale is unscaled: no requested ratio, but the ratio it naturally
+    # lands at is recorded so the low-ratio sweep can be centered on it.
+    natural = [r for r in records if r["vector_condition"] == "natural_scale"]
+    assert natural
+    for record in natural:
+        assert record["requested_ratio"] is None
+        assert record["vector_meta"]["unscaled"] is True
+        assert record["vector_meta"]["natural_delta_norm"] > 0
+        assert record["vector_meta"]["natural_ratio"] is not None
+        assert record["measured_ratio"] == pytest.approx(
+            record["vector_meta"]["natural_ratio"], rel=1e-4
+        )
+    # It is not rescaled, so its delta norm differs from the ratio-scaled cone.
+    scaled_norms = {
+        r["delta_norm"] for r in records if r["vector_condition"] == "full_cone"
+    }
+    assert all(r["delta_norm"] not in scaled_norms for r in natural)
+
     conditions = {r["vector_condition"] for r in records}
     assert {
         "none",
         "zero",
         "full_cone",
+        "natural_scale",
         "mass_subcone",
         "unrelated_cone",
         "random_matched_norm",
@@ -406,3 +474,77 @@ def test_runner_end_to_end_on_mock(experiment, monkeypatch):
     assert metadata["gonogo"] is not None
     assert metadata["calibration"] is not None
     assert metadata["n_records"] == len(records)
+
+
+def test_limit_one_dev_run_never_touches_heldout(experiment, monkeypatch):
+    """The reported methodological bug, end to end.
+
+    `--limit-examples 1` used to leave the dev split with a single example, and
+    the runner filled the unrelated-cone slot from the *other* split (the real
+    smoke run borrowed held-split-metamorphosis). A development run must never
+    read a held-out example or vector, so the donor now comes from dev.
+    """
+    runner = _import_runner()
+    monkeypatch.setattr(runner, "load_gemma4", _mock_load_gemma4)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_generative_validation.py",
+            "--config",
+            experiment["config_path"],
+            "--allow-model-load",
+            "--runs-root",
+            experiment["runs_root"],
+            "--limit-examples",
+            "1",
+        ],
+    )
+    runner.main()
+
+    run_dir = next(
+        p
+        for p in Path(experiment["runs_root"]).iterdir()
+        if p.name.startswith("generative_")
+    )
+    artifacts = run_dir / "artifacts"
+    records = [
+        json.loads(line)
+        for line in (artifacts / "records.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    assert records
+
+    # Only the single requested dev example is scored...
+    assert {r["example_id"] for r in records} == {"mock-a"}
+    # ...and the unrelated-cone control exists, so a donor really was used.
+    unrelated = [r for r in records if r["vector_condition"] == "unrelated_cone"]
+    assert unrelated
+
+    # Only dev examples were pursued at all — no heldout activation was ever
+    # captured, let alone used as a control.
+    heldout_ids = {"held-x", "held-y"}
+    pursuits = json.loads((artifacts / "pursuits.json").read_text(encoding="utf-8"))
+    pursued = {p["example_id"] for p in pursuits}
+    assert pursued == {"mock-a", "mock-b"}, pursued
+    assert not (pursued & heldout_ids)
+
+    # The donor is pursued but never scored.
+    assert "mock-b" not in {r["example_id"] for r in records}
+
+    # The unrelated cone is exactly mock-b's cone at the same source layer —
+    # i.e. the donor really is the other *dev* example. (Asserted by identity
+    # against the recorded pursuit rather than by difference from mock-a's own
+    # cone: the 8-dim/32-vocab mock can legitimately pursue the same generators
+    # for both examples.)
+    donor_by_layer = {
+        p["layer"]: p["active_token_ids"]
+        for p in pursuits
+        if p["example_id"] == "mock-b"
+    }
+    assert donor_by_layer
+    for record in unrelated:
+        expected = donor_by_layer[record["source_layer"]]
+        assert record["vector_meta"]["generator_token_ids"] == expected

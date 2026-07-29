@@ -29,6 +29,14 @@ lens:
 benchmark:
   manifest_path: configs/generative_benchmark.json
   split: dev                  # heldout only after calibration is frozen
+  # Every main-benchmark target must tokenize to this many tokens under the
+  # pinned tokenizer, checked after the model loads (the count is a property of
+  # the checkpoint vocabulary, not of the manifest). A single-token target tests
+  # no multi-token scoring and forces prompt_only/constant/decaying to identical
+  # target log-probabilities; the run aborts rather than record that silently.
+  target_token_bounds:
+    min: 2
+    max: 6
 
 pursuit:
   k: 10
@@ -45,7 +53,15 @@ steering:
   layers: [14, 21, 28]
   # Requested perturbation-to-activation norm ratios; both requested and
   # measured ratios are recorded per condition.
-  strength_ratios: [0.25, 0.5, 1.0, 2.0]
+  #
+  # Weighted J-cone reconstructions are intrinsically small relative to the
+  # receiving residual (layer-21 pilot cones explain ~1e-5 of it), so the
+  # informative region is *low*: 0.01-0.25 brackets the natural cone scale that
+  # the `natural_scale` condition measures directly. Ratios >= 0.5 are retained
+  # only as stress tests — at that magnitude the injection dominates the
+  # residual, so an effect there says little about whether the cone means
+  # anything, and a *failure* there is not evidence against the hypothesis.
+  strength_ratios: [0.01, 0.03, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0]
   schedules:
     - kind: prompt_only
     - kind: constant
@@ -60,6 +76,10 @@ steering:
     - none
     - zero
     - full_cone
+    # The cone at its own norm, unscaled: records where the reconstruction
+    # naturally sits relative to the receiving activation (`natural_ratio`) and
+    # what it does there, independent of any chosen ratio.
+    - natural_scale
     - mass_subcone
     - unrelated_cone
     - random_matched_norm
@@ -76,8 +96,10 @@ decode:
   generate: true
   max_new_tokens: 12
   # Uncached decoding is the dominant cost; restrict generation to these
-  # strength ratios and schedule kinds (scoring covers the full sweep).
-  ratios: [0.5, 1.0]
+  # strength ratios and schedule kinds (scoring covers the full sweep). Weighted
+  # toward the informative low end, with 1.0 kept as a stress point.
+  # natural_scale carries ratio=null and always decodes.
+  ratios: [0.05, 0.1, 0.25, 1.0]
   schedule_kinds: [prompt_only, constant]
   # Decoding is expensive uncached; restrict full-battery generation to these
   # conditions (scoring always covers every condition).
@@ -85,6 +107,7 @@ decode:
     - none
     - zero
     - full_cone
+    - natural_scale
     - mass_subcone
     - manual_subcone
     - unrelated_cone

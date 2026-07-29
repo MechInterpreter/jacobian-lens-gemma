@@ -1,43 +1,13 @@
 {
-  "description": "Controlled multi-token concept benchmark for the generative J-cone steering validation. Each example names a concept whose surface form spans multiple tokenizer pieces. 'dev' is the calibration split (layer/strength search); 'heldout' is scored only after calibration is frozen. target_token_ids are resolved at run time against the pinned Gemma tokenizer (with the leading space as written in target_phrase) and recorded in every result; they are null here so the manifest stays tokenizer-revision-agnostic. control_prompt is a syntactically matched prompt evoking a different concept, used by the activation_diff condition. manual_subcone, when non-null, maps a source layer (as a string key) to indices into the example's active generator list (selection order); it names a candidate semantic group, not a proven binding.",
-  "version": 1,
+  "version": 2,
+  "description": "Controlled multi-token concept benchmark for the generative J-cone steering validation. Each example names a concept whose surface form spans multiple tokenizer pieces.\n\nHARD REQUIREMENT: every target must tokenize to 2-6 tokens under the pinned Gemma tokenizer. This is enforced at run time by jlens.generative.validate_target_tokens (after the model loads, since the count is a property of the checkpoint vocabulary) and can be checked cheaply beforehand with scripts/validate_benchmark_targets.py. A single-token target tests no multi-token scoring, and because every steering schedule injects identically at the prompt-final position and differs only at generated positions, it forces prompt_only / constant / decaying to identical target log-probabilities. The original 'dev-split-photosynthesis' did exactly this (it tokenized to the single id 93036), so single common words were replaced with rarer, morphologically complex forms that segment reliably.\n\nORDERING IS SIGNIFICANT: --smoke runs the first example of a split and borrows the second as its unrelated-cone donor, so each split leads with multi-word targets, which cannot collapse to one token. Unrelated-cone donors are always drawn from the same split (see jlens.generative.select_split_examples) - a development run must never borrow a held-out example's cone.\n\n'dev' is the calibration split (layer/strength search); 'heldout' is scored only after calibration is frozen. target_token_ids are resolved at run time against the pinned Gemma tokenizer (with the leading space as written in target_phrase) and recorded in every result together with the per-token strings; they are null here so the manifest stays tokenizer-revision-agnostic. control_prompt is a syntactically matched prompt evoking a different concept, used by the activation_diff condition. manual_subcone, when non-null, maps a source layer (as a string key) to indices into the example's active generator list (selection order); it names a candidate semantic group, not a proven binding.",
   "dev": [
     {
-      "example_id": "dev-split-photosynthesis",
-      "category": "split_word",
-      "source_prompt": "The process by which green plants use sunlight to make sugar from carbon dioxide and water is called",
-      "control_prompt": "The process by which cells break down glucose to release stored chemical energy is called",
-      "target_phrase": " photosynthesis",
-      "target_token_ids": null,
-      "extraction_position": -1,
-      "manual_subcone": null
-    },
-    {
-      "example_id": "dev-split-serendipity",
-      "category": "split_word",
-      "source_prompt": "The word for finding something wonderful purely by happy accident is",
-      "control_prompt": "The word for a feeling of deep sadness and loss is",
-      "target_phrase": " serendipity",
-      "target_token_ids": null,
-      "extraction_position": -1,
-      "manual_subcone": null
-    },
-    {
-      "example_id": "dev-compound-birdhouse",
-      "category": "compound_word",
-      "source_prompt": "A small wooden box mounted on a pole for birds to nest in is called a",
-      "control_prompt": "A small glass tank filled with water for keeping fish is called an",
-      "target_phrase": " birdhouse",
-      "target_token_ids": null,
-      "extraction_position": -1,
-      "manual_subcone": null
-    },
-    {
-      "example_id": "dev-compound-toothbrush",
-      "category": "compound_word",
-      "source_prompt": "The small brush with a long handle used to clean your teeth every morning is called a",
-      "control_prompt": "The small comb with a short handle used to tidy your hair every morning is called a",
-      "target_phrase": " toothbrush",
+      "example_id": "dev-phrase-solar-eclipse",
+      "category": "noun_phrase",
+      "source_prompt": "When the Moon passes between the Sun and the Earth and briefly blocks the sunlight, we call the event a",
+      "control_prompt": "When the Earth passes between the Sun and the Moon and casts its shadow on the Moon, we call the event a",
+      "target_phrase": " solar eclipse",
       "target_token_ids": null,
       "extraction_position": -1,
       "manual_subcone": null
@@ -53,6 +23,16 @@
       "manual_subcone": null
     },
     {
+      "example_id": "dev-phrase-climate-change",
+      "category": "noun_phrase",
+      "source_prompt": "The long-term warming of the planet driven by greenhouse gas emissions is known as",
+      "control_prompt": "The gradual increase in the general price level of goods and services is known as",
+      "target_phrase": " climate change",
+      "target_token_ids": null,
+      "extraction_position": -1,
+      "manual_subcone": null
+    },
+    {
       "example_id": "dev-entity-everest",
       "category": "named_entity",
       "source_prompt": "The tallest mountain above sea level on Earth, on the border of Nepal and Tibet, is",
@@ -63,21 +43,41 @@
       "manual_subcone": null
     },
     {
-      "example_id": "dev-phrase-solar-eclipse",
-      "category": "noun_phrase",
-      "source_prompt": "When the Moon passes between the Sun and the Earth and briefly blocks the sunlight, we call the event a",
-      "control_prompt": "When the Earth passes between the Sun and the Moon and casts its shadow on the Moon, we call the event a",
-      "target_phrase": " solar eclipse",
+      "example_id": "dev-split-bioluminescence",
+      "category": "split_word",
+      "source_prompt": "The emission of visible light by living organisms such as fireflies and deep-sea fish is called",
+      "control_prompt": "The emission of visible light by an object heated until it glows is called",
+      "target_phrase": " bioluminescence",
       "target_token_ids": null,
       "extraction_position": -1,
       "manual_subcone": null
     },
     {
-      "example_id": "dev-phrase-climate-change",
-      "category": "noun_phrase",
-      "source_prompt": "The long-term warming of the planet driven by greenhouse gas emissions is known as",
-      "control_prompt": "The gradual increase in the general price level of goods and services is known as",
-      "target_phrase": " climate change",
+      "example_id": "dev-split-onomatopoeia",
+      "category": "split_word",
+      "source_prompt": "The figure of speech in which a word imitates the natural sound it describes, like buzz or hiss, is called",
+      "control_prompt": "The figure of speech in which two unlike things are compared using like or as is called",
+      "target_phrase": " onomatopoeia",
+      "target_token_ids": null,
+      "extraction_position": -1,
+      "manual_subcone": null
+    },
+    {
+      "example_id": "dev-compound-wheelbarrow",
+      "category": "compound_word",
+      "source_prompt": "The small one-wheeled cart with two handles that a gardener pushes to carry soil is called a",
+      "control_prompt": "The small four-legged frame with a canvas seat that a painter sits on outdoors is called a",
+      "target_phrase": " wheelbarrow",
+      "target_token_ids": null,
+      "extraction_position": -1,
+      "manual_subcone": null
+    },
+    {
+      "example_id": "dev-compound-weathervane",
+      "category": "compound_word",
+      "source_prompt": "The rotating metal arrow mounted on a roof that shows which way the wind is blowing is called a",
+      "control_prompt": "The sealed glass tube mounted on a wall that shows how warm the air is is called a",
+      "target_phrase": " weathervane",
       "target_token_ids": null,
       "extraction_position": -1,
       "manual_subcone": null
@@ -85,41 +85,11 @@
   ],
   "heldout": [
     {
-      "example_id": "held-split-metamorphosis",
-      "category": "split_word",
-      "source_prompt": "The biological transformation of a caterpillar into a butterfly is called",
-      "control_prompt": "The biological process by which one cell divides into two identical cells is called",
-      "target_phrase": " metamorphosis",
-      "target_token_ids": null,
-      "extraction_position": -1,
-      "manual_subcone": null
-    },
-    {
-      "example_id": "held-split-cryptocurrency",
-      "category": "split_word",
-      "source_prompt": "A digital currency secured by cryptography and recorded on a decentralized ledger is called a",
-      "control_prompt": "A government-issued paper currency backed by a central bank is called a",
-      "target_phrase": " cryptocurrency",
-      "target_token_ids": null,
-      "extraction_position": -1,
-      "manual_subcone": null
-    },
-    {
-      "example_id": "held-compound-lighthouse",
-      "category": "compound_word",
-      "source_prompt": "The tall coastal tower with a rotating beacon that warns ships away from rocks is called a",
-      "control_prompt": "The tall city tower with a large clock face visible from the street is called a",
-      "target_phrase": " lighthouse",
-      "target_token_ids": null,
-      "extraction_position": -1,
-      "manual_subcone": null
-    },
-    {
-      "example_id": "held-compound-waterfall",
-      "category": "compound_word",
-      "source_prompt": "A place where a river plunges straight down over a rocky cliff is called a",
-      "control_prompt": "A place where a river splits into many slow channels before reaching the sea is called a",
-      "target_phrase": " waterfall",
+      "example_id": "held-phrase-black-hole",
+      "category": "noun_phrase",
+      "source_prompt": "A region of spacetime where gravity is so strong that not even light can escape is called a",
+      "control_prompt": "A rapidly spinning collapsed star that emits regular pulses of radio waves is called a",
+      "target_phrase": " black hole",
       "target_token_ids": null,
       "extraction_position": -1,
       "manual_subcone": null
@@ -135,6 +105,16 @@
       "manual_subcone": null
     },
     {
+      "example_id": "held-phrase-immune-system",
+      "category": "noun_phrase",
+      "source_prompt": "The network of white blood cells and antibodies that defends the body against infection is called the",
+      "control_prompt": "The network of nerves and neurons that carries signals between the brain and the body is called the",
+      "target_phrase": " immune system",
+      "target_token_ids": null,
+      "extraction_position": -1,
+      "manual_subcone": null
+    },
+    {
       "example_id": "held-entity-amazon",
       "category": "named_entity",
       "source_prompt": "The river carrying more water than any other on Earth, flowing through the South American rainforest, is the",
@@ -145,21 +125,41 @@
       "manual_subcone": null
     },
     {
-      "example_id": "held-phrase-black-hole",
-      "category": "noun_phrase",
-      "source_prompt": "A region of spacetime where gravity is so strong that not even light can escape is called a",
-      "control_prompt": "A rapidly spinning collapsed star that emits regular pulses of radio waves is called a",
-      "target_phrase": " black hole",
+      "example_id": "held-split-thermoregulation",
+      "category": "split_word",
+      "source_prompt": "The physiological process by which a mammal keeps its internal body temperature stable is called",
+      "control_prompt": "The physiological process by which a mammal keeps the salt concentration of its blood stable is called",
+      "target_phrase": " thermoregulation",
       "target_token_ids": null,
       "extraction_position": -1,
       "manual_subcone": null
     },
     {
-      "example_id": "held-phrase-immune-system",
-      "category": "noun_phrase",
-      "source_prompt": "The network of white blood cells and antibodies that defends the body against infection is called the",
-      "control_prompt": "The network of nerves and neurons that carries signals between the brain and the body is called the",
-      "target_phrase": " immune system",
+      "example_id": "held-split-electromagnetism",
+      "category": "split_word",
+      "source_prompt": "The branch of physics describing how electric charges and magnetic fields interact is called",
+      "control_prompt": "The branch of physics describing how heat flows and converts into mechanical work is called",
+      "target_phrase": " electromagnetism",
+      "target_token_ids": null,
+      "extraction_position": -1,
+      "manual_subcone": null
+    },
+    {
+      "example_id": "held-compound-candlestick",
+      "category": "compound_word",
+      "source_prompt": "The small ornamental metal holder with a socket for an upright wax taper is called a",
+      "control_prompt": "The small ornamental glass dish with a shallow well for burning scented oil is called a",
+      "target_phrase": " candlestick",
+      "target_token_ids": null,
+      "extraction_position": -1,
+      "manual_subcone": null
+    },
+    {
+      "example_id": "held-compound-thundercloud",
+      "category": "compound_word",
+      "source_prompt": "The towering dark grey mass of vapour that builds before a storm breaks is called a",
+      "control_prompt": "The thin wispy streak of ice crystals that drifts high in fair weather is called a",
+      "target_phrase": " thundercloud",
       "target_token_ids": null,
       "extraction_position": -1,
       "manual_subcone": null

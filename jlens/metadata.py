@@ -409,6 +409,10 @@ _GENERATIVE_SCHEMA: tuple[tuple[str, tuple[type, ...], bool], ...] = (
     ("lens.expect_n_prompts", (int,), True),
     ("benchmark.manifest_path", (str,), True),
     ("benchmark.split", (str,), True),
+    # Optional; defaults to jlens.generative.MIN/MAX_TARGET_TOKENS.
+    ("benchmark.target_token_bounds", (dict,), False),
+    ("benchmark.target_token_bounds.min", (int,), False),
+    ("benchmark.target_token_bounds.max", (int,), False),
     ("pursuit.k", (int,), True),
     ("pursuit.normalize_atoms", (bool,), True),
     ("pursuit.refine_steps", (int,), True),

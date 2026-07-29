@@ -47,6 +47,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from jlens.gemma4 import load_gemma4, verify_architecture
 from jlens.generative import (
     DEFAULT_AGREEMENT_TOP_K,
+    MAX_TARGET_TOKENS,
+    MIN_TARGET_TOKENS,
     NEUTRAL_PROMPTS,
     GenerativeError,
     SteeringSchedule,
@@ -63,8 +65,10 @@ from jlens.generative import (
     make_generative_record,
     per_example_verdicts,
     scale_to_ratio,
+    select_split_examples,
     summarize_by_condition,
     target_logprob,
+    validate_target_tokens,
 )
 from jlens.hooks import ActivationRecorder
 from jlens.interventions import append_record
@@ -343,15 +347,12 @@ def main() -> None:
     if not os.path.isabs(manifest_path):
         manifest_path = os.path.join(REPO_ROOT, manifest_path)
     manifest = load_benchmark(manifest_path)
-    examples = manifest[config["benchmark"]["split"]]
-    if args.limit_examples:
-        examples = examples[: args.limit_examples]
-    if len(examples) < 2:
-        # The unrelated-cone control borrows another example's cone; with one
-        # example we borrow from the *other* split's first example.
-        other = "heldout" if config["benchmark"]["split"] == "dev" else "dev"
-        examples = examples + manifest[other][:1]
-        examples[-1] = {**examples[-1], "_unrelated_donor_only": True}
+    # Donors for the unrelated-cone control come from the *same* split, always.
+    # A development run that borrowed a held-out example's cone would leak
+    # held-out information into calibration.
+    examples, donor_only_ids = select_split_examples(
+        manifest, config["benchmark"]["split"], limit=args.limit_examples
+    )
 
     fingerprint = config_fingerprint(config)
     timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S%f")
@@ -412,6 +413,28 @@ def main() -> None:
     gates = run_gates(model, config, run_dir)
 
     tokenizer = model.tokenizer
+    # Target token counts are a property of the pinned checkpoint's vocabulary,
+    # so this can only be checked now that the real tokenizer is loaded. Aborts
+    # the run (listing every offender) rather than silently scoring a
+    # single-token target, which tests no multi-token scoring and makes all
+    # three steering schedules produce identical target log-probabilities.
+    target_bounds = config["benchmark"].get("target_token_bounds") or {}
+    resolved_targets = validate_target_tokens(
+        examples,
+        tokenizer,
+        resolve=resolve_target_ids,
+        min_tokens=int(target_bounds.get("min", MIN_TARGET_TOKENS)),
+        max_tokens=int(target_bounds.get("max", MAX_TARGET_TOKENS)),
+    )
+    with open(
+        os.path.join(run_dir, "artifacts", "targets.json"), "w", encoding="utf-8"
+    ) as handle:
+        json.dump(resolved_targets, handle, indent=2, ensure_ascii=False)
+    logger.info(
+        "target tokenization validated for %d example(s): %s",
+        len(resolved_targets),
+        {k: v["n_target_tokens"] for k, v in resolved_targets.items()},
+    )
     eos_ids = [int(tokenizer.eos_token_id)] if tokenizer.eos_token_id is not None else []
     base_seed = int(config["eval"]["control_seed"])
     steering_layers = [int(layer) for layer in config["steering"]["layers"]]
@@ -525,13 +548,15 @@ def main() -> None:
         )
 
         for index, example in enumerate(examples):
-            if example.get("_unrelated_donor_only"):
+            if example["example_id"] in donor_only_ids:
                 continue
             entry = per_example[example["example_id"]]
+            # Donor is the next example in this same-split run list, so the
+            # unrelated cone never comes from the other split.
             donor = per_example[example_ids[(index + 1) % len(example_ids)]]
-            target_ids = example.get("target_token_ids") or resolve_target_ids(
-                tokenizer, example["target_phrase"]
-            )
+            target = resolved_targets[example["example_id"]]
+            target_ids = target["target_token_ids"]
+            target_strings = target["target_token_strings"]
             example_conditions = list(conditions)
             manual_map = example.get("manual_subcone") or {}
             if str(layer) in manual_map and "manual_subcone" not in example_conditions:
@@ -579,6 +604,7 @@ def main() -> None:
                     prompt_id=prompt_id,
                     prompt_ids_tensor=prompt_ids_tensor,
                     target_ids=target_ids,
+                    target_strings=target_strings,
                     norms=norms,
                     anchor_default=anchor_default,
                     log_p_baseline=log_p_baseline,
@@ -674,6 +700,7 @@ def main() -> None:
                         ),
                         kl_divergence=kl,
                         target_phrase=example["target_phrase"],
+                        target_token_strings=target_strings,
                         target_recovered_exact=exact,
                         target_recovered_substring=substring,
                         seed=seed,
@@ -737,6 +764,7 @@ def main() -> None:
                     kwargs: dict = {"seed": seed}
                     if condition in (
                         "full_cone",
+                        "natural_scale",
                         "shuffled",
                         "sign_reversed",
                         "wrong_layer",
@@ -808,6 +836,35 @@ def main() -> None:
                             injection_layer,
                             anchor if anchor is not None else anchor_default,
                         )
+                        # natural_scale is the cone at its own norm: no
+                        # rescaling, no ratio sweep. Its measured_ratio is the
+                        # observable that says where the cone naturally sits
+                        # relative to the receiving activation.
+                        if condition == "natural_scale":
+                            natural_norm = float(built.delta.float().norm())
+                            receiving = norms[norm_key]
+                            for schedule in schedules:
+                                emit(
+                                    condition,
+                                    delta=built.delta,
+                                    vector_meta=built.meta,
+                                    ratio=None,
+                                    schedule=schedule,
+                                    injection_layer=injection_layer,
+                                    anchor=anchor,
+                                    seed=seed,
+                                    scale_info={
+                                        "unscaled": True,
+                                        "natural_delta_norm": natural_norm,
+                                        "receiving_activation_norm": receiving,
+                                        "natural_ratio": (
+                                            natural_norm / receiving
+                                            if receiving
+                                            else None
+                                        ),
+                                    },
+                                )
+                            continue
                         for ratio in ratios:
                             scaled, scale_info = scale_to_ratio(
                                 built.delta,
