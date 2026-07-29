@@ -161,7 +161,42 @@ class HFLensModel:
         return encoded.input_ids.to(self.input_device)
 
     def forward(self, input_ids: torch.Tensor) -> Any:
+        """Run the bare text decoder (hooks-visible blocks).
+
+        .. warning::
+           HuggingFace ``*Model`` classes apply the final norm *themselves*
+           before returning, so ``forward(...).last_hidden_state`` is
+           **post**-final-norm. It is therefore not a residual-stream tensor
+           and must never be passed to :meth:`unembed` (that would apply the
+           final norm twice — see :meth:`logits_from_ids`). Read residual-stream
+           activations from :class:`~jlens.hooks.ActivationRecorder` hooks on
+           :attr:`layers` instead, and use :meth:`logits_from_ids` when you want
+           the logits the model itself would produce.
+        """
         return self._text_module(input_ids=input_ids, use_cache=False)
+
+    def logits_from_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
+        """Logits ``[batch, seq, vocab]`` through the model's **own** output
+        pathway — the exact tensor ``generate()`` decodes from.
+
+        This calls the full ``*ForCausalLM`` /
+        ``*ForConditionalGeneration`` forward, so the final norm, LM head, and
+        any logit post-processing (Gemma's ``final_logit_softcapping``) are
+        applied exactly once, by the library, in the library's order. Forward
+        hooks on :attr:`layers` still fire, so activation steering applies
+        normally.
+
+        Use this — not ``unembed(forward(ids).last_hidden_state)`` — whenever
+        the question is "what would the model predict here?". The latter
+        double-applies the final norm, which is not idempotent for a trained
+        RMSNorm gain and silently changes the argmax.
+        """
+        outputs = self._hf_model(
+            input_ids=input_ids,
+            attention_mask=torch.ones_like(input_ids),
+            use_cache=False,
+        )
+        return outputs.logits
 
     def unembed(self, residual: torch.Tensor) -> torch.Tensor:
         target_device = self._lm_head.weight.device

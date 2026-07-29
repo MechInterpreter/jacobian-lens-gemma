@@ -54,17 +54,32 @@ class MockBlock(nn.Module):
 
 
 class MockTextModel(nn.Module):
+    """Mirror of ``Gemma4TextModel``, including the detail that HuggingFace
+    text models apply the **final norm themselves** before returning
+    ``last_hidden_state`` (``modeling_gemma4.Gemma4TextModel.forward``). So
+    ``last_hidden_state`` here is post-norm, exactly as for the real model —
+    a mock that skipped this would hide double-norm bugs in callers.
+
+    The norm's affine parameters are deliberately randomized away from the
+    identity: a unit-gain RMSNorm/LayerNorm is idempotent, so with default
+    initialization applying the final norm twice is a no-op and the bug
+    becomes invisible. A trained checkpoint never has identity gain.
+    """
+
     def __init__(self, n_layers: int, d_model: int, vocab: int) -> None:
         super().__init__()
         self.embed_tokens = nn.Embedding(vocab, d_model)
         self.layers = nn.ModuleList(MockBlock(d_model) for _ in range(n_layers))
         self.norm = nn.LayerNorm(d_model)
+        with torch.no_grad():
+            self.norm.weight.normal_(mean=1.0, std=0.3)
+            self.norm.bias.normal_(mean=0.0, std=0.1)
 
     def forward(self, input_ids: torch.Tensor | None = None, use_cache: bool = False):
         hidden = self.embed_tokens(input_ids)
         for block in self.layers:
             hidden = block(hidden)
-        return SimpleNamespace(last_hidden_state=hidden)
+        return SimpleNamespace(last_hidden_state=self.norm(hidden))
 
 
 class MockGemma4Model(nn.Module):
@@ -86,6 +101,28 @@ class MockGemma4ForConditionalGeneration(nn.Module):
         self.lm_head = nn.Linear(d_model, vocab, bias=False)
         self.lm_head.weight = self.model.language_model.embed_tokens.weight  # tied
         self.config = MockGemma4Config(MockGemma4TextConfig(n_layers, d_model, vocab))
+
+    def forward(
+        self,
+        input_ids: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        use_cache: bool = False,
+        **_kwargs,
+    ):
+        """The model's own output pathway, mirroring
+        ``Gemma4ForConditionalGeneration.forward``: the text model's
+        (already-normed) ``last_hidden_state`` goes straight into ``lm_head``
+        with **no** further norm, then the final-logit softcap."""
+        hidden = self.model.language_model(
+            input_ids=input_ids, use_cache=use_cache
+        ).last_hidden_state
+        logits = self.lm_head(hidden)
+        cap = self.config.get_text_config().final_logit_softcapping
+        if cap is not None:
+            logits = logits / cap
+            logits = torch.tanh(logits)
+            logits = logits * cap
+        return SimpleNamespace(logits=logits)
 
 
 class MockTokenizer:

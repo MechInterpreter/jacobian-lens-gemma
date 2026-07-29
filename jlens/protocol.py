@@ -43,10 +43,30 @@ class LensModel(Protocol):
         """Run the residual stack on ``input_ids`` (no LM head). Must build an
         autograd graph through :attr:`layers` when grad is enabled, and must be
         deterministic across batch elements (eval mode, dropout off) — the
-        fitting estimator replicates the prompt along the batch axis."""
+        fitting estimator replicates the prompt along the batch axis.
+
+        Whether the returned ``last_hidden_state`` has the final norm applied
+        is implementation-defined (HuggingFace applies it; ``tests/tiny.py``
+        does not), so it is **not** a portable residual-stream tensor. Read
+        residual-stream activations from hooks on :attr:`layers`, and get
+        model predictions from :meth:`logits_from_ids`."""
         ...
 
     def unembed(self, residual: torch.Tensor) -> torch.Tensor:
-        """Map a residual-stream tensor ``[..., d_model]`` to logits
-        ``[..., vocab_size]`` (final norm + LM head)."""
+        """Map a **pre-final-norm** residual-stream tensor ``[..., d_model]``
+        to logits ``[..., vocab_size]`` (final norm + LM head).
+
+        The input must be a residual-stream activation, i.e. a block output as
+        captured by :class:`~jlens.hooks.ActivationRecorder`. Passing an
+        already-normed tensor (such as a HuggingFace
+        ``forward(...).last_hidden_state``) applies the final norm twice and
+        silently corrupts the logits."""
+        ...
+
+    def logits_from_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
+        """Logits ``[batch, seq, vocab]`` for ``input_ids`` through the model's
+        own output pathway — what the model itself would predict, with the
+        final norm, LM head, and any logit post-processing applied exactly
+        once. Forward hooks on :attr:`layers` must still fire, so activation
+        interventions apply."""
         ...

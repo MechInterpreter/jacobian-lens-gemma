@@ -11,6 +11,7 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -34,7 +35,12 @@ def _import_runner():
 
 class MockWithGenerate(MockGemma4ForConditionalGeneration):
     """Mock plus an independent greedy ``generate`` (uncached loop through
-    the same modules) for the runner's greedy-equivalence gate."""
+    the same modules) for the runner's greedy-equivalence gate.
+
+    Decodes from ``self(...)``, i.e. the model's own output pathway, the same
+    way real ``generate()`` does — so the gate compares two genuinely
+    equivalent greedy paths rather than two different readouts.
+    """
 
     def generate(
         self,
@@ -46,19 +52,24 @@ class MockWithGenerate(MockGemma4ForConditionalGeneration):
         num_beams=1,
         use_cache=True,
         eos_token_id=None,
+        return_dict_in_generate=False,
+        output_logits=False,
     ):
         assert do_sample is False
         assert num_beams == 1
         assert use_cache is False
         ids = input_ids
-        cap = self.config.get_text_config().final_logit_softcapping
+        step_logits = []
         for _ in range(max_new_tokens):
             with torch.no_grad():
-                hidden = self.model.language_model(input_ids=ids).last_hidden_state
-                logits = self.lm_head(self.model.language_model.norm(hidden))[0, -1]
-                logits = cap * torch.tanh(logits / cap)
-            next_id = int(logits.argmax())
+                logits = self(input_ids=ids, use_cache=False).logits[:, -1]
+            step_logits.append(logits)
+            next_id = int(logits[0].argmax())
             ids = torch.cat([ids, torch.tensor([[next_id]])], dim=1)
+        if return_dict_in_generate:
+            return SimpleNamespace(
+                sequences=ids, logits=tuple(step_logits) if output_logits else None
+            )
         return ids
 
 
@@ -95,6 +106,8 @@ class MockSamplingDefaultModel(MockGemma4ForConditionalGeneration):
         num_beams=None,
         use_cache=None,
         eos_token_id=None,
+        return_dict_in_generate=False,
+        output_logits=False,
     ):
         resolved_do_sample = (
             self.generation_config.do_sample if do_sample is None else do_sample
@@ -109,14 +122,17 @@ class MockSamplingDefaultModel(MockGemma4ForConditionalGeneration):
         assert resolved_num_beams == 1, "gate must force single-beam decoding"
         assert resolved_use_cache is False, "gate must force uncached decoding"
         ids = input_ids
-        cap = self.config.get_text_config().final_logit_softcapping
+        step_logits = []
         for _ in range(max_new_tokens):
             with torch.no_grad():
-                hidden = self.model.language_model(input_ids=ids).last_hidden_state
-                logits = self.lm_head(self.model.language_model.norm(hidden))[0, -1]
-                logits = cap * torch.tanh(logits / cap)
-            next_id = int(logits.argmax())
+                logits = self(input_ids=ids, use_cache=False).logits[:, -1]
+            step_logits.append(logits)
+            next_id = int(logits[0].argmax())
             ids = torch.cat([ids, torch.tensor([[next_id]])], dim=1)
+        if return_dict_in_generate:
+            return SimpleNamespace(
+                sequences=ids, logits=tuple(step_logits) if output_logits else None
+            )
         return ids
 
 
@@ -139,6 +155,7 @@ def test_gates_force_greedy_despite_sampling_default_generation_config(tmp_path)
     (run_dir / "artifacts").mkdir(parents=True)
     gates = runner.run_gates(model, config, str(run_dir))
     assert gates["greedy_equivalence_ok"] is True
+    assert gates["greedy_first_step_logprobs_ok"] is True
 
 
 def _mock_load_gemma4(*args, **kwargs):
@@ -287,6 +304,7 @@ def test_runner_end_to_end_on_mock(experiment, monkeypatch):
     gates = json.loads((artifacts / "gates.json").read_text(encoding="utf-8"))
     assert gates["zero_parity_ok"] is True
     assert gates["greedy_equivalence_ok"] is True
+    assert gates["greedy_first_step_logprobs_ok"] is True
 
     records = [
         json.loads(line)

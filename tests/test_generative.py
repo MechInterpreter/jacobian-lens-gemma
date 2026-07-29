@@ -85,7 +85,7 @@ def test_zero_delta_injection_reproduces_baseline_exactly():
     model = _model()
     ids = model.encode("steering parity probe")
     with torch.no_grad():
-        baseline = model.unembed(model.forward(ids).last_hidden_state)
+        baseline = model.logits_from_ids(ids)
     with steering_injection(
         model.layers,
         2,
@@ -94,7 +94,7 @@ def test_zero_delta_injection_reproduces_baseline_exactly():
         prompt_len=ids.shape[1],
     ):
         with torch.no_grad():
-            hooked = model.unembed(model.forward(ids).last_hidden_state)
+            hooked = model.logits_from_ids(ids)
     assert torch.equal(baseline, hooked)
 
 
@@ -184,12 +184,16 @@ def test_injection_validates_layer_and_delta():
 
 
 def _reference_greedy(model, ids: torch.Tensor, steps: int) -> list[int]:
-    """Independent uncached greedy loop (no jlens.generative code paths)."""
+    """Independent uncached greedy loop (no jlens.generative code paths).
+
+    Reads logits from the model's own head, which is what the model would
+    actually predict — not ``unembed(forward(...).last_hidden_state)``, which
+    double-applies the final norm.
+    """
     out = []
     for _ in range(steps):
         with torch.no_grad():
-            hidden = model.forward(ids).last_hidden_state
-            logits = model.unembed(hidden)[0, -1].float()
+            logits = model.logits_from_ids(ids)[0, -1].float()
         next_id = int(torch.log_softmax(logits, dim=-1).argmax())
         out.append(next_id)
         ids = torch.cat([ids, torch.tensor([[next_id]])], dim=1)
@@ -263,8 +267,7 @@ def test_target_logprob_matches_stepwise_forced_decoding():
             prompt_len=ids.shape[1],
         ):
             with torch.no_grad():
-                hidden = model.forward(seq).last_hidden_state
-                logits = model.unembed(hidden)[0, -1].float()
+                logits = model.logits_from_ids(seq)[0, -1].float()
         stepwise.append(float(torch.log_softmax(logits, dim=-1)[token]))
         seq = torch.cat([seq, torch.tensor([[token]])], dim=1)
     assert scored["per_token_logprobs"] == pytest.approx(stepwise, abs=1e-5)

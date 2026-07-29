@@ -18,7 +18,8 @@ teacher-forced multi-token target log-probabilities, KL from baseline, and
 
 Hard gates before any steering: architecture verification, lens fingerprint,
 zero-vector logit parity, and manual-uncached vs ``generate()`` greedy
-equivalence. Any gate failure aborts the run.
+equivalence (both decoded tokens and first-step log-prob values). Any gate
+failure aborts the run.
 
 Outputs (in the timestamped run directory): ``run_started.json``,
 ``resolved_config.json``, ``artifacts/gates.json``,
@@ -49,6 +50,7 @@ from jlens.generative import (
     GenerativeError,
     SteeringSchedule,
     SteeringSpec,
+    _next_token_logprobs,
     build_condition_vector,
     choose_calibration,
     first_token_distribution,
@@ -153,13 +155,26 @@ def receiving_norm(model, input_ids: torch.Tensor, layer: int, position: int) ->
 
 
 def run_gates(model, config: dict, run_dir: str) -> dict:
-    """Zero-parity and greedy-equivalence gates; abort on failure."""
+    """Zero-parity and greedy-equivalence gates; abort on failure.
+
+    Three checks, all reading logits through the model's own head rather than
+    ``unembed(forward(ids).last_hidden_state)`` — the latter applies the final
+    norm twice (HuggingFace text models norm before returning
+    ``last_hidden_state``) and scores a path the model never takes:
+
+    1. Zero-delta parity: a zero steering vector must reproduce baseline logits.
+    2. Greedy token equivalence: the manual uncached decoder and a fully
+       determinized ``generate()`` must emit the same tokens.
+    3. First-step log-prob agreement: the decoder's own readout must match
+       ``generate()``'s logits numerically, so (2) cannot pass on a coincidental
+       argmax tie while the two paths actually disagree.
+    """
     tol = float(config["parity"]["max_abs_logit_diff_tol"])
     prompt = NEUTRAL_PROMPTS[config["neutral_prompts"][0]]
     ids = model.encode(prompt)
     layer = int(config["steering"]["layers"][0])
     with torch.no_grad():
-        baseline = model.unembed(model.forward(ids).last_hidden_state)[0, -1].float()
+        baseline = model.logits_from_ids(ids)[0, -1].float()
     spec = SteeringSpec(
         layer=layer,
         delta=torch.zeros(model.d_model),
@@ -167,7 +182,7 @@ def run_gates(model, config: dict, run_dir: str) -> dict:
     )
     with spec.context(model.layers, prompt_len=ids.shape[1]):
         with torch.no_grad():
-            hooked = model.unembed(model.forward(ids).last_hidden_state)[0, -1].float()
+            hooked = model.logits_from_ids(ids)[0, -1].float()
     max_diff = float((baseline - hooked).abs().max())
 
     n_check = 8
@@ -180,7 +195,8 @@ def run_gates(model, config: dict, run_dir: str) -> dict:
     # to do_sample=True, top_k=64, top_p=0.95) must be fully overridden here,
     # not just do_sample: num_beams and use_cache also have to match the
     # manual decoder (uncached, single sequence) or this is not actually
-    # testing greedy equivalence.
+    # testing greedy equivalence. output_logits gives us generate()'s own
+    # pre-processing logits so the gate can compare values, not just argmax.
     generated = hf_model.generate(
         input_ids=ids,
         attention_mask=attention_mask,
@@ -189,10 +205,28 @@ def run_gates(model, config: dict, run_dir: str) -> dict:
         num_beams=1,
         use_cache=False,
         eos_token_id=eos_ids or None,
+        return_dict_in_generate=True,
+        output_logits=True,
     )
-    hf_tokens = [int(t) for t in generated[0, ids.shape[1] :]]
+    sequences = generated.sequences
+    hf_tokens = [int(t) for t in sequences[0, ids.shape[1] :]]
     manual_tokens = manual.token_ids[: len(hf_tokens)]
     greedy_equal = manual_tokens == hf_tokens[: len(manual_tokens)]
+
+    # Value-level check on the first step: argmax agreement alone can pass by
+    # luck (a near-tie, or a degenerate distribution with one dominant token)
+    # while the two paths compute materially different logits. Read the manual
+    # side through _next_token_logprobs — the decoder's *own* readout — so this
+    # gate constrains the path greedy_decode actually takes rather than
+    # re-deriving a correct one alongside it. Compared in log-prob space
+    # because that is what the decoder ranks on.
+    with torch.no_grad():
+        manual_first = _next_token_logprobs(model, ids)[-1].float()
+    generate_first = torch.log_softmax(
+        generated.logits[0][0].float().to(manual_first.device), dim=-1
+    )
+    first_step_diff = float((manual_first - generate_first).abs().max())
+    first_step_ok = first_step_diff <= tol
 
     gates = {
         "zero_parity_max_abs_logit_diff": max_diff,
@@ -201,6 +235,10 @@ def run_gates(model, config: dict, run_dir: str) -> dict:
         "greedy_manual_tokens": manual.token_ids,
         "greedy_generate_tokens": hf_tokens,
         "greedy_equivalence_ok": greedy_equal,
+        # Log-prob space (shift-invariant, which is what decoding ranks on);
+        # reuses the parity tolerance as its threshold.
+        "greedy_first_step_max_abs_logprob_diff": first_step_diff,
+        "greedy_first_step_logprobs_ok": first_step_ok,
     }
     with open(
         os.path.join(run_dir, "artifacts", "gates.json"), "w", encoding="utf-8"
@@ -215,7 +253,18 @@ def run_gates(model, config: dict, run_dir: str) -> dict:
             f"greedy equivalence gate failed: manual {manual_tokens} vs "
             f"generate() {hf_tokens}"
         )
-    logger.info("gates passed: parity %.2g, greedy tokens match", max_diff)
+    if not gates["greedy_first_step_logprobs_ok"]:
+        raise GenerativeError(
+            f"greedy first-step log-prob gate failed: decode readout vs "
+            f"generate() max |diff| {first_step_diff} > {tol}; the decode path "
+            f"and the model's own head disagree numerically even if the argmax "
+            f"happens to match"
+        )
+    logger.info(
+        "gates passed: parity %.2g, greedy tokens match, first-step logprobs %.2g",
+        max_diff,
+        first_step_diff,
+    )
     return gates
 
 
@@ -783,7 +832,9 @@ def main() -> None:
         f"- layers: {steering_layers}, ratios: {ratios}",
         f"- records: {len(all_records)}",
         f"- gates: parity diff {gates['zero_parity_max_abs_logit_diff']:.3g}, "
-        f"greedy equivalence {gates['greedy_equivalence_ok']}",
+        f"greedy equivalence {gates['greedy_equivalence_ok']}, "
+        f"first-step logprob diff "
+        f"{gates['greedy_first_step_max_abs_logprob_diff']:.3g}",
         "",
         "## Per-condition summary",
         "",

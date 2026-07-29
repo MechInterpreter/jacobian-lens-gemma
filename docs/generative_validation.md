@@ -50,7 +50,21 @@ permutation), `sign_reversed`, `wrong_layer`, `wrong_position`,
 Hard gates before any steering (any failure aborts): architecture
 verification, lens SHA-256 fingerprint, zero-vector logit parity within
 `parity.max_abs_logit_diff_tol`, and manual-uncached vs `generate()` greedy
-equivalence. KV-cache optimization is deliberately **not** implemented yet;
+equivalence — both the decoded tokens and the first-step log-probabilities
+(within the same tolerance), so the gate cannot pass on a coincidental argmax
+tie. The reference `generate()` call explicitly sets `do_sample=False`,
+`num_beams=1`, `use_cache=False` and matching EOS handling, because the
+Gemma 4 E4B-it checkpoint's stored generation config defaults to
+`do_sample=True, top_k=64, top_p=0.95`.
+
+All logits in these gates — and in every recorded measurement — are read
+through the model's own head (`LensModel.logits_from_ids`). Note that
+HuggingFace text models apply the final norm *before* returning
+`last_hidden_state`, so `unembed(forward(ids).last_hidden_state)` would apply
+the final norm twice; `unembed` is for residual-stream activations captured
+from block hooks, not for `last_hidden_state`.
+
+KV-cache optimization is deliberately **not** implemented yet;
 it may be added only after these uncached results stand.
 
 Go/no-go (held-out split): on a clear majority of examples the correct cone

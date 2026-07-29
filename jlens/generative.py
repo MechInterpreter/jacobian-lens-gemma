@@ -281,9 +281,20 @@ class SteeringSpec:
 
 def _next_token_logprobs(model, input_ids: torch.Tensor) -> torch.Tensor:
     """Full-sequence next-token log-probabilities ``[seq, vocab]`` through the
-    model's native output pathway (softcap included when present)."""
-    hidden = model.forward(input_ids).last_hidden_state
-    logits = model.unembed(hidden)[0].float()
+    model's native output pathway (softcap included when present).
+
+    Goes through :meth:`~jlens.protocol.LensModel.logits_from_ids` — the
+    model's own head — so these log-probabilities are exactly the ones
+    ``generate()`` decodes from. Steering hooks live on the residual blocks
+    and still fire inside this call.
+
+    This must **not** be rewritten as ``unembed(forward(ids).last_hidden_state)``:
+    HuggingFace text models apply the final norm before returning
+    ``last_hidden_state``, so that form applies the final norm twice. A trained
+    RMSNorm gain makes the norm non-idempotent, which shifts the logits enough
+    to change the argmax — it silently breaks both decoding and target scoring.
+    """
+    logits = model.logits_from_ids(input_ids)[0].float()
     return torch.log_softmax(logits, dim=-1)
 
 
