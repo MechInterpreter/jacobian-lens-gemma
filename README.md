@@ -256,6 +256,18 @@ the causal-steering and multimodal-capture notebooks for the next real runs.
 No causal or multimodal measurements exist yet; the UI says so explicitly
 until the runs complete.
 
+The **generative steering validation** (branch
+`experiment/generative-jlens-validation`) is a go/no-go experiment asking
+whether weighted reconstructions of active J-space generators, injected into
+neutral verbalization prompts, can make Gemma's own decoder produce
+multi-token concepts more specifically than matched controls (including raw
+activation transplantation). Backend in `jlens/generative.py`, runner in
+`scripts/run_generative_validation.py`, benchmark in
+`configs/generative_benchmark.json`; protocol, control battery, and the
+verified Colab CLI workflow are documented in
+**[docs/generative_validation.md](docs/generative_validation.md)**. No GPU
+measurements exist yet on this branch.
+
 ## What is inherited vs new
 
 **Inherited unchanged** (upstream `jlens` core — no modifications):

@@ -206,9 +206,46 @@ paths) and 24 frontend tests (Vitest + RTL); full CPU suite green with no
 network access. Layer 21 remains documented history — visible in the
 explorer as data, not a workstream.
 
+## 2026-07-29 — Generative J-cone steering validation scaffold
+
+Commits [`7c17547`](https://github.com/MechInterpreter/jacobian-lens-gemma/commit/7c17547),
+[`b4e110e`](https://github.com/MechInterpreter/jacobian-lens-gemma/commit/b4e110e),
+and [`347cd14`](https://github.com/MechInterpreter/jacobian-lens-gemma/commit/347cd14)
+(branch `experiment/generative-jlens-validation`) built the go/no-go
+experiment asking whether weighted reconstructions `q_C = Σ a_i v_i` of
+active J-space generators, injected into neutral verbalization prompts at
+the established `block_output` site, make Gemma's native decoder produce
+multi-token concepts more specifically than matched controls:
+
+- `jlens/generative.py` — steering schedules (prompt-only / constant /
+  exponentially decaying reinjection), a schedule-weighted multi-position
+  injection hook (float32 math, exact zero-delta parity, removal on every
+  exit path), manual **uncached** greedy decoding, teacher-forced
+  multi-token target scoring, the 13-condition vector battery
+  (zero / full cone / coefficient-mass subcones at 60–80% / manual
+  subcones / unrelated cone / random matched-norm / shuffled /
+  sign-reversed / wrong-layer / wrong-position / raw activation /
+  activation-diff), norm-relative strength scaling, and the aggregation +
+  go/no-go verdict machinery. Unimplemented paths raise `GenerativeError`.
+- `configs/generative_benchmark.json` — 16 multi-token concepts (split
+  words, compounds, named entities, noun phrases) in dev/held-out splits
+  with matched control prompts.
+- `scripts/run_generative_validation.py` — gated runner (architecture +
+  lens-fingerprint + zero-parity + manual-vs-`generate()` greedy
+  equivalence gates), fresh per-example k=10 pursuit per steering layer
+  (14/21/28), fsynced JSONL records, per-condition summaries, dev-split
+  calibration, and the go/no-go report.
+- `docs/generative_validation.md` — protocol, metrics, and the **verified**
+  Google Colab CLI workflow (v0.6.0 syntax read from the installed package;
+  native-Windows `termios` limitation documented with the notebook
+  fallback).
+
 ## Next planned milestone
 
 User-run L4 sessions: the causal smoke run, then the multimodal capture;
 merge both bundles into the explorer, capture screenshots, and switch
 resume packaging from the pre-completion bullet to the full bullet
 (docs/resume_packaging.md gates this on the merged measured bundles).
+After those, the generative validation GPU run (`--smoke`, then dev
+calibration, then the frozen held-out evaluation) per
+docs/generative_validation.md.
