@@ -107,16 +107,28 @@ class MockGemma4ForConditionalGeneration(nn.Module):
         input_ids: torch.Tensor | None = None,
         attention_mask: torch.Tensor | None = None,
         use_cache: bool = False,
+        logits_to_keep: int | torch.Tensor = 0,
         **_kwargs,
     ):
         """The model's own output pathway, mirroring
         ``Gemma4ForConditionalGeneration.forward``: the text model's
         (already-normed) ``last_hidden_state`` goes straight into ``lm_head``
-        with **no** further norm, then the final-logit softcap."""
+        with **no** further norm, then the final-logit softcap.
+
+        ``logits_to_keep`` is accepted and applied with the same slice-before-
+        the-head semantics as the real model, so that the mock exercises the
+        path ``generate()`` actually drives (``GenerationMixin`` sets it to 1)
+        and ``HFLensModel.supports_logits_to_keep`` detects it.
+        """
         hidden = self.model.language_model(
             input_ids=input_ids, use_cache=use_cache
         ).last_hidden_state
-        logits = self.lm_head(hidden)
+        slice_indices = (
+            slice(-logits_to_keep, None)
+            if isinstance(logits_to_keep, int)
+            else logits_to_keep
+        )
+        logits = self.lm_head(hidden[:, slice_indices, :])
         cap = self.config.get_text_config().final_logit_softcapping
         if cap is not None:
             logits = logits / cap

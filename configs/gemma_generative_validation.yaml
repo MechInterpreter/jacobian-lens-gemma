@@ -97,7 +97,23 @@ eval:
   control_seed: 1234
 
 parity:
+  # Zero-delta logit parity: a zero steering vector must reproduce baseline
+  # logits. Same path on both sides, so this is a near-exact check.
   max_abs_logit_diff_tol: 0.05
+  # Greedy-equivalence gate (manual uncached decode vs a determinized
+  # generate()). Token equality is asserted unconditionally; these bound the
+  # first-step distributions. Deliberately NOT a max over the 262k vocabulary:
+  # log_softmax turns a fixed logit perturbation into a similar log-prob gap at
+  # every token, so that statistic is reported by tokens with ~1e-13 probability
+  # and sits at the bfloat16 quantization floor (one ULP near Gemma's |logit|=30
+  # softcap bound is already 0.0625). It is recorded as a diagnostic instead.
+  greedy_top_k: 10
+  # Worst log-prob gap over the union of both sides' top-k — the only tokens a
+  # greedy decode or a target score can be sensitive to.
+  max_abs_logprob_diff_topk_tol: 0.05
+  # 0.5 * sum |p_a - p_b| over the full vocabulary: one bounded whole-
+  # distribution number that no single tail outlier can dominate.
+  max_total_variation_tol: 0.02
 
 paths:
   output_dir: artifacts/generative_validation

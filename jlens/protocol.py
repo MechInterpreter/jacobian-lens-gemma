@@ -63,10 +63,18 @@ class LensModel(Protocol):
         silently corrupts the logits."""
         ...
 
-    def logits_from_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
-        """Logits ``[batch, seq, vocab]`` for ``input_ids`` through the model's
-        own output pathway — what the model itself would predict, with the
-        final norm, LM head, and any logit post-processing applied exactly
-        once. Forward hooks on :attr:`layers` must still fire, so activation
-        interventions apply."""
+    def logits_from_ids(
+        self, input_ids: torch.Tensor, *, n_last: int | None = None
+    ) -> torch.Tensor:
+        """Logits for ``input_ids`` through the model's own output pathway —
+        what the model itself would predict, with the final norm, LM head, and
+        any logit post-processing applied exactly once. Forward hooks on
+        :attr:`layers` must still fire, so activation interventions apply.
+
+        ``n_last`` restricts the result to the final ``n_last`` positions,
+        returning ``[batch, n_last, vocab]`` (``None`` gives the full
+        ``[batch, seq, vocab]``). Implementations should run the LM head on the
+        corresponding hidden-state slice rather than slicing afterwards: that is
+        what ``generate()`` does, and matching the head's GEMM shape is what
+        makes the two paths numerically equivalent in reduced precision."""
         ...

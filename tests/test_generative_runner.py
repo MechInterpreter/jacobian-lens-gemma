@@ -62,7 +62,10 @@ class MockWithGenerate(MockGemma4ForConditionalGeneration):
         step_logits = []
         for _ in range(max_new_tokens):
             with torch.no_grad():
-                logits = self(input_ids=ids, use_cache=False).logits[:, -1]
+                # generate() sets logits_to_keep=1; mirror it exactly.
+                logits = self(
+                    input_ids=ids, use_cache=False, logits_to_keep=1
+                ).logits[:, -1]
             step_logits.append(logits)
             next_id = int(logits[0].argmax())
             ids = torch.cat([ids, torch.tensor([[next_id]])], dim=1)
@@ -125,7 +128,10 @@ class MockSamplingDefaultModel(MockGemma4ForConditionalGeneration):
         step_logits = []
         for _ in range(max_new_tokens):
             with torch.no_grad():
-                logits = self(input_ids=ids, use_cache=False).logits[:, -1]
+                # generate() sets logits_to_keep=1; mirror it exactly.
+                logits = self(
+                    input_ids=ids, use_cache=False, logits_to_keep=1
+                ).logits[:, -1]
             step_logits.append(logits)
             next_id = int(logits[0].argmax())
             ids = torch.cat([ids, torch.tensor([[next_id]])], dim=1)
@@ -155,7 +161,7 @@ def test_gates_force_greedy_despite_sampling_default_generation_config(tmp_path)
     (run_dir / "artifacts").mkdir(parents=True)
     gates = runner.run_gates(model, config, str(run_dir))
     assert gates["greedy_equivalence_ok"] is True
-    assert gates["greedy_first_step_logprobs_ok"] is True
+    assert gates["greedy_first_step_ok"] is True
 
 
 def _mock_load_gemma4(*args, **kwargs):
@@ -304,7 +310,7 @@ def test_runner_end_to_end_on_mock(experiment, monkeypatch):
     gates = json.loads((artifacts / "gates.json").read_text(encoding="utf-8"))
     assert gates["zero_parity_ok"] is True
     assert gates["greedy_equivalence_ok"] is True
-    assert gates["greedy_first_step_logprobs_ok"] is True
+    assert gates["greedy_first_step_ok"] is True
 
     records = [
         json.loads(line)

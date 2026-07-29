@@ -50,19 +50,63 @@ permutation), `sign_reversed`, `wrong_layer`, `wrong_position`,
 Hard gates before any steering (any failure aborts): architecture
 verification, lens SHA-256 fingerprint, zero-vector logit parity within
 `parity.max_abs_logit_diff_tol`, and manual-uncached vs `generate()` greedy
-equivalence — both the decoded tokens and the first-step log-probabilities
-(within the same tolerance), so the gate cannot pass on a coincidental argmax
-tie. The reference `generate()` call explicitly sets `do_sample=False`,
-`num_beams=1`, `use_cache=False` and matching EOS handling, because the
-Gemma 4 E4B-it checkpoint's stored generation config defaults to
+equivalence. The reference `generate()` call explicitly sets
+`do_sample=False`, `num_beams=1`, `use_cache=False` and matching EOS handling,
+because the Gemma 4 E4B-it checkpoint's stored generation config defaults to
 `do_sample=True, top_k=64, top_p=0.95`.
 
-All logits in these gates — and in every recorded measurement — are read
-through the model's own head (`LensModel.logits_from_ids`). Note that
-HuggingFace text models apply the final norm *before* returning
-`last_hidden_state`, so `unembed(forward(ids).last_hidden_state)` would apply
-the final norm twice; `unembed` is for residual-stream activations captured
-from block hooks, not for `last_hidden_state`.
+### Reading logits the way the model does
+
+Every logit in these gates — and in every recorded measurement — is read
+through `LensModel.logits_from_ids`, the model's own head. Two distinct
+mistakes are ruled out there, both of which produced first-step mismatches on
+the real checkpoint:
+
+1. **Double final norm.** HuggingFace text models apply the final norm
+   *before* returning `last_hidden_state`, so
+   `unembed(forward(ids).last_hidden_state)` applies it twice. `unembed` is for
+   residual-stream activations captured from block hooks, not for
+   `last_hidden_state`. This changed the argmax outright.
+2. **LM-head GEMM shape.** `GenerationMixin` sets `logits_to_keep=1` for any
+   model whose forward accepts it, and Gemma 4 slices the hidden state *before*
+   the LM head. So `generate()` runs a `[1, 1, d_model]` head while a
+   full-sequence read runs `[1, seq, d_model]`. Same math, different reduction
+   order — bit-identical results once matched (verified in float32), but a
+   0.125 first-step log-probability gap in BF16 on an L4 when not matched.
+   `logits_from_ids(ids, n_last=...)` forwards `logits_to_keep`, and decoding
+   and scoring request exactly the positions they need.
+
+### Why the greedy gate is not a max over the vocabulary
+
+The gate asserts **token equality** unconditionally, plus first-step
+distribution agreement: argmax, top-k set, top-k log-probabilities
+(`parity.max_abs_logprob_diff_topk_tol`), and total variation
+(`parity.max_total_variation_tol`). The max-over-vocabulary log-probability
+difference is **recorded as a diagnostic but not gated**.
+
+That is a deliberate, measured choice, not a loosened tolerance. `log_softmax`
+turns a fixed absolute logit perturbation into a comparable log-probability
+gap at *every* token, so on a 262k-token vocabulary the maximum is reported by
+the deepest tail. Simulating a pure BF16 quantization floor on a realistic
+softcapped Gemma 4 distribution: the worst-offending token had probability
+8e-14 (rank 262136 of 262144), only 3 tokens exceeded a 0.05 gap and together
+they held 1.95e-13 of the probability mass, while the argmax and the whole
+top-10 were unchanged and total variation was 0.005. One BF16 ULP near
+Gemma's `|logit| = 30` softcap bound is already 0.0625, and the observed 0.125
+is exactly two such ULP — i.e. at the representation floor.
+
+So a max-over-vocabulary threshold measures BF16 tail noise, not whether two
+decoding paths agree. Token equality plus top-k plus total variation
+constrains everything a decode or a target score can be sensitive to, and
+cannot be dominated by a single tail outlier.
+
+Two other candidate fixes were tested and **rejected**. Computing the final
+hidden state and LM head in float32 does reduce quantization error, but
+`generate()` still runs the head in BF16, so upcasting only one side makes the
+two paths *less* equivalent — the goal is to match the model's own pathway, not
+to compute a better one. Enabling `torch.use_deterministic_algorithms` does not
+help either: both sides already call the same op, and determinism does not make
+two *different* GEMM shapes accumulate alike. Matching the shape is the fix.
 
 KV-cache optimization is deliberately **not** implemented yet;
 it may be added only after these uncached results stand.

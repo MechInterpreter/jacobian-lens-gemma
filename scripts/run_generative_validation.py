@@ -46,6 +46,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from jlens.gemma4 import load_gemma4, verify_architecture
 from jlens.generative import (
+    DEFAULT_AGREEMENT_TOP_K,
     NEUTRAL_PROMPTS,
     GenerativeError,
     SteeringSchedule,
@@ -53,6 +54,7 @@ from jlens.generative import (
     _next_token_logprobs,
     build_condition_vector,
     choose_calibration,
+    compare_next_token_distributions,
     first_token_distribution,
     gonogo_report,
     greedy_decode,
@@ -157,24 +159,44 @@ def receiving_norm(model, input_ids: torch.Tensor, layer: int, position: int) ->
 def run_gates(model, config: dict, run_dir: str) -> dict:
     """Zero-parity and greedy-equivalence gates; abort on failure.
 
-    Three checks, all reading logits through the model's own head rather than
+    Every logit here is read through the model's own head rather than
     ``unembed(forward(ids).last_hidden_state)`` — the latter applies the final
     norm twice (HuggingFace text models norm before returning
-    ``last_hidden_state``) and scores a path the model never takes:
+    ``last_hidden_state``) and scores a path the model never takes. All reads
+    also pass ``n_last=1``, matching the ``logits_to_keep=1`` that
+    ``GenerationMixin`` sets, so the LM head runs the same GEMM shape as
+    ``generate()``; a full-sequence head accumulates in a different order and in
+    bfloat16 that alone exceeds any reasonable tolerance.
+
+    Checks:
 
     1. Zero-delta parity: a zero steering vector must reproduce baseline logits.
     2. Greedy token equivalence: the manual uncached decoder and a fully
        determinized ``generate()`` must emit the same tokens.
-    3. First-step log-prob agreement: the decoder's own readout must match
-       ``generate()``'s logits numerically, so (2) cannot pass on a coincidental
-       argmax tie while the two paths actually disagree.
+    3. First-step distribution agreement: the decoder's own readout must agree
+       with ``generate()``'s logits on the argmax, on the top-k ranking, on
+       top-k log-probabilities, and in total variation — so (2) cannot pass on a
+       coincidental argmax tie while the two paths actually disagree.
+
+    (3) deliberately does **not** gate on a max-over-vocabulary log-probability
+    difference. See :func:`jlens.generative.compare_next_token_distributions`:
+    that statistic is reported by the deepest tail of a 262k-token vocabulary,
+    where it sits at the bfloat16 quantization floor (one ULP near Gemma's
+    ``|logit| = 30`` softcap bound is already 0.0625) and where no token carries
+    enough probability mass to affect a decode or a target score. It is recorded
+    as a diagnostic instead.
     """
     tol = float(config["parity"]["max_abs_logit_diff_tol"])
+    top_k = int(config["parity"].get("greedy_top_k", DEFAULT_AGREEMENT_TOP_K))
+    topk_tol = float(
+        config["parity"].get("max_abs_logprob_diff_topk_tol", tol)
+    )
+    tv_tol = float(config["parity"].get("max_total_variation_tol", 0.02))
     prompt = NEUTRAL_PROMPTS[config["neutral_prompts"][0]]
     ids = model.encode(prompt)
     layer = int(config["steering"]["layers"][0])
     with torch.no_grad():
-        baseline = model.logits_from_ids(ids)[0, -1].float()
+        baseline = model.logits_from_ids(ids, n_last=1)[0, -1].float()
     spec = SteeringSpec(
         layer=layer,
         delta=torch.zeros(model.d_model),
@@ -182,7 +204,7 @@ def run_gates(model, config: dict, run_dir: str) -> dict:
     )
     with spec.context(model.layers, prompt_len=ids.shape[1]):
         with torch.no_grad():
-            hooked = model.logits_from_ids(ids)[0, -1].float()
+            hooked = model.logits_from_ids(ids, n_last=1)[0, -1].float()
     max_diff = float((baseline - hooked).abs().max())
 
     n_check = 8
@@ -213,20 +235,26 @@ def run_gates(model, config: dict, run_dir: str) -> dict:
     manual_tokens = manual.token_ids[: len(hf_tokens)]
     greedy_equal = manual_tokens == hf_tokens[: len(manual_tokens)]
 
-    # Value-level check on the first step: argmax agreement alone can pass by
-    # luck (a near-tie, or a degenerate distribution with one dominant token)
+    # Distribution-level check on the first step: token equality alone can pass
+    # by luck (a near-tie, or a degenerate distribution with one dominant token)
     # while the two paths compute materially different logits. Read the manual
     # side through _next_token_logprobs — the decoder's *own* readout — so this
-    # gate constrains the path greedy_decode actually takes rather than
-    # re-deriving a correct one alongside it. Compared in log-prob space
-    # because that is what the decoder ranks on.
+    # constrains the path greedy_decode actually takes rather than re-deriving a
+    # correct one alongside it.
     with torch.no_grad():
-        manual_first = _next_token_logprobs(model, ids)[-1].float()
+        manual_first = _next_token_logprobs(model, ids, n_last=1)[-1].float()
     generate_first = torch.log_softmax(
         generated.logits[0][0].float().to(manual_first.device), dim=-1
     )
-    first_step_diff = float((manual_first - generate_first).abs().max())
-    first_step_ok = first_step_diff <= tol
+    agreement = compare_next_token_distributions(
+        manual_first, generate_first, top_k=top_k
+    )
+    first_step_ok = (
+        agreement["argmax_agrees"]
+        and agreement["top_k_sets_agree"]
+        and agreement["max_abs_logprob_diff_topk"] <= topk_tol
+        and agreement["total_variation"] <= tv_tol
+    )
 
     gates = {
         "zero_parity_max_abs_logit_diff": max_diff,
@@ -235,10 +263,14 @@ def run_gates(model, config: dict, run_dir: str) -> dict:
         "greedy_manual_tokens": manual.token_ids,
         "greedy_generate_tokens": hf_tokens,
         "greedy_equivalence_ok": greedy_equal,
-        # Log-prob space (shift-invariant, which is what decoding ranks on);
-        # reuses the parity tolerance as its threshold.
-        "greedy_first_step_max_abs_logprob_diff": first_step_diff,
-        "greedy_first_step_logprobs_ok": first_step_ok,
+        # Combined first-step agreement. Thresholds apply to the top-k
+        # log-probabilities and to total variation; the full-vocabulary max and
+        # mean inside `greedy_first_step_agreement` are diagnostics only (a
+        # bfloat16 tail artifact, not a correctness signal).
+        "greedy_first_step_agreement": agreement,
+        "greedy_first_step_topk_tol": topk_tol,
+        "greedy_first_step_total_variation_tol": tv_tol,
+        "greedy_first_step_ok": first_step_ok,
     }
     with open(
         os.path.join(run_dir, "artifacts", "gates.json"), "w", encoding="utf-8"
@@ -253,17 +285,26 @@ def run_gates(model, config: dict, run_dir: str) -> dict:
             f"greedy equivalence gate failed: manual {manual_tokens} vs "
             f"generate() {hf_tokens}"
         )
-    if not gates["greedy_first_step_logprobs_ok"]:
+    if not gates["greedy_first_step_ok"]:
         raise GenerativeError(
-            f"greedy first-step log-prob gate failed: decode readout vs "
-            f"generate() max |diff| {first_step_diff} > {tol}; the decode path "
-            f"and the model's own head disagree numerically even if the argmax "
-            f"happens to match"
+            f"greedy first-step agreement gate failed: decode readout vs "
+            f"generate() argmax_agrees={agreement['argmax_agrees']}, "
+            f"top{agreement['top_k']}_sets_agree={agreement['top_k_sets_agree']}, "
+            f"top-k max |dlogp| {agreement['max_abs_logprob_diff_topk']:.4g} "
+            f"(tol {topk_tol}), total variation "
+            f"{agreement['total_variation']:.4g} (tol {tv_tol}); the decode path "
+            f"and the model's own head disagree on decision-relevant tokens. "
+            f"Full-vocab max |dlogp| (diagnostic, not gated) "
+            f"{agreement['max_abs_logprob_diff_full_vocab']:.4g}"
         )
     logger.info(
-        "gates passed: parity %.2g, greedy tokens match, first-step logprobs %.2g",
+        "gates passed: parity %.2g, greedy tokens match, first-step top-%d "
+        "max |dlogp| %.2g, total variation %.2g (full-vocab max %.2g, diagnostic)",
         max_diff,
-        first_step_diff,
+        agreement["top_k"],
+        agreement["max_abs_logprob_diff_topk"],
+        agreement["total_variation"],
+        agreement["max_abs_logprob_diff_full_vocab"],
     )
     return gates
 
@@ -833,8 +874,11 @@ def main() -> None:
         f"- records: {len(all_records)}",
         f"- gates: parity diff {gates['zero_parity_max_abs_logit_diff']:.3g}, "
         f"greedy equivalence {gates['greedy_equivalence_ok']}, "
-        f"first-step logprob diff "
-        f"{gates['greedy_first_step_max_abs_logprob_diff']:.3g}",
+        f"first-step top-{gates['greedy_first_step_agreement']['top_k']} "
+        f"max |dlogp| "
+        f"{gates['greedy_first_step_agreement']['max_abs_logprob_diff_topk']:.3g}, "
+        f"total variation "
+        f"{gates['greedy_first_step_agreement']['total_variation']:.3g}",
         "",
         "## Per-condition summary",
         "",

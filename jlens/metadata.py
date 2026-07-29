@@ -429,6 +429,12 @@ _GENERATIVE_SCHEMA: tuple[tuple[str, tuple[type, ...], bool], ...] = (
     ("neutral_prompts", (list,), True),
     ("eval.control_seed", (int,), True),
     ("parity.max_abs_logit_diff_tol", (float, int), True),
+    # Optional greedy-equivalence gate thresholds. The runner supplies defaults:
+    # greedy_top_k = jlens.generative.DEFAULT_AGREEMENT_TOP_K, the top-k log-prob
+    # tolerance falls back to max_abs_logit_diff_tol, total variation to 0.02.
+    ("parity.greedy_top_k", (int,), False),
+    ("parity.max_abs_logprob_diff_topk_tol", (float, int), False),
+    ("parity.max_total_variation_tol", (float, int), False),
     ("paths.output_dir", (str,), True),
 )
 

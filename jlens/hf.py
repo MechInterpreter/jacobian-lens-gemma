@@ -15,6 +15,7 @@ minimal example) and the rest of the package works unchanged.
 from __future__ import annotations
 
 import functools
+import inspect
 from dataclasses import dataclass
 from typing import Any
 
@@ -122,6 +123,12 @@ class HFLensModel:
         self._embed_tokens: nn.Module = getattr(self._text_module, layout.embed)
         self._lm_head: nn.Module = getattr(hf_model, layout.lm_head)
 
+        # Detected exactly as transformers' GenerationMixin does, so
+        # logits_from_ids can mirror the logits_to_keep that generate() sets.
+        self.supports_logits_to_keep: bool = (
+            "logits_to_keep" in inspect.signature(hf_model.forward).parameters
+        )
+
         text_config = hf_model.config.get_text_config()
         self.n_layers: int = text_config.num_hidden_layers
         self.d_model: int = text_config.hidden_size
@@ -175,9 +182,11 @@ class HFLensModel:
         """
         return self._text_module(input_ids=input_ids, use_cache=False)
 
-    def logits_from_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
-        """Logits ``[batch, seq, vocab]`` through the model's **own** output
-        pathway — the exact tensor ``generate()`` decodes from.
+    def logits_from_ids(
+        self, input_ids: torch.Tensor, *, n_last: int | None = None
+    ) -> torch.Tensor:
+        """Logits through the model's **own** output pathway — the exact tensor
+        ``generate()`` decodes from.
 
         This calls the full ``*ForCausalLM`` /
         ``*ForConditionalGeneration`` forward, so the final norm, LM head, and
@@ -190,13 +199,43 @@ class HFLensModel:
         the question is "what would the model predict here?". The latter
         double-applies the final norm, which is not idempotent for a trained
         RMSNorm gain and silently changes the argmax.
+
+        Args:
+            input_ids: ``[batch, seq]`` token ids.
+            n_last: Return logits for only the final ``n_last`` positions,
+                forwarded as the model's ``logits_to_keep`` so the LM head runs
+                on a ``[batch, n_last, d_model]`` slice. ``None`` computes the
+                full sequence.
+
+        Returns:
+            ``[batch, n_last, vocab]`` when ``n_last`` is given, else
+            ``[batch, seq, vocab]``.
+
+        Passing ``n_last`` is not just an optimization — it is required for
+        numerical equivalence with ``generate()``. ``GenerationMixin`` sets
+        ``logits_to_keep=1`` for every model whose forward accepts it
+        (``generation/utils.py``), and Gemma 4 slices the hidden state before
+        the LM head accordingly. A full-sequence head runs a different GEMM
+        shape than a one-row head, and in reduced precision the two accumulate
+        in different orders, so the logits differ by more than the tolerance a
+        decode-equivalence gate should allow. ``n_last=1`` reproduces
+        ``generate()``'s GEMM exactly (bit-identical in float32).
         """
-        outputs = self._hf_model(
-            input_ids=input_ids,
-            attention_mask=torch.ones_like(input_ids),
-            use_cache=False,
-        )
-        return outputs.logits
+        kwargs: dict[str, Any] = {
+            "input_ids": input_ids,
+            "attention_mask": torch.ones_like(input_ids),
+            "use_cache": False,
+        }
+        if n_last is not None:
+            if n_last < 1:
+                raise ValueError(f"n_last must be >= 1, got {n_last}")
+            if self.supports_logits_to_keep:
+                kwargs["logits_to_keep"] = int(n_last)
+        logits = self._hf_model(**kwargs).logits
+        if n_last is not None and not self.supports_logits_to_keep:
+            # Keep the return contract identical for models without the kwarg.
+            logits = logits[:, -int(n_last) :, :]
+        return logits
 
     def unembed(self, residual: torch.Tensor) -> torch.Tensor:
         target_device = self._lm_head.weight.device

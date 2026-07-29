@@ -279,14 +279,29 @@ class SteeringSpec:
 # ------------------------------------------------------- decode & scoring
 
 
-def _next_token_logprobs(model, input_ids: torch.Tensor) -> torch.Tensor:
-    """Full-sequence next-token log-probabilities ``[seq, vocab]`` through the
-    model's native output pathway (softcap included when present).
+def _next_token_logprobs(
+    model, input_ids: torch.Tensor, *, n_last: int | None = None
+) -> torch.Tensor:
+    """Next-token log-probabilities through the model's native output pathway
+    (softcap included when present).
 
     Goes through :meth:`~jlens.protocol.LensModel.logits_from_ids` — the
     model's own head — so these log-probabilities are exactly the ones
     ``generate()`` decodes from. Steering hooks live on the residual blocks
     and still fire inside this call.
+
+    Args:
+        model: A :class:`~jlens.hf.HFLensModel` (or a compatible mock).
+        input_ids: ``[1, seq]`` token ids.
+        n_last: Score only the final ``n_last`` positions, returning
+            ``[n_last, vocab]``. ``None`` returns ``[seq, vocab]``.
+
+    Always pass ``n_last`` when only the trailing positions are needed.
+    ``generate()`` runs the LM head with ``logits_to_keep=1``, i.e. on a
+    single-row hidden-state slice; a full-sequence head is a different GEMM
+    shape and in reduced precision accumulates differently, so the two paths
+    disagree by well over a decode-equivalence tolerance even though both are
+    "correct". Matching the shape makes them bit-identical in float32.
 
     This must **not** be rewritten as ``unembed(forward(ids).last_hidden_state)``:
     HuggingFace text models apply the final norm before returning
@@ -294,7 +309,7 @@ def _next_token_logprobs(model, input_ids: torch.Tensor) -> torch.Tensor:
     RMSNorm gain makes the norm non-idempotent, which shifts the logits enough
     to change the argmax — it silently breaks both decoding and target scoring.
     """
-    logits = model.logits_from_ids(input_ids)[0].float()
+    logits = model.logits_from_ids(input_ids, n_last=n_last)[0].float()
     return torch.log_softmax(logits, dim=-1)
 
 
@@ -373,7 +388,8 @@ def greedy_decode(
     with torch.no_grad(), context:
         ids = input_ids
         for _ in range(max_new_tokens):
-            log_p = _next_token_logprobs(model, ids)[-1]
+            # n_last=1 matches generate()'s logits_to_keep=1 exactly.
+            log_p = _next_token_logprobs(model, ids, n_last=1)[-1]
             next_id = int(log_p.argmax())
             generated.append(next_id)
             logprobs.append(float(log_p[next_id]))
@@ -433,12 +449,17 @@ def target_logprob(
         if steering is not None
         else nullcontext({})
     )
+    # Scored positions are the prompt-final one plus one per target token, i.e.
+    # absolute rows prompt_len-1 .. prompt_len+len(targets)-2. Those are the
+    # trailing len(targets)+1 rows of the [prompt + target] sequence, so ask
+    # the head for exactly those: same reason as decoding (match generate()'s
+    # sliced-head GEMM instead of running the full-sequence head). Row r of the
+    # returned slice is absolute position prompt_len-1+r.
+    n_last = len(targets) + 1
     with torch.no_grad(), context:
-        log_p = _next_token_logprobs(model, full)
-    per_token = [
-        float(log_p[prompt_len - 1 + j, token]) for j, token in enumerate(targets)
-    ]
-    first_row = log_p[prompt_len - 1]
+        log_p = _next_token_logprobs(model, full, n_last=n_last)
+    per_token = [float(log_p[j, token]) for j, token in enumerate(targets)]
+    first_row = log_p[0]
     first_rank = int((first_row > first_row[targets[0]]).sum())
     return {
         "target_token_ids": targets,
@@ -468,7 +489,71 @@ def first_token_distribution(
         else nullcontext({})
     )
     with torch.no_grad(), context:
-        return _next_token_logprobs(model, input_ids)[-1]
+        # Only the prompt-final row is needed; n_last=1 matches generate().
+        return _next_token_logprobs(model, input_ids, n_last=1)[-1]
+
+
+#: Default number of leading tokens the decode-equivalence comparison treats as
+#: decision-relevant. Greedy decoding depends only on the argmax; teacher-forced
+#: scoring reads targets that are, in practice, well inside the head of the
+#: distribution. Tokens outside the top-k cannot change a decode.
+DEFAULT_AGREEMENT_TOP_K = 10
+
+
+def compare_next_token_distributions(
+    log_p_a: torch.Tensor,
+    log_p_b: torch.Tensor,
+    *,
+    top_k: int = DEFAULT_AGREEMENT_TOP_K,
+) -> dict:
+    """Compare two next-token log-probability distributions over one position.
+
+    Built for asking "are these two decoding paths the same computation?" in
+    reduced precision, where a naive max-over-vocabulary difference is the wrong
+    question. ``log_softmax`` turns a fixed absolute logit perturbation into a
+    log-probability difference of similar size *everywhere*, including tokens
+    with probability ~1e-13 that no decode or score can ever be sensitive to. On
+    a 262k-token vocabulary the max is therefore reported by the deepest tail,
+    not by anything that matters, and it sits at the dtype's quantization floor:
+    for bfloat16 a single ULP near ``|logit| = 30`` (Gemma's softcap bound) is
+    already 0.0625.
+
+    So this reports both decision-relevant and whole-distribution measures:
+
+    - ``argmax_agrees`` / ``top_k_sets_agree``: does the ranking that decoding
+      actually consumes match?
+    - ``max_abs_logprob_diff_topk``: worst log-prob gap over the *union* of both
+      sides' top-``k`` — the tokens that can affect a decision.
+    - ``total_variation``: ``0.5 * sum |p_a - p_b|``, a single bounded
+      whole-vocabulary number that cannot be dominated by one tail outlier.
+    - ``max_abs_logprob_diff_full_vocab`` / ``mean_abs...``: recorded as
+      diagnostics, deliberately *not* the pass/fail criterion.
+    """
+    if log_p_a.shape != log_p_b.shape or log_p_a.ndim != 1:
+        raise GenerativeError(
+            f"expected two 1-D distributions of equal shape, got "
+            f"{tuple(log_p_a.shape)} vs {tuple(log_p_b.shape)}"
+        )
+    if top_k < 1:
+        raise GenerativeError(f"top_k must be >= 1, got {top_k}")
+    a = log_p_a.float()
+    b = log_p_b.float()
+    k = min(int(top_k), a.shape[0])
+    top_a = torch.topk(a, k).indices
+    top_b = torch.topk(b, k).indices
+    union = torch.unique(torch.cat([top_a, top_b]))
+    diff = (a - b).abs()
+    return {
+        "top_k": k,
+        "argmax_a": int(a.argmax()),
+        "argmax_b": int(b.argmax()),
+        "argmax_agrees": int(a.argmax()) == int(b.argmax()),
+        "top_k_sets_agree": set(top_a.tolist()) == set(top_b.tolist()),
+        "max_abs_logprob_diff_topk": float(diff[union].max()),
+        "total_variation": 0.5 * float((a.exp() - b.exp()).abs().sum()),
+        "max_abs_logprob_diff_full_vocab": float(diff.max()),
+        "mean_abs_logprob_diff_full_vocab": float(diff.mean()),
+    }
 
 
 def kl_from_baseline(log_p_steered: torch.Tensor, log_p_baseline: torch.Tensor) -> float:
