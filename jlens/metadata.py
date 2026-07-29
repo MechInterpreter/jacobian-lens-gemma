@@ -424,6 +424,8 @@ _GENERATIVE_SCHEMA: tuple[tuple[str, tuple[type, ...], bool], ...] = (
     ("decode.generate", (bool,), True),
     ("decode.max_new_tokens", (int,), True),
     ("decode.generate_conditions", (list,), True),
+    ("decode.ratios", (list,), True),
+    ("decode.schedule_kinds", (list,), True),
     ("neutral_prompts", (list,), True),
     ("eval.control_seed", (int,), True),
     ("parity.max_abs_logit_diff_tol", (float, int), True),

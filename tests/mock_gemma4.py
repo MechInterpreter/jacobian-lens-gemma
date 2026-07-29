@@ -94,6 +94,7 @@ class MockTokenizer:
     BOS handling."""
 
     bos_token_id = 2
+    eos_token_id = None
 
     def __init__(self, auto_bos: bool = False) -> None:
         self.auto_bos = auto_bos
@@ -105,11 +106,15 @@ class MockTokenizer:
         return_tensors: str = "pt",
         truncation: bool = True,
         max_length: int = 128,
+        add_special_tokens: bool = True,
     ):
         ids = [3 + (b % 29) for b in text.encode()]
-        if self.auto_bos:
+        if self.auto_bos and add_special_tokens:
             ids = [self.bos_token_id] + ids
-        return SimpleNamespace(input_ids=torch.tensor([ids[:max_length]]))
+        ids = ids[:max_length]
+        if return_tensors == "pt":
+            return SimpleNamespace(input_ids=torch.tensor([ids]))
+        return SimpleNamespace(input_ids=ids)
 
     def decode(self, ids, **_kw) -> str:
         return "".join(chr(93 + int(i)) for i in ids)

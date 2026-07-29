@@ -75,6 +75,10 @@ steering:
 decode:
   generate: true
   max_new_tokens: 12
+  # Uncached decoding is the dominant cost; restrict generation to these
+  # strength ratios and schedule kinds (scoring covers the full sweep).
+  ratios: [0.5, 1.0]
+  schedule_kinds: [prompt_only, constant]
   # Decoding is expensive uncached; restrict full-battery generation to these
   # conditions (scoring always covers every condition).
   generate_conditions:
