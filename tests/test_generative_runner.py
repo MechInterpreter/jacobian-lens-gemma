@@ -36,8 +36,20 @@ class MockWithGenerate(MockGemma4ForConditionalGeneration):
     """Mock plus an independent greedy ``generate`` (uncached loop through
     the same modules) for the runner's greedy-equivalence gate."""
 
-    def generate(self, *, input_ids, attention_mask=None, max_new_tokens, do_sample):
+    def generate(
+        self,
+        *,
+        input_ids,
+        attention_mask=None,
+        max_new_tokens,
+        do_sample,
+        num_beams=1,
+        use_cache=True,
+        eos_token_id=None,
+    ):
         assert do_sample is False
+        assert num_beams == 1
+        assert use_cache is False
         ids = input_ids
         cap = self.config.get_text_config().final_logit_softcapping
         for _ in range(max_new_tokens):
@@ -48,6 +60,85 @@ class MockWithGenerate(MockGemma4ForConditionalGeneration):
             next_id = int(logits.argmax())
             ids = torch.cat([ids, torch.tensor([[next_id]])], dim=1)
         return ids
+
+
+class MockSamplingDefaultGeneration:
+    """Stand-in for a checkpoint's stored ``GenerationConfig`` whose defaults
+    favor sampling (mirrors Gemma 4 E4B-it: ``do_sample=True``, ``top_k=64``,
+    ``top_p=0.95``)."""
+
+    do_sample = True
+    top_k = 64
+    top_p = 0.95
+    num_beams = 1
+    use_cache = True
+
+
+class MockSamplingDefaultModel(MockGemma4ForConditionalGeneration):
+    """A model whose stored generation config defaults to sampling. Its
+    ``generate`` honors whatever ``do_sample``/``num_beams``/``use_cache`` the
+    caller passes (falling back to the sampling-favoring stored config when a
+    kwarg is omitted), so this only decodes greedily if the gate explicitly
+    forces every relevant kwarg rather than relying on library defaults."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.generation_config = MockSamplingDefaultGeneration()
+
+    def generate(
+        self,
+        *,
+        input_ids,
+        attention_mask=None,
+        max_new_tokens,
+        do_sample=None,
+        num_beams=None,
+        use_cache=None,
+        eos_token_id=None,
+    ):
+        resolved_do_sample = (
+            self.generation_config.do_sample if do_sample is None else do_sample
+        )
+        resolved_num_beams = (
+            self.generation_config.num_beams if num_beams is None else num_beams
+        )
+        resolved_use_cache = (
+            self.generation_config.use_cache if use_cache is None else use_cache
+        )
+        assert resolved_do_sample is False, "gate must override the sampling default"
+        assert resolved_num_beams == 1, "gate must force single-beam decoding"
+        assert resolved_use_cache is False, "gate must force uncached decoding"
+        ids = input_ids
+        cap = self.config.get_text_config().final_logit_softcapping
+        for _ in range(max_new_tokens):
+            with torch.no_grad():
+                hidden = self.model.language_model(input_ids=ids).last_hidden_state
+                logits = self.lm_head(self.model.language_model.norm(hidden))[0, -1]
+                logits = cap * torch.tanh(logits / cap)
+            next_id = int(logits.argmax())
+            ids = torch.cat([ids, torch.tensor([[next_id]])], dim=1)
+        return ids
+
+
+def test_gates_force_greedy_despite_sampling_default_generation_config(tmp_path):
+    """Regression test: even when the checkpoint's stored generation config
+    defaults to sampling (as Gemma 4 E4B-it's does), the greedy-equivalence
+    gate must call ``generate()`` with explicit ``do_sample=False``,
+    ``num_beams=1``, and ``use_cache=False`` rather than trusting the
+    library/config defaults. The mock's ``generate`` asserts this itself."""
+    runner = _import_runner()
+    from jlens.gemma4 import Gemma4LensModel
+
+    model = Gemma4LensModel(MockSamplingDefaultModel(), MockTokenizer())
+    config = {
+        "parity": {"max_abs_logit_diff_tol": 0.05},
+        "neutral_prompts": ["label-colon"],
+        "steering": {"layers": [1]},
+    }
+    run_dir = tmp_path / "run"
+    (run_dir / "artifacts").mkdir(parents=True)
+    gates = runner.run_gates(model, config, str(run_dir))
+    assert gates["greedy_equivalence_ok"] is True
 
 
 def _mock_load_gemma4(*args, **kwargs):

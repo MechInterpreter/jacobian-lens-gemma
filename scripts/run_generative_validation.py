@@ -171,13 +171,24 @@ def run_gates(model, config: dict, run_dir: str) -> dict:
     max_diff = float((baseline - hooked).abs().max())
 
     n_check = 8
-    manual = greedy_decode(model, ids, max_new_tokens=n_check)
+    tokenizer = model.tokenizer
+    eos_ids = [int(tokenizer.eos_token_id)] if tokenizer.eos_token_id is not None else []
+    manual = greedy_decode(model, ids, max_new_tokens=n_check, eos_token_ids=eos_ids)
     hf_model = model._hf_model
+    attention_mask = torch.ones_like(ids)
+    # The checkpoint's stored generation config (e.g. Gemma 4 E4B-it defaults
+    # to do_sample=True, top_k=64, top_p=0.95) must be fully overridden here,
+    # not just do_sample: num_beams and use_cache also have to match the
+    # manual decoder (uncached, single sequence) or this is not actually
+    # testing greedy equivalence.
     generated = hf_model.generate(
         input_ids=ids,
-        attention_mask=torch.ones_like(ids),
+        attention_mask=attention_mask,
         max_new_tokens=n_check,
         do_sample=False,
+        num_beams=1,
+        use_cache=False,
+        eos_token_id=eos_ids or None,
     )
     hf_tokens = [int(t) for t in generated[0, ids.shape[1] :]]
     manual_tokens = manual.token_ids[: len(hf_tokens)]
