@@ -75,6 +75,7 @@ from jlens.metadata import (
 )
 from jlens.pursuit import JSpaceDictionary, PursuitSettings, gradient_pursuit
 
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 logger = logging.getLogger("generative_validation")
 
 _DTYPES = {
@@ -237,7 +238,10 @@ def main() -> None:
     if args.limit_examples:
         overrides["limit_examples"] = args.limit_examples
 
-    manifest = load_benchmark(config["benchmark"]["manifest_path"])
+    manifest_path = config["benchmark"]["manifest_path"]
+    if not os.path.isabs(manifest_path):
+        manifest_path = os.path.join(REPO_ROOT, manifest_path)
+    manifest = load_benchmark(manifest_path)
     examples = manifest[config["benchmark"]["split"]]
     if args.limit_examples:
         examples = examples[: args.limit_examples]

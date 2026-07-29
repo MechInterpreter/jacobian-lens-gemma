@@ -57,6 +57,16 @@ def resolve_repo_root(file_dunder: str | None, content_dir: str = CONTENT_DIR) -
     )
 
 
+def resolve_under_root(path: str, root: str) -> str:
+    """Resolve ``path`` against ``root`` if it isn't already absolute.
+
+    Config-supplied paths (e.g. ``benchmark.manifest_path``) are written
+    relative to the repo root, not to whatever directory the smoke test
+    happens to be invoked from.
+    """
+    return path if os.path.isabs(path) else os.path.join(root, path)
+
+
 def ensure_branch(repo_root: str, branch: str = EXPECTED_BRANCH) -> str:
     """Check out ``branch`` in ``repo_root`` if it isn't already current;
     return the branch actually checked out."""
@@ -102,7 +112,9 @@ def main() -> int:
     config = load_generative_config(
         os.path.join(REPO_ROOT, "configs", "gemma_generative_validation.yaml")
     )
-    manifest = load_benchmark(config["benchmark"]["manifest_path"])
+    manifest = load_benchmark(
+        resolve_under_root(config["benchmark"]["manifest_path"], REPO_ROOT)
+    )
     report["config_ok"] = True
     report["benchmark_examples"] = {
         "dev": len(manifest["dev"]),

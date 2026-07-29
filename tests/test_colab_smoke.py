@@ -54,6 +54,27 @@ def test_resolve_repo_root_without_file_dunder_raises_when_missing(
         colab_smoke.resolve_repo_root(None, content_dir=str(tmp_path))
 
 
+def test_resolve_under_root_leaves_absolute_paths(colab_smoke):
+    abs_path = os.path.abspath(os.path.join("some", "abs", "path"))
+    assert colab_smoke.resolve_under_root(abs_path, "/other/root") == abs_path
+
+
+def test_resolve_under_root_joins_relative_paths(colab_smoke):
+    relative = os.path.join("configs", "x.json")
+    assert colab_smoke.resolve_under_root(relative, "/root") == os.path.join(
+        "/root", relative
+    )
+
+
+def test_main_works_from_outside_repo_directory(colab_smoke, tmp_path, monkeypatch):
+    """Regression: main() previously opened the benchmark manifest relative
+    to the process's current directory rather than REPO_ROOT, so running it
+    from anywhere but the repo checkout crashed with FileNotFoundError."""
+    monkeypatch.chdir(tmp_path)
+
+    assert colab_smoke.main() == 0
+
+
 def test_ensure_branch_is_a_no_op_when_already_current(colab_smoke, tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
