@@ -902,6 +902,19 @@ def main() -> None:
                                             if receiving
                                             else None
                                         ),
+                                        # Same value as natural_delta_norm
+                                        # above (natural_scale's own delta IS
+                                        # the reference every natural-scale-
+                                        # matched control is scaled to) —
+                                        # added under the shared field name so
+                                        # a reader can look up one key across
+                                        # natural_scale and its matched
+                                        # controls without special-casing the
+                                        # condition. natural_delta_norm is
+                                        # kept for backward compatibility.
+                                        "reference_natural_cone_norm": (
+                                            natural_full_cone_norm
+                                        ),
                                     },
                                 )
                             continue

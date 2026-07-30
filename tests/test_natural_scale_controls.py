@@ -281,10 +281,18 @@ def test_condition_scaling_mode_covers_every_declared_condition():
 # --------------------------------------------------------------- aggregation
 
 
-def _record(condition, *, delta_zero=None, total=-4.0, layer=21, schedule="prompt_only"):
+def _record(
+    condition,
+    *,
+    delta_zero=None,
+    total=-4.0,
+    layer=21,
+    schedule="prompt_only",
+    example_id="ex1",
+):
     return {
         "vector_condition": condition,
-        "example_id": "ex1",
+        "example_id": example_id,
         "source_layer": layer,
         "requested_ratio": None if condition_scaling_mode(condition) != "ratio_scaled" else 0.5,
         "steering_schedule": {"kind": schedule, "decay": None},
@@ -322,7 +330,17 @@ def test_summarize_by_condition_tags_scaling_mode_and_keeps_conditions_separate(
 # ------------------------------------------------- natural_scale_verdicts/gonogo
 
 
-def _natural_battery(example_id, layer, schedule, *, strong: bool):
+def _natural_battery(example_id, layer, schedule, *, strong: bool, zero_total=-5.0):
+    """One (example, layer, schedule) worth of natural_scale + matched-control
+    rows.
+
+    Deliberately does **not** include a ``zero`` row: the real runner emits
+    exactly one zero-vector record per (example, layer) — under whichever
+    schedule happens to be first in ``steering.schedules`` — not one per
+    schedule (a zero delta is schedule-invariant, so re-scoring it under every
+    schedule would be pure waste). Callers add the single shared zero row
+    themselves, once per (example, layer), to mirror that.
+    """
     correct_total = -2.0 if strong else -9.0
     rows = [_record("natural_scale", total=correct_total, layer=layer, schedule=schedule)]
     rows[0]["example_id"] = example_id
@@ -330,17 +348,24 @@ def _natural_battery(example_id, layer, schedule, *, strong: bool):
         r = _record(control, total=-5.0, layer=layer, schedule=schedule)
         r["example_id"] = example_id
         rows.append(r)
-    zero = _record("zero", total=-5.0, layer=layer, schedule=schedule)
-    zero["example_id"] = example_id
-    rows.append(zero)
     return rows
+
+
+def _shared_zero_record(example_id, layer, *, total=-5.0, schedule="prompt_only"):
+    """The one zero-vector record the real runner emits per (example, layer),
+    always tagged with a single schedule (whichever is first in
+    ``steering.schedules`` — ``prompt_only`` by convention)."""
+    zero = _record("zero", total=total, layer=layer, schedule=schedule)
+    zero["example_id"] = example_id
+    return zero
 
 
 def test_natural_scale_verdicts_and_gonogo_report():
     records = []
-    for schedule in ("prompt_only", "constant", "decaying"):
-        records += _natural_battery("ex-strong", 21, schedule, strong=True)
-        records += _natural_battery("ex-weak", 21, schedule, strong=False)
+    for example_id, strong in (("ex-strong", True), ("ex-weak", False)):
+        records.append(_shared_zero_record(example_id, 21))
+        for schedule in ("prompt_only", "constant", "decaying"):
+            records += _natural_battery(example_id, 21, schedule, strong=strong)
 
     verdicts = natural_scale_verdicts(records)
     assert len(verdicts) == 6  # 2 examples x 3 schedules
@@ -364,6 +389,122 @@ def test_natural_scale_verdicts_and_gonogo_report():
         [v for v in verdicts if v["example_id"] == "ex-strong"]
     )
     assert solo["go"] is True
+
+
+# ---------------------------------------------------- single-zero-record baseline
+
+
+def test_one_zero_record_serves_every_natural_scale_schedule():
+    """Regression test for the bug in run
+    generative_20260730T003232776766_f1bad5407561: natural_scale_verdicts used
+    to key its zero lookup by (example, layer, schedule), but the runner emits
+    only one zero record per (example, layer) — always under the first
+    configured schedule (prompt_only). Keying by schedule as well meant
+    constant/decaying never found a zero baseline (mean_total_logprob_zero:
+    null) and were incorrectly marked beats_zero=False even when their
+    delta_logprob_vs_zero was genuinely positive.
+
+    A single zero record, tagged prompt_only, must resolve correctly for all
+    three schedules.
+    """
+    records = [_shared_zero_record("ex1", 21, total=-5.0, schedule="prompt_only")]
+    for schedule in ("prompt_only", "constant", "decaying"):
+        records.append(
+            _record("natural_scale", total=-2.0, layer=21, schedule=schedule)
+        )
+
+    verdicts = natural_scale_verdicts(records)
+    assert len(verdicts) == 3
+    by_schedule = {v["schedule_kind"]: v for v in verdicts}
+    for schedule in ("prompt_only", "constant", "decaying"):
+        v = by_schedule[schedule]
+        assert v["mean_total_logprob_zero"] == pytest.approx(-5.0), schedule
+        assert v["beats_zero"] is True, schedule
+
+
+def test_reproduced_smoke_fixture_yields_three_of_three_passing():
+    """Reproduces the reported run's shape: natural_scale beats zero by
+    +2.866 / +3.118 / +3.089 (prompt_only / constant / decaying) and beats
+    every matched control under all three schedules, with exactly one shared
+    zero record. Must yield 3/3 passing points and a GO verdict — not the
+    1/3 NO-GO the schedule-keyed zero lookup produced.
+    """
+    example_id = "dev-phrase-solar-eclipse"
+    zero_total = -10.0
+    deltas = {"prompt_only": 2.866, "constant": 3.118, "decaying": 3.089}
+    records = [_shared_zero_record(example_id, 14, total=zero_total)]
+    for schedule, delta in deltas.items():
+        records.append(
+            _record(
+                "natural_scale",
+                total=zero_total + delta,
+                layer=14,
+                schedule=schedule,
+                example_id=example_id,
+            )
+        )
+        for control in NATURAL_SCALE_GONOGO_CONTROLS:
+            records.append(
+                _record(
+                    control,
+                    total=zero_total - 1.0,
+                    layer=14,
+                    schedule=schedule,
+                    example_id=example_id,
+                )
+            )
+
+    verdicts = natural_scale_verdicts(records)
+    assert len(verdicts) == 3
+    for v in verdicts:
+        assert v["beats_zero"] is True, v["schedule_kind"]
+        assert v["beats_all_controls"] is True, v["schedule_kind"]
+
+    report = natural_scale_gonogo_report(verdicts)
+    assert report["n_points"] == 3
+    assert report["n_passing"] == 3
+    assert report["go"] is True
+
+
+def test_correct_condition_below_zero_still_fails_regardless_of_shared_baseline():
+    """The fix reuses one zero record across schedules — it must not also
+    start passing every schedule unconditionally. A natural_scale total below
+    the shared zero baseline is still a fail for that schedule."""
+    records = [_shared_zero_record("ex1", 21, total=-5.0)]
+    records.append(_record("natural_scale", total=-2.0, layer=21, schedule="prompt_only"))
+    records.append(_record("natural_scale", total=-9.0, layer=21, schedule="constant"))
+
+    verdicts = natural_scale_verdicts(records)
+    by_schedule = {v["schedule_kind"]: v for v in verdicts}
+    assert by_schedule["prompt_only"]["beats_zero"] is True
+    assert by_schedule["constant"]["beats_zero"] is False
+    # Same shared zero baseline was used for both — the difference is purely
+    # the correct condition's own total, not a stale/missing lookup.
+    assert by_schedule["prompt_only"]["mean_total_logprob_zero"] == pytest.approx(-5.0)
+    assert by_schedule["constant"]["mean_total_logprob_zero"] == pytest.approx(-5.0)
+
+
+def test_zero_baseline_is_independent_per_example_and_per_layer():
+    """The (example_id, source_layer) key must not blur baselines across
+    different examples or different layers sharing a schedule."""
+    def natural(example_id, layer):
+        r = _record("natural_scale", total=-2.0, layer=layer, schedule="constant")
+        r["example_id"] = example_id
+        return r
+
+    records = [
+        _shared_zero_record("ex1", 14, total=-4.0),
+        _shared_zero_record("ex1", 21, total=-8.0),
+        _shared_zero_record("ex2", 14, total=-1.0),
+        natural("ex1", 14),
+        natural("ex1", 21),
+        natural("ex2", 14),
+    ]
+    verdicts = natural_scale_verdicts(records)
+    by_key = {(v["example_id"], v["source_layer"]): v for v in verdicts}
+    assert by_key[("ex1", 14)]["mean_total_logprob_zero"] == pytest.approx(-4.0)
+    assert by_key[("ex1", 21)]["mean_total_logprob_zero"] == pytest.approx(-8.0)
+    assert by_key[("ex2", 14)]["mean_total_logprob_zero"] == pytest.approx(-1.0)
 
 
 def test_natural_scale_verdicts_missing_conditions_yields_no_verdict():

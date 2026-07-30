@@ -1466,12 +1466,29 @@ def natural_scale_verdicts(
     There is no ratio to calibrate on here (the injected norm is fixed by the
     example's own cone, not chosen), so the comparison is per (example,
     source_layer, schedule) rather than at one operating point.
+
+    The zero baseline is looked up by ``(example_id, source_layer)`` alone,
+    **not** by schedule: a zero delta is schedule-invariant (any schedule
+    weight times zero is still zero), and the runner emits exactly one zero
+    record per (example, layer) — under whichever schedule happens to be
+    first in ``steering.schedules`` — rather than one per schedule. Keying the
+    lookup by schedule as well would silently drop that baseline for every
+    other schedule, producing ``mean_total_logprob_zero: null`` and a false
+    ``beats_zero: False`` for them (this happened in a real run: constant and
+    decaying both had a genuine positive ``delta_logprob_vs_zero``, but only
+    ``prompt_only`` found its zero record and passed).
     """
     by_key: dict[tuple[str, int, str], dict[str, list[dict]]] = {}
+    zero_by_example_layer: dict[tuple[str, int], list[dict]] = {}
     wanted = {correct_condition, "zero", *controls}
     for record in records:
         condition = record.get("vector_condition")
         if condition not in wanted:
+            continue
+        if condition == "zero":
+            zero_by_example_layer.setdefault(
+                (record["example_id"], record["source_layer"]), []
+            ).append(record)
             continue
         key = (
             record["example_id"],
@@ -1487,7 +1504,8 @@ def natural_scale_verdicts(
         if not correct:
             continue
         correct_mean = _mean([r.get("total_logprob") for r in correct])
-        zero_mean = _mean([r.get("total_logprob") for r in rows.get("zero", [])])
+        zero_rows = zero_by_example_layer.get((example_id, source_layer), [])
+        zero_mean = _mean([r.get("total_logprob") for r in zero_rows])
         beats_zero = (
             correct_mean is not None
             and zero_mean is not None
