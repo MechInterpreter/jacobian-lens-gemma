@@ -693,3 +693,288 @@ def test_limit_one_dev_run_never_touches_heldout(experiment, monkeypatch):
     for record in unrelated:
         expected = donor_by_layer[record["source_layer"]]
         assert record["vector_meta"]["generator_token_ids"] == expected
+
+
+# ---------------------------------------------- dev calibration config (mock)
+
+
+@pytest.fixture()
+def dev_calibration_experiment(tmp_path):
+    """Config + benchmark + mock lens artifact for
+    configs/gemma_generative_dev_calibration.yaml, retargeted at the
+    6-layer/d8 mock the way ``experiment`` retargets the smoke config.
+
+    Only substitutes what the mock requires (model dims, lens artifact,
+    manifest path, steering.layers reduced to one mock layer for speed) --
+    strength_ratios, schedules, mass_thresholds, and conditions are left
+    exactly as the shipped file sets them, so this genuinely exercises that
+    file's real settings rather than a rewritten stand-in.
+    """
+    yaml = pytest.importorskip("yaml")
+    with open(
+        REPO_ROOT / "configs" / "gemma_generative_dev_calibration.yaml",
+        encoding="utf-8",
+    ) as handle:
+        config = yaml.safe_load(handle)
+
+    runs_root = tmp_path / "runs"
+    lens_dir = runs_root / "pilot_mock" / "artifacts"
+    lens_dir.mkdir(parents=True)
+    torch.manual_seed(7)
+    lens = JacobianLens(
+        {1: torch.randn(8, 8), 3: torch.randn(8, 8)}, n_prompts=1, d_model=8
+    )
+    lens.save(str(lens_dir / "lens.pt"))
+
+    # Mirrors the real dev benchmark's actual shape: no manual_subcone entries
+    # (the shipped configs/generative_benchmark.json has none either), so
+    # manual_subcone never auto-appends and the "excluded conditions"
+    # assertion below is exercising the config file, not an artifact of the
+    # fixture.
+    manifest = {
+        "version": 2,
+        "dev": [
+            {
+                "example_id": "mock-a",
+                "category": "compound_word",
+                "source_prompt": "A house for birds is called a",
+                "control_prompt": "A tank for fish is called an",
+                "target_phrase": " owl",
+                "target_token_ids": None,
+                "extraction_position": -1,
+                "manual_subcone": None,
+            },
+            {
+                "example_id": "mock-b",
+                "category": "noun_phrase",
+                "source_prompt": "A region light cannot escape is called a",
+                "control_prompt": None,
+                "target_phrase": " void",
+                "target_token_ids": None,
+                "extraction_position": -1,
+                "manual_subcone": None,
+            },
+        ],
+        "heldout": [
+            {
+                "example_id": "held-x",
+                "category": "noun_phrase",
+                "source_prompt": "A held out source prompt is called a",
+                "control_prompt": None,
+                "target_phrase": " dusk",
+                "target_token_ids": None,
+                "extraction_position": -1,
+                "manual_subcone": None,
+            },
+            {
+                "example_id": "held-y",
+                "category": "named_entity",
+                "source_prompt": "Another held out source prompt is called a",
+                "control_prompt": None,
+                "target_phrase": " dawn",
+                "target_token_ids": None,
+                "extraction_position": -1,
+                "manual_subcone": None,
+            },
+        ],
+    }
+    manifest_path = tmp_path / "benchmark.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    config["model"].update(
+        allow_model_load=False,
+        expect_n_layers=6,
+        expect_d_model=8,
+        expect_vocab_size=32,
+    )
+    config["lens"].update(
+        run_dir_name="pilot_mock",
+        artifact_relpath="artifacts/lens.pt",
+        expect_file_sha256=None,
+        expect_model_revision="f" * 40,
+        expect_source_layers=[1, 3],
+        expect_n_prompts=1,
+    )
+    config["benchmark"].update(manifest_path=str(manifest_path))
+    config["pursuit"].update(k=4, correlation_chunk_size=None)
+    # Two mock layers (schema requires >= 2, for the wrong_layer control --
+    # unused here, but still enforced generically) purely to keep the mock run
+    # fast; ratios, schedules, mass_thresholds, and conditions are left
+    # untouched from the file.
+    config["steering"].update(layers=[1, 3])
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+    return {
+        "config_path": str(config_path),
+        "runs_root": str(runs_root),
+        "config": config,
+    }
+
+
+def test_dev_calibration_config_end_to_end(dev_calibration_experiment, monkeypatch):
+    """End-to-end proof that the runner supports
+    configs/gemma_generative_dev_calibration.yaml as written: every dev
+    example runs (no smoke truncation), heldout is never touched, decoding is
+    fully suppressed while scoring is complete, natural_scale and its five
+    matched controls are present, the four ratio-scaled specificity controls
+    are present, the conditions deliberately left out of the calibration
+    config are genuinely absent (not merely unlisted in an assertion), and the
+    total record count matches the documented per-unit formula exactly.
+    """
+    runner = _import_runner()
+    monkeypatch.setattr(runner, "load_gemma4", _mock_load_gemma4)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_generative_validation.py",
+            "--config",
+            dev_calibration_experiment["config_path"],
+            "--allow-model-load",
+            "--runs-root",
+            dev_calibration_experiment["runs_root"],
+        ],
+    )
+    runner.main()
+
+    run_dir = next(
+        p
+        for p in Path(dev_calibration_experiment["runs_root"]).iterdir()
+        if p.name.startswith("generative_")
+    )
+    artifacts = run_dir / "artifacts"
+    records = [
+        json.loads(line)
+        for line in (artifacts / "records.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    assert records
+
+    # Every dev example ran; no --limit-examples smoke truncation.
+    assert {r["example_id"] for r in records} == {"mock-a", "mock-b"}
+    assert not any(r["example_id"].startswith("held-") for r in records)
+
+    # Decoding fully suppressed...
+    assert not any(r.get("generated_token_ids") is not None for r in records)
+    # ...but scoring is complete: every record still carries per-token and
+    # total target log-probabilities.
+    assert all(r.get("total_logprob") is not None for r in records)
+    assert all(r.get("per_token_logprobs") for r in records)
+
+    conditions = {r["vector_condition"] for r in records}
+    assert conditions == {
+        "none",
+        "zero",
+        "full_cone",
+        "natural_scale",
+        "unrelated_cone",
+        "random_matched_norm",
+        "shuffled",
+        "sign_reversed",
+        "natural_unrelated_cone",
+        "natural_random_matched_norm",
+        "natural_shuffled",
+        "natural_sign_reversed",
+        "natural_mass_subcone",
+    }
+    # Conditions deliberately left out of the calibration config are genuinely
+    # absent from the records, not just missing from the assertion above.
+    assert conditions.isdisjoint(
+        {
+            "mass_subcone",
+            "manual_subcone",
+            "wrong_layer",
+            "wrong_position",
+            "raw_activation",
+            "activation_diff",
+        }
+    )
+
+    # scaling_mode summaries stay separate (jlens.generative.summarize_by_condition).
+    with open(artifacts / "summary_by_condition.json", encoding="utf-8") as handle:
+        summary = json.load(handle)
+    modes_by_condition = {
+        row["vector_condition"]: row["scaling_mode"] for row in summary
+    }
+    assert modes_by_condition["full_cone"] == "ratio_scaled"
+    assert modes_by_condition["natural_scale"] == "natural_unscaled"
+    assert modes_by_condition["natural_unrelated_cone"] == "natural_matched"
+
+    # The natural-scale GO/NO-GO report is produced.
+    with open(artifacts / "natural_scale_comparison.json", encoding="utf-8") as handle:
+        natural_comparison = json.load(handle)
+    assert natural_comparison["verdicts"]
+    assert "go" in natural_comparison["report"]
+    metadata = json.loads((run_dir / "run_metadata.json").read_text(encoding="utf-8"))
+    assert metadata["natural_scale_gonogo"] == natural_comparison["report"]
+
+    # Exact record count, per the formula documented alongside the config file
+    # and in the PR report: 2 examples x 1 mock layer x 3 neutral prompts x 61
+    # records per (example, layer, prompt) -- none(1) + zero(1) + natural_scale
+    # (3 schedules) + 4 natural-matched controls (3 schedules each = 12) +
+    # natural_mass_subcone (3 thresholds x 3 schedules = 9) + full_cone (5
+    # ratios x 3 schedules = 15) + 4 ratio-scaled specificity controls (5
+    # ratios x 1 schedule each = 20) = 2+3+12+9+15+20 = 61.
+    per_unit = 61
+    n_prompts = len(dev_calibration_experiment["config"]["neutral_prompts"])
+    n_layers = len(dev_calibration_experiment["config"]["steering"]["layers"])
+    n_examples = 2
+    assert len(records) == per_unit * n_prompts * n_layers * n_examples
+
+
+def test_dev_calibration_config_matches_documented_settings():
+    """Lightweight (no model, no mock run) static check that the shipped
+    config file has exactly the settings this feature requires: dev-only
+    split, the informative-region-only ratio sweep, natural_scale plus every
+    natural-scale-matched control, the ratio-scaled specificity controls, and
+    decoding disabled."""
+    yaml = pytest.importorskip("yaml")
+    with open(
+        REPO_ROOT / "configs" / "gemma_generative_dev_calibration.yaml",
+        encoding="utf-8",
+    ) as handle:
+        config = yaml.safe_load(handle)
+
+    assert config["benchmark"]["split"] == "dev"
+    assert config["steering"]["layers"] == [14, 21, 28]
+    assert config["steering"]["strength_ratios"] == [0.01, 0.03, 0.05, 0.1, 0.25]
+    assert config["decode"]["generate"] is False
+
+    conditions = set(config["steering"]["conditions"])
+    assert {"none", "zero", "full_cone", "natural_scale"} <= conditions
+    assert {
+        "natural_unrelated_cone",
+        "natural_random_matched_norm",
+        "natural_shuffled",
+        "natural_sign_reversed",
+        "natural_mass_subcone",
+    } <= conditions
+    assert {
+        "unrelated_cone",
+        "random_matched_norm",
+        "shuffled",
+        "sign_reversed",
+    } <= conditions
+    assert conditions.isdisjoint(
+        {
+            "mass_subcone",
+            "manual_subcone",
+            "wrong_layer",
+            "wrong_position",
+            "raw_activation",
+            "activation_diff",
+        }
+    )
+
+
+def test_dev_calibration_config_validates_against_generative_schema():
+    """The file must pass the same validation the runner applies to every
+    generative config before it can load a model."""
+    from jlens.metadata import load_generative_config
+
+    config = load_generative_config(
+        str(REPO_ROOT / "configs" / "gemma_generative_dev_calibration.yaml")
+    )
+    assert config["mode"] == "generative_validation"

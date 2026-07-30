@@ -1,0 +1,180 @@
+# Broad development-only calibration pass for the generative J-cone steering
+# validation, run by scripts/run_generative_validation.py and validated by
+# jlens.metadata.load_generative_config. This is a SEPARATE config from
+# configs/gemma_generative_validation.yaml (the smoke/default config), which
+# is untouched: this file exists so a full dev-split calibration sweep can be
+# run without the smoke config's stress-ratio tail (0.5/1.0/2.0), its site/
+# ablation controls, or its decode step, none of which calibration needs.
+#
+# What changed relative to the smoke/default config, and why:
+#   - benchmark.split is pinned to "dev" (see below) and every dev example
+#     runs (no --limit-examples): a calibration pass by definition needs the
+#     full dev signal, not the smoke config's first-two-examples shortcut.
+#   - steering.strength_ratios drops the stress tail (0.5/1.0/2.0): those
+#     ratios inject at a magnitude that dominates the residual, which is
+#     useful as a stress test but not for calibrating where the cone's real
+#     signal lives (see docs/generative_validation.md, "Strength: the
+#     informative region is low").
+#   - steering.conditions keeps natural_scale and all five natural-scale-
+#     matched controls (natural_unrelated_cone / natural_random_matched_norm /
+#     natural_shuffled / natural_sign_reversed / natural_mass_subcone)
+#     unconditionally, plus exactly the ratio-scaled specificity controls
+#     GONOGO_CONTROLS names (unrelated_cone / random_matched_norm / shuffled /
+#     sign_reversed) and full_cone itself (the ratio-scaled calibration target
+#     choose_calibration operates on). Dropped: mass_subcone (an ablation, not
+#     a specificity control — jlens.generative.NATURAL_SCALE_GONOGO_CONTROLS
+#     excludes its natural_ counterpart for the identical reason),
+#     manual_subcone (the shipped dev benchmark has no manual_subcone entries
+#     regardless), wrong_layer / wrong_position (site controls, not needed for
+#     a strength/layer calibration sweep), raw_activation / activation_diff
+#     (competitiveness/specificity checks orthogonal to calibration). This
+#     halves the per-example record count relative to running the smoke
+#     config's full 19-condition battery at 5 ratios.
+#   - decode.generate is false: calibration only needs target log-probability
+#     scoring (per-token and total), never generated text. Uncached decoding
+#     is the dominant per-record cost, so disabling it is what makes a
+#     full-dev-split x 3-layer x 5-ratio sweep tractable at all. Scoring
+#     (target_logprob, first_token_distribution, KL) is unconditional in the
+#     runner regardless of decode.generate — see scripts/run_generative_validation.py
+#     run_gates()/main(): `should_decode()` only gates the optional
+#     greedy_decode() call inside emit(), never the scoring calls above it.
+#
+# Everything else (model/lens/pursuit/parity gates/neutral prompts) is
+# identical to the smoke config, because this pass must be evaluated against
+# the exact same pinned checkpoint, frozen lens, and greedy-equivalence gates.
+#
+# Run (see the exact Colab command in docs/generative_validation.md):
+#   python scripts/run_generative_validation.py \
+#       --config configs/gemma_generative_dev_calibration.yaml \
+#       --allow-model-load --device-map cuda
+# Do NOT pass --smoke or --limit-examples (both would truncate the example
+# set) or --split heldout (benchmark.split below already pins dev; heldout is
+# never read for scoring regardless, only structurally validated at load).
+#
+# Expected record count: 4392 total (records.jsonl), i.e. 549 per example.
+# Per (example, layer, neutral prompt) — 61 records, derived directly from the
+# emit() call sites in scripts/run_generative_validation.py's steering sweep:
+#   none + zero                                              =  1 + 1  =  2
+#   natural_scale            (3 schedules, ratio=None)         =        3
+#   4 natural-matched controls (3 schedules each, ratio=None)  =  4 * 3 = 12
+#   natural_mass_subcone     (3 mass_thresholds x 3 schedules) =  3 * 3 =  9
+#   full_cone                (5 ratios x 3 schedules)          =  5 * 3 = 15
+#   4 ratio-scaled specificity controls (5 ratios x 1 schedule
+#     each — every non-full_cone ratio-scaled condition only
+#     sweeps its first configured schedule, prompt_only)      =  4 * 5 = 20
+#                                                          total =        61
+# Then: 61 records/(example, layer, prompt) x 3 neutral_prompts x 3 layers
+# x 8 dev examples = 61 x 3 x 3 x 8 = 4392. Cross-checked two ways: by hand
+# above, and against the runner's actual emit() call count on the 6-layer/d8
+# mock at a different (2 layers x 2 examples) scale in
+# tests/test_generative_runner.py::test_dev_calibration_config_end_to_end
+# (61 x 3 x 2 x 2 = 732, asserted exactly). No raw activation tensors are
+# stored, so records.jsonl stays small even at this count (each record is a
+# few hundred bytes of scalars/ids/strings).
+mode: generative_validation
+
+model:
+  repo_id: google/gemma-4-E4B-it
+  revision: fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd  # immutable, same as lens fit
+  dtype: bfloat16
+  device_map: null            # runner overrides to "cuda" via JLENS_DEVICE_MAP
+  allow_model_load: false     # runner overrides via JLENS_ALLOW_GEMMA=1 (recorded)
+  expect_n_layers: 42
+  expect_d_model: 2560
+  expect_vocab_size: 262144
+
+lens:
+  run_dir_name: pilot_20260715T200437612150_311fd108c23a
+  artifact_relpath: artifacts/lens.pt
+  expect_file_sha256: sha256:7229c7562d1d55420b70abb13f481934649c4b01417bd851e97cedb47c96f474
+  expect_model_revision: fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd
+  expect_source_layers: [3, 7, 14, 21, 28, 35, 38]
+  expect_n_prompts: 100
+
+benchmark:
+  manifest_path: configs/generative_benchmark.json
+  # Pinned to dev: this is a calibration pass, and heldout must stay unread
+  # until calibration is frozen. There is no CLI override for this file (the
+  # runner's --split flag only overrides when passed; omit it).
+  split: dev
+  target_token_bounds:
+    min: 2
+    max: 6
+
+pursuit:
+  k: 10
+  normalize_atoms: true
+  refine_steps: 2
+  tol_relative_residual: 0.0
+  correlation_chunk_size: 65536
+  atoms_dtype: float32
+
+steering:
+  # Same three workspace-region layers as the smoke config.
+  layers: [14, 21, 28]
+  # The informative region only: no 0.5/1.0/2.0 stress tail here (see header).
+  strength_ratios: [0.01, 0.03, 0.05, 0.1, 0.25]
+  schedules:
+    - kind: prompt_only
+    - kind: constant
+    - kind: decaying
+      decay: 0.5
+  # Drives natural_mass_subcone's threshold sweep only (ratio-scaled
+  # mass_subcone itself is not in `conditions` below — see header).
+  mass_thresholds: [0.6, 0.7, 0.8]
+  wrong_position_anchor: 1  # required by schema; wrong_position isn't swept here
+  conditions:
+    - none
+    - zero
+    # The ratio-scaled calibration target: choose_calibration/per_example_verdicts/
+    # gonogo_report all operate on this by default.
+    - full_cone
+    # The correct condition at its own unscaled norm, across every schedule.
+    - natural_scale
+    # Ratio-scaled specificity controls (exactly GONOGO_CONTROLS).
+    - unrelated_cone
+    - random_matched_norm
+    - shuffled
+    - sign_reversed
+    # All five natural-scale-matched controls, unconditionally retained.
+    - natural_unrelated_cone
+    - natural_random_matched_norm
+    - natural_shuffled
+    - natural_sign_reversed
+    - natural_mass_subcone
+  # manual_subcone joins the list automatically for examples whose manifest
+  # entry provides indices; the shipped dev benchmark has none, so it never
+  # fires here regardless.
+
+decode:
+  # Disabled: this pass is scoring-only (see header). --no-decode on the CLI
+  # would set the same flag; it is set here directly so a plain run of this
+  # config never decodes even if that flag is forgotten.
+  generate: false
+  max_new_tokens: 12
+  ratios: [0.05, 0.1, 0.25]
+  schedule_kinds: [prompt_only, constant]
+  generate_conditions:
+    - none
+    - zero
+    - full_cone
+    - natural_scale
+    - unrelated_cone
+    - random_matched_norm
+    - natural_unrelated_cone
+    - natural_random_matched_norm
+    - natural_mass_subcone
+
+neutral_prompts: [label-colon, answer-four-words, shortest-label-is]
+
+eval:
+  control_seed: 1234
+
+parity:
+  max_abs_logit_diff_tol: 0.05
+  greedy_top_k: 10
+  max_abs_logprob_diff_topk_tol: 0.05
+  max_total_variation_tol: 0.02
+
+paths:
+  output_dir: artifacts/generative_dev_calibration

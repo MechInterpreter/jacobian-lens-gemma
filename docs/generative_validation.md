@@ -321,6 +321,25 @@ Drive if mounted, otherwise `colab upload` the lens into a local
 `runs/` mirror. Runs are timestamped directories; records are appended
 (fsynced JSONL) after every condition.
 
+### Broad development calibration
+
+[`configs/gemma_generative_dev_calibration.yaml`](../configs/gemma_generative_dev_calibration.yaml)
+is a **separate** config from the smoke/default one above, for a full dev-split
+sweep once the smoke run has passed: every dev example, the informative-region
+ratio sweep only (`0.01`–`0.25`, no `0.5`/`1.0`/`2.0` stress tail), `natural_scale`
+plus all five natural-scale-matched controls, the four ratio-scaled specificity
+controls (`GONOGO_CONTROLS`), and decoding disabled (scoring-only — see the
+config file's header comment for the exact per-example record-count derivation,
+4392 records total for the shipped 8-example dev benchmark).
+
+```bash
+echo "import subprocess,os; os.chdir('/content/jacobian-lens-gemma'); subprocess.run(['python','scripts/run_generative_validation.py','--config','configs/gemma_generative_dev_calibration.yaml','--allow-model-load','--device-map','cuda','--runs-root','/content/drive/MyDrive/jacobian-lens-gemma/runs'],check=True)" | colab exec -s jlens
+```
+
+Do not add `--smoke`, `--limit-examples`, or `--split heldout` — the whole
+point is every dev example, and heldout stays untouched until calibration is
+frozen.
+
 ### Download results and logs, then stop
 
 ```bash
