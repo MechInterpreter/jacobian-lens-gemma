@@ -65,6 +65,14 @@ GENERATIVE_RECORD_SCHEMA = "jlens.generative.record.v1"
 #: ``natural_scale`` is the full cone injected at **its own** norm with no
 #: rescaling, so the run records what the cone's intrinsic perturbation
 #: magnitude actually does (and what ratio it corresponds to);
+#: ``natural_unrelated_cone`` / ``natural_random_matched_norm`` /
+#: ``natural_shuffled`` / ``natural_sign_reversed`` / ``natural_mass_subcone``
+#: are their ratio-scaled counterparts' *directions*, rescaled to the same
+#: injected delta norm as ``natural_scale`` (not to any ratio of the receiving
+#: activation) — see :data:`NATURAL_SCALE_MATCHED_CONDITIONS`. Ratio-scaled
+#: controls alone cannot show whether a low-strength gain is specific to the
+#: correct J-cone's *direction*, because they are injected at a different norm
+#: than the natural cone; matching the norm isolates direction from magnitude.
 #: ``wrong_layer`` / ``wrong_position`` reuse the correct full-cone vector at
 #: an incorrect site (the vector builder returns the same delta; the runner
 #: moves the site).
@@ -83,7 +91,47 @@ VECTOR_CONDITIONS = (
     "wrong_position",
     "raw_activation",
     "activation_diff",
+    "natural_unrelated_cone",
+    "natural_random_matched_norm",
+    "natural_shuffled",
+    "natural_sign_reversed",
+    "natural_mass_subcone",
 )
+
+#: Conditions whose injected delta is rescaled to match ``natural_scale``'s own
+#: norm (the correct cone's unscaled magnitude), rather than to a ratio of the
+#: receiving activation. Order matches the base conditions they mirror.
+NATURAL_SCALE_MATCHED_CONDITIONS = (
+    "natural_unrelated_cone",
+    "natural_random_matched_norm",
+    "natural_shuffled",
+    "natural_sign_reversed",
+    "natural_mass_subcone",
+)
+
+
+def condition_scaling_mode(condition: str) -> str:
+    """How a condition's injected delta norm was determined.
+
+    One of ``"none"`` (``none``/``zero``: no scaling question applies),
+    ``"natural_unscaled"`` (``natural_scale``: the cone at its own norm — the
+    reference other natural-scale conditions match), ``"natural_matched"``
+    (:data:`NATURAL_SCALE_MATCHED_CONDITIONS`: rescaled to that same norm), or
+    ``"ratio_scaled"`` (every other condition: rescaled to ``ratio *
+    receiving_activation_norm``).
+
+    A pure function of the condition name, used both to tag records at
+    construction time and to group :func:`summarize_by_condition` output, so
+    the two can never disagree about which bucket a condition belongs to.
+    """
+    if condition in ("none", "zero"):
+        return "none"
+    if condition == "natural_scale":
+        return "natural_unscaled"
+    if condition in NATURAL_SCALE_MATCHED_CONDITIONS:
+        return "natural_matched"
+    return "ratio_scaled"
+
 
 SCHEDULE_KINDS = ("prompt_only", "constant", "decaying")
 
@@ -675,6 +723,40 @@ def scale_to_ratio(
     }
 
 
+def scale_to_norm(
+    delta: torch.Tensor, *, target_norm: float
+) -> tuple[torch.Tensor, dict]:
+    """Rescale ``delta`` so ``||delta|| = target_norm`` exactly.
+
+    Unlike :func:`scale_to_ratio`, ``target_norm`` is an **absolute** norm, not
+    a ratio against a receiving activation. This is what the natural-scale
+    matched controls (:data:`NATURAL_SCALE_MATCHED_CONDITIONS`) use: their
+    target is another vector's *observed* norm (the example's own unscaled
+    full J-cone, from the ``natural_scale`` condition), not a fraction of the
+    residual at the injection site.
+
+    Returns ``(scaled, info)`` where ``info`` records the raw norm before
+    matching, the target, the applied scale factor, and the achieved norm — the
+    same shape of provenance :func:`scale_to_ratio` records, so both scaling
+    paths are equally auditable. A zero ``delta`` cannot be rescaled and raises.
+    """
+    if not math.isfinite(target_norm) or target_norm <= 0:
+        raise GenerativeError(
+            f"target_norm must be finite and > 0, got {target_norm}"
+        )
+    raw_norm = float(delta.float().norm())
+    if raw_norm == 0.0:
+        raise GenerativeError("cannot norm-scale a zero vector")
+    scale = target_norm / raw_norm
+    scaled = delta.float() * scale
+    return scaled, {
+        "raw_delta_norm": raw_norm,
+        "target_norm": float(target_norm),
+        "scale_factor": float(scale),
+        "scaled_delta_norm": float(scaled.norm()),
+    }
+
+
 @dataclass(frozen=True)
 class ConditionVector:
     """A built steering vector plus its provenance (JSON-safe metadata)."""
@@ -734,6 +816,8 @@ def build_condition_vector(
         "wrong_position",
         "sign_reversed",
         "shuffled",
+        "natural_sign_reversed",
+        "natural_shuffled",
     ):
         q = weighted_reconstruction(
             need(atoms, "atoms"),
@@ -745,16 +829,16 @@ def build_condition_vector(
             "generator_coefficients": [float(c) for c in coefficients],
             "n_generators": len(list(token_ids)),
         }
-        if condition == "sign_reversed":
+        if condition in ("sign_reversed", "natural_sign_reversed"):
             return ConditionVector(condition, -q, meta)
-        if condition == "shuffled":
+        if condition in ("shuffled", "natural_shuffled"):
             s = need(seed, "seed")
             return ConditionVector(
                 condition, shuffled_coordinates(q, seed=s), {**meta, "seed": int(s)}
             )
         return ConditionVector(condition, q, meta)
 
-    if condition == "mass_subcone":
+    if condition in ("mass_subcone", "natural_mass_subcone"):
         threshold = need(mass_threshold, "mass_threshold")
         coeffs = list(need(coefficients, "coefficients"))
         subset = coefficient_mass_indices(coeffs, threshold)
@@ -792,7 +876,7 @@ def build_condition_vector(
             },
         )
 
-    if condition == "unrelated_cone":
+    if condition in ("unrelated_cone", "natural_unrelated_cone"):
         q = weighted_reconstruction(
             need(atoms, "atoms"),
             need(unrelated_token_ids, "unrelated_token_ids"),
@@ -808,7 +892,7 @@ def build_condition_vector(
             },
         )
 
-    if condition == "random_matched_norm":
+    if condition in ("random_matched_norm", "natural_random_matched_norm"):
         dim = need(d_model, "d_model")
         norm = need(match_norm, "match_norm")
         s = need(seed, "seed")
@@ -1131,7 +1215,16 @@ def _mean(values: Sequence[float | None]) -> float | None:
 def summarize_by_condition(records: Sequence[dict]) -> list[dict]:
     """Per-condition aggregate of scored records: mean/min/max target
     log-probability improvement over zero, specificity over the unrelated
-    cone, recovery rates, and mean KL. Purely descriptive."""
+    cone, recovery rates, and mean KL. Purely descriptive.
+
+    Every row is tagged with :func:`condition_scaling_mode`, so a caller can
+    filter to (or exclude) natural-scale-matched controls without
+    reconstructing that grouping from the condition name itself. Rows are
+    never merged across conditions — ``natural_unrelated_cone`` and
+    ``unrelated_cone`` are always separate rows, even though one is a rescaled
+    copy of the other's direction — so ratio-scaled and natural-scale-matched
+    results can never be silently averaged together.
+    """
     groups: dict[str, list[dict]] = {}
     for record in records:
         groups.setdefault(record["vector_condition"], []).append(record)
@@ -1149,6 +1242,7 @@ def summarize_by_condition(records: Sequence[dict]) -> list[dict]:
         out.append(
             {
                 "vector_condition": condition,
+                "scaling_mode": condition_scaling_mode(condition),
                 "n_records": len(rows),
                 "mean_delta_vs_zero": _mean(deltas),
                 "min_delta_vs_zero": min(deltas) if deltas else None,
@@ -1331,5 +1425,123 @@ def gonogo_report(verdicts: Sequence[dict]) -> dict:
             "majority of examples: correct vector beats zero on a majority of "
             "neutral prompts, beats random/shuffled/sign-reversed/unrelated "
             "controls, and survives >= 2 neutral prompts"
+        ),
+    }
+
+
+#: Natural-scale-matched controls the correct cone must beat, injected at
+#: literally the same delta norm, for a natural-scale gain to be attributable
+#: to the correct *direction* rather than to the injection magnitude alone.
+#: Mirrors :data:`GONOGO_CONTROLS` (``mass_subcone`` is excluded there too — a
+#: cone subset is a "how much is needed" ablation, not a specificity control).
+NATURAL_SCALE_GONOGO_CONTROLS = (
+    "natural_random_matched_norm",
+    "natural_shuffled",
+    "natural_sign_reversed",
+    "natural_unrelated_cone",
+)
+
+
+def natural_scale_verdicts(
+    records: Sequence[dict],
+    *,
+    correct_condition: str = "natural_scale",
+    controls: Sequence[str] = NATURAL_SCALE_GONOGO_CONTROLS,
+) -> list[dict]:
+    """Per-example, per-schedule go/no-go among conditions matched to the
+    correct cone's own (unscaled) injected norm.
+
+    :func:`per_example_verdicts` answers this at one calibrated *ratio* —
+    which cannot show whether a natural-scale gain is specific to the correct
+    cone's direction, because :data:`GONOGO_CONTROLS` are injected at a
+    different norm than the natural cone, and the natural cone's own effect
+    varies by schedule (``constant``/``decaying`` reinject at every generated
+    position; ``prompt_only`` does not). An apparent low-strength gain could
+    otherwise be an artifact of the schedule or the injection magnitude rather
+    than of the direction. This compares every condition at literally the same
+    delta norm — the example's own cone — across every schedule
+    ``natural_scale`` ran under, which is what isolates direction from those
+    confounds.
+
+    There is no ratio to calibrate on here (the injected norm is fixed by the
+    example's own cone, not chosen), so the comparison is per (example,
+    source_layer, schedule) rather than at one operating point.
+    """
+    by_key: dict[tuple[str, int, str], dict[str, list[dict]]] = {}
+    wanted = {correct_condition, "zero", *controls}
+    for record in records:
+        condition = record.get("vector_condition")
+        if condition not in wanted:
+            continue
+        key = (
+            record["example_id"],
+            record["source_layer"],
+            record["steering_schedule"]["kind"],
+        )
+        by_key.setdefault(key, {}).setdefault(condition, []).append(record)
+
+    verdicts = []
+    for example_id, source_layer, schedule_kind in sorted(by_key):
+        rows = by_key[(example_id, source_layer, schedule_kind)]
+        correct = rows.get(correct_condition, [])
+        if not correct:
+            continue
+        correct_mean = _mean([r.get("total_logprob") for r in correct])
+        zero_mean = _mean([r.get("total_logprob") for r in rows.get("zero", [])])
+        beats_zero = (
+            correct_mean is not None
+            and zero_mean is not None
+            and correct_mean > zero_mean
+        )
+        beats_controls: dict[str, bool | None] = {}
+        for control in controls:
+            totals = [
+                r["total_logprob"]
+                for r in rows.get(control, [])
+                if r.get("total_logprob") is not None
+            ]
+            if not totals or correct_mean is None:
+                beats_controls[control] = None
+            else:
+                beats_controls[control] = correct_mean > _mean(totals)
+        n_available = sum(1 for v in beats_controls.values() if v is not None)
+        verdicts.append(
+            {
+                "example_id": example_id,
+                "source_layer": source_layer,
+                "schedule_kind": schedule_kind,
+                "correct_condition": correct_condition,
+                "mean_total_logprob_correct": correct_mean,
+                "mean_total_logprob_zero": zero_mean,
+                "beats_zero": beats_zero,
+                "beats_controls": beats_controls,
+                "n_controls_available": n_available,
+                "beats_all_controls": (
+                    n_available > 0
+                    and all(v is True for v in beats_controls.values())
+                ),
+            }
+        )
+    return verdicts
+
+
+def natural_scale_gonogo_report(verdicts: Sequence[dict]) -> dict:
+    """Aggregate :func:`natural_scale_verdicts` the way :func:`gonogo_report`
+    aggregates :func:`per_example_verdicts`: ``go`` is True when a clear
+    majority of (example, layer, schedule) points beat zero and every
+    natural-scale-matched control."""
+    if not verdicts:
+        raise GenerativeError("no natural-scale verdicts to aggregate")
+    passing = [v for v in verdicts if v["beats_zero"] and v["beats_all_controls"]]
+    n = len(verdicts)
+    return {
+        "n_points": n,
+        "n_passing": len(passing),
+        "passing_fraction": len(passing) / n,
+        "go": len(passing) * 2 > n,
+        "criteria": (
+            "majority of (example, layer, schedule) points at the correct "
+            "cone's own natural norm: beats zero and every natural-scale-"
+            f"matched control ({', '.join(NATURAL_SCALE_GONOGO_CONTROLS)})"
         ),
     }

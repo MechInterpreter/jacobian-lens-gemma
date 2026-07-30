@@ -332,6 +332,7 @@ def test_runner_end_to_end_on_mock(experiment, monkeypatch):
         "summary_by_condition.json",
         "calibration.json",
         "gonogo.json",
+        "natural_scale_comparison.json",
     ):
         assert (artifacts / name).is_file(), name
 
@@ -403,6 +404,11 @@ def test_runner_end_to_end_on_mock(experiment, monkeypatch):
         "raw_activation",
         "activation_diff",
         "manual_subcone",
+        "natural_unrelated_cone",
+        "natural_random_matched_norm",
+        "natural_shuffled",
+        "natural_sign_reversed",
+        "natural_mass_subcone",
     } <= conditions
 
     for record in records:
@@ -474,6 +480,145 @@ def test_runner_end_to_end_on_mock(experiment, monkeypatch):
     assert metadata["gonogo"] is not None
     assert metadata["calibration"] is not None
     assert metadata["n_records"] == len(records)
+    assert metadata["natural_scale_gonogo"] is not None
+
+
+def test_natural_scale_matched_controls_end_to_end(experiment, monkeypatch):
+    """Every natural-scale-matched control is injected at exactly
+    natural_scale's own delta norm, for every (example, layer) it shares with
+    natural_scale — not just at one ratio, and not just under one schedule.
+
+    This is the concrete fix for the reported gap: ratio-scaled random/
+    shuffled/sign-reversed/unrelated controls were only ever run at ratio 1.0,
+    a different injected magnitude than the correct cone's own natural
+    (unscaled) injection, so the experiment could not tell whether a
+    low-strength gain was specific to the correct direction. Matching norms
+    (not ratios) closes that gap.
+    """
+    runner = _import_runner()
+    monkeypatch.setattr(runner, "load_gemma4", _mock_load_gemma4)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_generative_validation.py",
+            "--config",
+            experiment["config_path"],
+            "--allow-model-load",
+            "--runs-root",
+            experiment["runs_root"],
+        ],
+    )
+    runner.main()
+
+    run_dir = next(
+        p
+        for p in Path(experiment["runs_root"]).iterdir()
+        if p.name.startswith("generative_")
+    )
+    artifacts = run_dir / "artifacts"
+    records = [
+        json.loads(line)
+        for line in (artifacts / "records.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+
+    natural_scale_norm = {
+        (r["example_id"], r["source_layer"]): r["delta_norm"]
+        for r in records
+        if r["vector_condition"] == "natural_scale"
+    }
+    assert natural_scale_norm
+
+    matched_conditions = {
+        "natural_unrelated_cone",
+        "natural_random_matched_norm",
+        "natural_shuffled",
+        "natural_sign_reversed",
+        "natural_mass_subcone",
+    }
+    matched_records = [r for r in records if r["vector_condition"] in matched_conditions]
+    assert matched_records
+    assert {r["vector_condition"] for r in matched_records} == matched_conditions
+
+    for record in matched_records:
+        key = (record["example_id"], record["source_layer"])
+        assert record["requested_ratio"] is None
+        assert record["delta_norm"] == pytest.approx(
+            natural_scale_norm[key], rel=1e-4
+        ), (record["vector_condition"], key)
+        # measured_ratio (delta_norm / receiving_activation_norm) therefore
+        # equals natural_scale's own natural_ratio at the same point, computed
+        # independently by the generic steering_injection hook rather than by
+        # anything specific to the natural-scale-matched branch.
+        assert record["vector_meta"]["scaling_mode"] == "natural_matched"
+        assert record["vector_meta"]["reference_natural_cone_norm"] == pytest.approx(
+            natural_scale_norm[key], rel=1e-6
+        )
+        assert record["vector_meta"]["raw_delta_norm"] > 0
+        assert record["vector_meta"]["scale_factor"] > 0
+        assert record["vector_meta"]["receiving_activation_norm"] > 0
+
+    # Swept across every schedule natural_scale itself ran under (not
+    # restricted to one, unlike their ratio-scaled counterparts) — this is
+    # what makes the comparison answerable per schedule.
+    schedules_by_condition: dict[str, set[str]] = {}
+    for record in matched_records:
+        schedules_by_condition.setdefault(
+            record["vector_condition"], set()
+        ).add(record["steering_schedule"]["kind"])
+    natural_scale_schedules = {
+        r["steering_schedule"]["kind"]
+        for r in records
+        if r["vector_condition"] == "natural_scale"
+    }
+    for condition, schedules in schedules_by_condition.items():
+        assert schedules == natural_scale_schedules, condition
+
+    # The ratio-scaled counterparts are unaffected: they still exist, still
+    # sweep the configured ratios, and are injected at a *different* norm than
+    # natural_scale (unless ratio 1.0 happens to coincide, which it won't for
+    # this fixture's ratio list).
+    unrelated_ratio_scaled = [
+        r for r in records if r["vector_condition"] == "unrelated_cone"
+    ]
+    assert unrelated_ratio_scaled
+    assert all(r["requested_ratio"] is not None for r in unrelated_ratio_scaled)
+
+    # scaling_mode is self-consistent across the whole record set: every
+    # ratio-scaled condition says so, natural_scale says "natural_unscaled",
+    # none/zero say "none".
+    by_condition_mode = {
+        r["vector_condition"]: r["vector_meta"].get("scaling_mode") for r in records
+    }
+    assert by_condition_mode["full_cone"] == "ratio_scaled"
+    assert by_condition_mode["natural_scale"] == "natural_unscaled"
+    assert by_condition_mode["none"] == "none"
+    assert by_condition_mode["zero"] == "none"
+
+    # The natural-scale comparison artifact exists and is self-consistent with
+    # the go/no-go report embedded in run_metadata.json.
+    comparison = json.loads(
+        (artifacts / "natural_scale_comparison.json").read_text(encoding="utf-8")
+    )
+    assert comparison["verdicts"]
+    for verdict in comparison["verdicts"]:
+        assert set(verdict["beats_controls"]) == {
+            "natural_random_matched_norm",
+            "natural_shuffled",
+            "natural_sign_reversed",
+            "natural_unrelated_cone",
+        }
+    metadata = json.loads((run_dir / "run_metadata.json").read_text(encoding="utf-8"))
+    assert metadata["natural_scale_gonogo"] == comparison["report"]
+
+    # summary.md documents the comparison and tags each row's scaling mode.
+    summary_text = (run_dir / "summary.md").read_text(encoding="utf-8")
+    assert "Natural-scale comparison" in summary_text
+    assert "natural_matched" in summary_text
+    assert "ratio_scaled" in summary_text
 
 
 def test_limit_one_dev_run_never_touches_heldout(experiment, monkeypatch):

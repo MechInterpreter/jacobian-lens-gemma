@@ -49,6 +49,7 @@ from jlens.generative import (
     DEFAULT_AGREEMENT_TOP_K,
     MAX_TARGET_TOKENS,
     MIN_TARGET_TOKENS,
+    NATURAL_SCALE_MATCHED_CONDITIONS,
     NEUTRAL_PROMPTS,
     GenerativeError,
     SteeringSchedule,
@@ -57,13 +58,17 @@ from jlens.generative import (
     build_condition_vector,
     choose_calibration,
     compare_next_token_distributions,
+    condition_scaling_mode,
     first_token_distribution,
     gonogo_report,
     greedy_decode,
     kl_from_baseline,
     load_benchmark,
     make_generative_record,
+    natural_scale_gonogo_report,
+    natural_scale_verdicts,
     per_example_verdicts,
+    scale_to_norm,
     scale_to_ratio,
     select_split_examples,
     summarize_by_condition,
@@ -554,6 +559,21 @@ def main() -> None:
             # Donor is the next example in this same-split run list, so the
             # unrelated cone never comes from the other split.
             donor = per_example[example_ids[(index + 1) % len(example_ids)]]
+            # The natural-scale reference: this example's own full-cone
+            # reconstruction, unscaled. Depends only on this (layer, example)'s
+            # active generators, not on the neutral prompt, so it is computed
+            # once here rather than per prompt/schedule. natural_scale's own
+            # injected delta is exactly this vector, so its norm doubles as
+            # the target norm every natural-scale-matched control below is
+            # rescaled to.
+            natural_full_cone_norm = float(
+                build_condition_vector(
+                    "full_cone",
+                    atoms=dictionary.atoms,
+                    token_ids=entry["active_ids"],
+                    coefficients=entry["active_coeffs"],
+                ).delta.float().norm()
+            )
             target = resolved_targets[example["example_id"]]
             target_ids = target["target_token_ids"]
             target_strings = target["target_token_strings"]
@@ -731,7 +751,7 @@ def main() -> None:
                     injection_layer=layer,
                     anchor=None,
                     seed=None,
-                    scale_info=None,
+                    scale_info={"scaling_mode": condition_scaling_mode("none")},
                 )
                 zero_vector = build_condition_vector("zero", d_model=model.d_model)
                 emit(
@@ -743,7 +763,7 @@ def main() -> None:
                     injection_layer=layer,
                     anchor=None,
                     seed=None,
-                    scale_info=None,
+                    scale_info={"scaling_mode": condition_scaling_mode("zero")},
                 )
 
                 def build_unscaled(
@@ -762,11 +782,20 @@ def main() -> None:
                         base_seed, example["example_id"], condition, layer, prompt_id
                     )
                     kwargs: dict = {"seed": seed}
+                    # Natural-scale-matched conditions (natural_unrelated_cone,
+                    # natural_shuffled, natural_sign_reversed,
+                    # natural_mass_subcone) build their *direction* with
+                    # exactly the same inputs as their ratio-scaled
+                    # counterpart — only the final scaling step differs (below,
+                    # scale_to_norm against natural_full_cone_norm instead of
+                    # scale_to_ratio against the receiving activation).
                     if condition in (
                         "full_cone",
                         "natural_scale",
                         "shuffled",
+                        "natural_shuffled",
                         "sign_reversed",
+                        "natural_sign_reversed",
                         "wrong_layer",
                         "wrong_position",
                     ):
@@ -775,7 +804,7 @@ def main() -> None:
                             token_ids=entry["active_ids"],
                             coefficients=entry["active_coeffs"],
                         )
-                    elif condition == "mass_subcone":
+                    elif condition in ("mass_subcone", "natural_mass_subcone"):
                         kwargs.update(
                             atoms=dictionary.atoms,
                             token_ids=entry["active_ids"],
@@ -789,13 +818,20 @@ def main() -> None:
                             coefficients=entry["active_coeffs"],
                             manual_indices=manual_map[str(layer)],
                         )
-                    elif condition == "unrelated_cone":
+                    elif condition in ("unrelated_cone", "natural_unrelated_cone"):
                         kwargs.update(
                             atoms=dictionary.atoms,
                             unrelated_token_ids=donor["active_ids"],
                             unrelated_coefficients=donor["active_coeffs"],
                         )
-                    elif condition == "random_matched_norm":
+                    elif condition in (
+                        "random_matched_norm",
+                        "natural_random_matched_norm",
+                    ):
+                        # Unit-norm raw direction; the final scaling step below
+                        # (scale_to_ratio or scale_to_norm) sets the actual
+                        # injected magnitude, exactly as for every other
+                        # condition here.
                         kwargs.update(d_model=model.d_model, match_norm=1.0)
                     elif condition == "raw_activation":
                         kwargs.update(raw_activation=entry["h_source"])
@@ -816,7 +852,9 @@ def main() -> None:
                 sweep.sort(key=lambda c: c != "unrelated_cone")
                 for condition in sweep:
                     thresholds = (
-                        mass_thresholds if condition == "mass_subcone" else [None]
+                        mass_thresholds
+                        if condition in ("mass_subcone", "natural_mass_subcone")
+                        else [None]
                     )
                     for threshold in thresholds:
                         built, seed = build_unscaled(condition, threshold)
@@ -841,7 +879,6 @@ def main() -> None:
                         # observable that says where the cone naturally sits
                         # relative to the receiving activation.
                         if condition == "natural_scale":
-                            natural_norm = float(built.delta.float().norm())
                             receiving = norms[norm_key]
                             for schedule in schedules:
                                 emit(
@@ -854,15 +891,53 @@ def main() -> None:
                                     anchor=anchor,
                                     seed=seed,
                                     scale_info={
+                                        "scaling_mode": condition_scaling_mode(
+                                            condition
+                                        ),
                                         "unscaled": True,
-                                        "natural_delta_norm": natural_norm,
+                                        "natural_delta_norm": natural_full_cone_norm,
                                         "receiving_activation_norm": receiving,
                                         "natural_ratio": (
-                                            natural_norm / receiving
+                                            natural_full_cone_norm / receiving
                                             if receiving
                                             else None
                                         ),
                                     },
+                                )
+                            continue
+                        # Natural-scale-matched controls: same direction as
+                        # their ratio-scaled counterpart, rescaled to the
+                        # example's own natural_full_cone_norm instead of a
+                        # ratio of the receiving activation, and swept across
+                        # every schedule natural_scale itself runs under (not
+                        # just the first) — that per-schedule match is what
+                        # makes "does the correct cone beat this control"
+                        # answerable at all: at one fixed ratio, a schedule
+                        # that merely reinjects more often could look like a
+                        # direction effect when it is really a magnitude one.
+                        if condition in NATURAL_SCALE_MATCHED_CONDITIONS:
+                            scaled, norm_info = scale_to_norm(
+                                built.delta, target_norm=natural_full_cone_norm
+                            )
+                            scale_info = {
+                                "scaling_mode": condition_scaling_mode(condition),
+                                "raw_delta_norm": norm_info["raw_delta_norm"],
+                                "scale_factor": norm_info["scale_factor"],
+                                "scaled_delta_norm": norm_info["scaled_delta_norm"],
+                                "reference_natural_cone_norm": natural_full_cone_norm,
+                                "receiving_activation_norm": norms[norm_key],
+                            }
+                            for schedule in schedules:
+                                emit(
+                                    condition,
+                                    delta=scaled,
+                                    vector_meta=built.meta,
+                                    ratio=None,
+                                    schedule=schedule,
+                                    injection_layer=injection_layer,
+                                    anchor=anchor,
+                                    seed=seed,
+                                    scale_info=scale_info,
                                 )
                             continue
                         for ratio in ratios:
@@ -871,6 +946,10 @@ def main() -> None:
                                 activation_norm=norms[norm_key],
                                 ratio=ratio,
                             )
+                            scale_info = {
+                                **scale_info,
+                                "scaling_mode": condition_scaling_mode(condition),
+                            }
                             condition_schedules = (
                                 schedules
                                 if condition == "full_cone"
@@ -922,6 +1001,32 @@ def main() -> None:
     except GenerativeError as exc:
         logger.warning("analysis incomplete: %s", exc)
 
+    # Ratio-scaled controls (GONOGO_CONTROLS) are injected at a different norm
+    # than natural_scale, so beating them at a calibrated ratio cannot show
+    # whether a low-strength gain is specific to the correct cone's direction.
+    # This is the matched-norm answer to that question: same delta norm, every
+    # schedule, per (example, layer). Absent (natural_scale_gonogo stays None)
+    # whenever the run didn't configure the natural-scale-matched conditions —
+    # e.g. --smoke, or a config that only requests the ratio-scaled battery —
+    # exactly like the ratio-scaled gonogo block above is absent when nothing
+    # scored full_cone.
+    natural_scale_gonogo = None
+    try:
+        natural_verdicts = natural_scale_verdicts(all_records)
+        natural_scale_gonogo = natural_scale_gonogo_report(natural_verdicts)
+        with open(
+            os.path.join(artifacts, "natural_scale_comparison.json"),
+            "w",
+            encoding="utf-8",
+        ) as f:
+            json.dump(
+                {"verdicts": natural_verdicts, "report": natural_scale_gonogo},
+                f,
+                indent=2,
+            )
+    except GenerativeError as exc:
+        logger.warning("natural-scale comparison incomplete: %s", exc)
+
     lines = [
         f"# Generative J-cone validation — {run_id}",
         "",
@@ -939,15 +1044,16 @@ def main() -> None:
         "",
         "## Per-condition summary",
         "",
-        "| condition | n | mean d(logP) vs zero | mean specificity | exact | substring |",
-        "|---|---|---|---|---|---|",
+        "| condition | mode | n | mean d(logP) vs zero | mean specificity | exact | substring |",
+        "|---|---|---|---|---|---|---|",
     ]
     for row in summary:
         def fmt(value):
             return "-" if value is None else f"{value:.3f}"
 
         lines.append(
-            f"| {row['vector_condition']} | {row['n_records']} | "
+            f"| {row['vector_condition']} | {row['scaling_mode']} | "
+            f"{row['n_records']} | "
             f"{fmt(row['mean_delta_vs_zero'])} | "
             f"{fmt(row['mean_specificity_vs_unrelated'])} | "
             f"{fmt(row['exact_recovery_rate'])} | "
@@ -966,6 +1072,15 @@ def main() -> None:
             f"## Go/no-go: **{'GO' if gonogo['go'] else 'NO-GO'}** "
             f"({gonogo['n_passing_joint_criterion']}/{gonogo['n_examples']} "
             f"examples pass; recovery {gonogo['recovery_fraction']:.0%})",
+        ]
+    if natural_scale_gonogo:
+        lines += [
+            "",
+            f"## Natural-scale comparison (matched delta norm, every schedule): "
+            f"**{'GO' if natural_scale_gonogo['go'] else 'NO-GO'}** "
+            f"({natural_scale_gonogo['n_passing']}/{natural_scale_gonogo['n_points']} "
+            f"(example, layer, schedule) points beat zero and every "
+            f"natural-scale-matched control)",
         ]
     with open(os.path.join(run_dir, "summary.md"), "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
@@ -996,6 +1111,7 @@ def main() -> None:
             "wall_seconds": round(time.time() - started, 1),
             "calibration": calibration,
             "gonogo": gonogo,
+            "natural_scale_gonogo": natural_scale_gonogo,
         },
     )
     logger.info("done: %d records in %s", len(all_records), run_dir)

@@ -29,10 +29,11 @@ solve the binding problem.
    post attention/MLP/PLE/`layer_scalar`), final token of the source prompt.
 2. Fresh nonnegative gradient pursuit (k=10) against the layer's J-space
    dictionary gives active generators `v_i` and coefficients `a_i`.
-3. Build the condition vector (13 conditions, below), rescale it so
-   ‖δ‖ = ratio · ‖h_recv‖ where `h_recv` is the unsteered residual at the
-   injection site of the neutral prompt (requested **and** measured ratios
-   are recorded).
+3. Build the condition vector (19 conditions, below), rescale it — either to
+   ‖δ‖ = ratio · ‖h_recv‖ (`h_recv` the unsteered residual at the injection
+   site of the neutral prompt; requested **and** measured ratios are
+   recorded), or, for `natural_scale` and its matched controls, to a fixed
+   observed norm instead of a ratio (below).
 4. Inject at the neutral prompt's final token position under a schedule:
    `prompt_only`, `constant` (every generated position), or `decaying`
    (weight `decay^offset`).
@@ -46,7 +47,47 @@ of positive coefficient mass), `manual_subcone` (manifest-provided indices),
 `unrelated_cone` (another example's cone, **from the same split**),
 `random_matched_norm`, `shuffled` (coordinate permutation), `sign_reversed`,
 `wrong_layer`, `wrong_position`, `raw_activation`, `activation_diff` (source
-minus matched control prompt).
+minus matched control prompt); plus five **natural-scale-matched** controls —
+`natural_unrelated_cone`, `natural_random_matched_norm`, `natural_shuffled`,
+`natural_sign_reversed`, `natural_mass_subcone` — below.
+
+### Natural-scale-matched controls
+
+`natural_scale`'s low-strength gain (`+2.9` to `+3.1` mean target log-prob vs
+zero at layer 14 on `dev-phrase-solar-eclipse`, varying by schedule) cannot by
+itself show the gain is *specific to the correct direction*: `GONOGO_CONTROLS`
+(random/shuffled/sign-reversed/unrelated) were only ever evaluated at a
+calibrated *ratio*, i.e. at a different injected norm than `natural_scale`'s
+own — and only under `prompt_only`. A control that "loses" at a different
+magnitude and a narrower schedule set proves nothing about direction.
+
+The five `natural_*` controls close that gap: each builds the exact same
+*direction* as its ratio-scaled counterpart (same atoms, same donor, same
+seed convention — see `jlens.generative.build_condition_vector`), then
+rescales it via `jlens.generative.scale_to_norm` to `natural_scale`'s own
+observed delta norm for that (example, layer) — not to any ratio of the
+receiving activation — and sweeps every schedule `natural_scale` itself runs
+under, not just `prompt_only`. `sign_reversed`/`shuffled` need no rescaling in
+practice (negation and coordinate permutation both preserve norm exactly);
+`unrelated_cone`/`mass_subcone`/`random_matched_norm` generally do.
+
+Every condition's provenance is tagged with `jlens.generative
+.condition_scaling_mode`: `"none"` (`none`/`zero`), `"natural_unscaled"`
+(`natural_scale` — the reference), `"natural_matched"` (the five controls
+above), or `"ratio_scaled"` (everything else). `summarize_by_condition` never
+merges across conditions — `natural_unrelated_cone` and `unrelated_cone`
+stay separate rows even though one is a rescaled copy of the other's
+direction — so ratio-scaled and natural-scale-matched results cannot be
+silently averaged together; `scaling_mode` just makes the grouping legible
+without re-deriving it from the condition name.
+
+`jlens.generative.natural_scale_verdicts` / `natural_scale_gonogo_report`
+answer the motivating question directly, per (example, layer, schedule) since
+there is no ratio to calibrate on: does `natural_scale` beat zero and every
+`NATURAL_SCALE_GONOGO_CONTROLS` entry at the *same* injected norm? Written to
+`artifacts/natural_scale_comparison.json` and mirrored into
+`run_metadata.json` as `natural_scale_gonogo`, alongside (not merged with) the
+ratio-scaled `gonogo.json`.
 
 ### Strength: the informative region is low
 
@@ -307,13 +348,18 @@ per-token strings, and counts per example), `artifacts/pursuits.json` (active
 generator ids / labels / coefficients / explained fractions per example x
 layer), `artifacts/records.jsonl` (schema `jlens.generative.record.v1`: run id,
 commit, model revision, example, layers/positions, condition, schedule,
-requested + measured ratios, vector + receiving norms, generator metadata,
-subset indices and mass thresholds, target token ids **and token strings**,
-per-token and total target log-probabilities, deltas vs zero and vs unrelated,
-KL from baseline, generated tokens/text/stop reason, seeds), `artifacts/
-summary_by_condition.json`, `artifacts/calibration.json` (dev),
-`artifacts/gonogo.json`, `summary.md`, `run_metadata.json` (environment,
-gates, wall time). No raw activation tensors are stored.
+requested + measured ratios, vector + receiving norms, generator metadata
+(including `scaling_mode`, and for natural-scale-matched conditions
+`raw_delta_norm` / `scale_factor` / `reference_natural_cone_norm`), subset
+indices and mass thresholds, target token ids **and token strings**, per-token
+and total target log-probabilities, deltas vs zero and vs unrelated, KL from
+baseline, generated tokens/text/stop reason, seeds), `artifacts/
+summary_by_condition.json` (each row tagged with `scaling_mode`),
+`artifacts/calibration.json` (dev), `artifacts/gonogo.json` (ratio-scaled
+go/no-go), `artifacts/natural_scale_comparison.json` (natural-scale-matched
+go/no-go, per (example, layer, schedule) — see above), `summary.md`,
+`run_metadata.json` (environment, gates, wall time, `gonogo`,
+`natural_scale_gonogo`). No raw activation tensors are stored.
 
 ## Interpretation limits
 

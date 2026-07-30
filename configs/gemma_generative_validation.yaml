@@ -89,6 +89,20 @@ steering:
     - wrong_position
     - raw_activation
     - activation_diff
+    # Matched natural-scale controls: the direction of each control above,
+    # rescaled to natural_scale's own injected delta norm (not to a ratio of
+    # the receiving activation) and run across every schedule natural_scale
+    # supports. Ratio-scaled controls alone are evaluated at a different norm
+    # than natural_scale, so they cannot show whether a low-strength gain is
+    # specific to the correct cone's *direction* rather than to injection
+    # magnitude or schedule choice; these can. See
+    # jlens.generative.NATURAL_SCALE_MATCHED_CONDITIONS and
+    # docs/generative_validation.md.
+    - natural_unrelated_cone
+    - natural_random_matched_norm
+    - natural_shuffled
+    - natural_sign_reversed
+    - natural_mass_subcone
   # manual_subcone joins the list automatically for examples whose manifest
   # entry provides indices; it is never fabricated.
 
@@ -98,11 +112,17 @@ decode:
   # Uncached decoding is the dominant cost; restrict generation to these
   # strength ratios and schedule kinds (scoring covers the full sweep). Weighted
   # toward the informative low end, with 1.0 kept as a stress point.
-  # natural_scale carries ratio=null and always decodes.
+  # natural_scale and every natural-scale-matched control carry ratio=null and
+  # always decode (their schedule loop covers all configured schedules, not
+  # just schedule_kinds above).
   ratios: [0.05, 0.1, 0.25, 1.0]
   schedule_kinds: [prompt_only, constant]
   # Decoding is expensive uncached; restrict full-battery generation to these
-  # conditions (scoring always covers every condition).
+  # conditions (scoring always covers every condition). Mirrors the base
+  # conditions' inclusion/exclusion: natural_unrelated_cone /
+  # natural_random_matched_norm / natural_mass_subcone decode because
+  # unrelated_cone / random_matched_norm / mass_subcone do; natural_shuffled /
+  # natural_sign_reversed do not, because shuffled / sign_reversed don't.
   generate_conditions:
     - none
     - zero
@@ -113,6 +133,9 @@ decode:
     - unrelated_cone
     - random_matched_norm
     - raw_activation
+    - natural_unrelated_cone
+    - natural_random_matched_norm
+    - natural_mass_subcone
 
 neutral_prompts: [label-colon, answer-four-words, shortest-label-is]
 
