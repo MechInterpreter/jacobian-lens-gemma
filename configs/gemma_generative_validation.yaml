@@ -137,7 +137,22 @@ decode:
     - natural_random_matched_norm
     - natural_mass_subcone
 
-neutral_prompts: [label-colon, answer-four-words, shortest-label-is]
+# How the receiver (neutral) prompt is presented to the model. The pinned
+# checkpoint is instruction-tuned (google/gemma-4-E4B-it), so `chat` — one user
+# message through the tokenizer's own chat template, with the model-generation
+# prefix — is the only formatting it was tuned to answer. `legacy_raw`
+# reproduces the earlier raw-text encoding and exists only for reproducing
+# those (confounded) runs. Source prompts are unaffected by this setting.
+receiver:
+  format: chat
+
+# Default receiver prompts: target-independent and free of the priming
+# vocabulary (internal / representation / concept / label / value) that made
+# the model's most likely continuation a restatement of the prompt itself —
+# the origin of the "Internal Concept" decodes. The old prompts survive as
+# jlens.generative.LEGACY_DIAGNOSTIC_PROMPTS (legacy-label-colon,
+# legacy-answer-four-words, legacy-shortest-label-is) for diagnostics only.
+neutral_prompts: [noun-phrase-only, what-is-described, name-the-entity]
 
 eval:
   control_seed: 1234

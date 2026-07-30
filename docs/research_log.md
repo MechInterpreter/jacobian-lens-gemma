@@ -240,12 +240,39 @@ multi-token concepts more specifically than matched controls:
   native-Windows `termios` limitation documented with the notebook
   fallback).
 
+## 2026-07-29 — Generative receiver prompting was confounded; fixed
+
+The first generative smoke decodes ("Internal Concept") are **void**. Two
+receiver-side defects compounded: the prompts themselves contained "internal
+concept" / "internal representation" / "Label:", so a restatement of the prompt
+was the model's likeliest continuation regardless of any injected vector; and
+receiver prompts were tokenized raw through `model.encode()` even though the
+pinned checkpoint (`google/gemma-4-E4B-it`) is instruction-tuned, so the model
+never saw the chat turn structure and generation prefix it was tuned to answer
+after.
+
+Fixed on `experiment/generative-jlens-validation`: explicit receiver formats
+(`chat` by default, `legacy_raw` for reproducing the confounded runs) behind one
+centralized `encode_receiver_prompt` helper with structural verification of the
+chat rendering; three priming-free default prompts (the old ones retained only
+as `legacy-*` diagnostics); target ids derived contextually as the assistant
+continuation of the exact formatted prompt, with chat-control tokens excluded and
+the 2–6 token rule applied to those ids; the steering anchor revalidated against
+the formatted prompt length and recorded with its token id and string; a
+per-run `artifacts/prompt_debug.json`; and two added greedy gates (the reference
+sequence must start with the exact prompt ids, and recorded text must decode the
+generated ids alone). Source-prompt formatting is unchanged, so the pursuit/lens
+side is unaffected. **No corrected GPU run has been performed** — no claim about
+whether the steering works can be made from this branch yet.
+
 ## Next planned milestone
 
 User-run L4 sessions: the causal smoke run, then the multimodal capture;
 merge both bundles into the explorer, capture screenshots, and switch
 resume packaging from the pre-completion bullet to the full bullet
 (docs/resume_packaging.md gates this on the merged measured bundles).
-After those, the generative validation GPU run (`--smoke`, then dev
-calibration, then the frozen held-out evaluation) per
+After those, the generative validation GPU run — first
+`scripts/validate_benchmark_targets.py` (contextual target counts under the real
+tokenizer have not been observed yet), then the corrected two-concept smoke run,
+then dev calibration, then the frozen held-out evaluation — per
 docs/generative_validation.md.

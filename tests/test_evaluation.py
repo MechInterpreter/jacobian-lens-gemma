@@ -126,7 +126,7 @@ def test_load_eval_prompts_v2_schema_and_rendering():
     # Chat rows are rendered through the tokenizer's chat template.
     chat_rows = [row for row in rows if row["format"] == "chat"]
     assert len(chat_rows) >= 5
-    assert all("<user>" in row["text"] for row in chat_rows)
+    assert all("<start_of_turn>user" in row["text"] for row in chat_rows)
     # Every category with plain prompts has several examples (aggregates
     # need more than one sample).
     plain_by_cat: dict[str, int] = {}

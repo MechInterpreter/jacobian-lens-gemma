@@ -165,7 +165,12 @@ decode:
     - natural_random_matched_norm
     - natural_mass_subcone
 
-neutral_prompts: [label-colon, answer-four-words, shortest-label-is]
+# Identical to the smoke/default config: chat formatting for the
+# instruction-tuned checkpoint, and the three priming-free default prompts.
+receiver:
+  format: chat
+
+neutral_prompts: [noun-phrase-only, what-is-described, name-the-entity]
 
 eval:
   control_seed: 1234

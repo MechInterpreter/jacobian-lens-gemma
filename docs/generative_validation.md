@@ -5,7 +5,35 @@ Branch: `experiment/generative-jlens-validation`
 · Runner: [`scripts/run_generative_validation.py`](../scripts/run_generative_validation.py)
 · Config: [`configs/gemma_generative_validation.yaml`](../configs/gemma_generative_validation.yaml)
 · Benchmark: [`configs/generative_benchmark.json`](../configs/generative_benchmark.json)
-· Tests: `tests/test_generative.py`, `tests/test_generative_runner.py`
+· Tests: `tests/test_generative.py`, `tests/test_generative_runner.py`,
+`tests/test_receiver_prompting.py`
+
+> ## Status: earlier decodes were confounded — no valid result yet
+>
+> The first generative smoke runs produced decodes such as **"Internal
+> Concept"**. That output is **not evidence about J-space steering**. Two
+> defects in the *receiver* (the neutral prompt the vector is injected into)
+> compounded:
+>
+> 1. **Lexical priming.** The receiver prompts literally contained "internal
+>    concept", "internal representation", and "Label:". For an
+>    instruction-following model the likeliest continuation of such a prompt is
+>    a restatement of the prompt's own vocabulary, so "Internal Concept" is
+>    explained by the wording alone — with or without any injected vector.
+> 2. **Missing chat formatting.** The pinned checkpoint is
+>    `google/gemma-4-E4B-it`, an **instruction-tuned** model, but receiver
+>    prompts were tokenized through the raw `model.encode()` path. The model
+>    never saw `<start_of_turn>user … <end_of_turn>` or the
+>    `<start_of_turn>model` generation prefix it was tuned to answer after, so
+>    it was continuing a bare fragment rather than answering a question.
+>
+> Both are fixed below (explicit receiver formats, priming-free default
+> prompts, contextual target ids, revalidated anchor, and a per-run
+> prompt-debug artifact). **No corrected GPU run has been performed**, so
+> nothing here claims the steering works or does not work; every prior
+> generative number on this branch should be treated as void. Source-prompt
+> formatting was **not** changed, so the pursuit/lens side of previous runs is
+> unaffected.
 
 ## The question
 
@@ -34,12 +62,13 @@ solve the binding problem.
    site of the neutral prompt; requested **and** measured ratios are
    recorded), or, for `natural_scale` and its matched controls, to a fixed
    observed norm instead of a ratio (below).
-4. Inject at the neutral prompt's final token position under a schedule:
-   `prompt_only`, `constant` (every generated position), or `decaying`
-   (weight `decay^offset`).
-5. Score the target phrase teacher-forced (`Σ_t log P(y_t | y_<t, q)`), and
-   (for the configured subset) decode greedily **uncached** — every step is
-   a full forward pass, so injection semantics are exact.
+4. Inject at the **formatted** receiver prompt's final token position under a
+   schedule: `prompt_only`, `constant` (every generated position), or
+   `decaying` (weight `decay^offset`).
+5. Score the target phrase teacher-forced (`Σ_t log P(y_t | y_<t, q)`) using
+   **contextual** target ids, and (for the configured subset) decode greedily
+   **uncached** — every step is a full forward pass, so injection semantics are
+   exact.
 
 Conditions: `none`, `zero` (parity), `full_cone`, `natural_scale` (the cone at
 its **own** norm, unscaled), `mass_subcone` (smallest subset covering 60/70/80%
@@ -51,11 +80,101 @@ minus matched control prompt); plus five **natural-scale-matched** controls —
 `natural_unrelated_cone`, `natural_random_matched_norm`, `natural_shuffled`,
 `natural_sign_reversed`, `natural_mass_subcone` — below.
 
+### The receiver: format, prompts, targets, anchor
+
+Everything in this section concerns only the **receiver** — the neutral prompt
+the steering vector is injected into. Source prompts (the ones the pursuit
+reads) are untouched.
+
+**Format** (`receiver.format`, default `chat`), via the single helper
+`jlens.generative.encode_receiver_prompt` — every receiver encoding in the
+runner, the gates, and `scripts/validate_benchmark_targets.py` goes through it,
+so a formatting change cannot reach one caller and miss another:
+
+| mode | encoding | use |
+|---|---|---|
+| `chat` | one user message through `tokenizer.apply_chat_template(..., add_generation_prompt=True)` | **default** — what the instruction-tuned checkpoint expects |
+| `legacy_raw` | raw text through the tokenizer, BOS ensured (the old `model.encode()` path, bit-identical) | reproducing the confounded runs only |
+
+`chat` is verified structurally, not assumed: exactly one BOS (at position 0),
+the user content present exactly once, a non-empty model-generation prefix
+appended after the end-of-turn marker, and — when the template uses Gemma's
+turn markers — exactly two `<start_of_turn>` and one `<end_of_turn>`. A
+malformed rendering raises rather than being scored. Unknown modes are
+rejected by both `encode_receiver_prompt` and config validation.
+
+**Default prompts** are target-independent and contain none of
+`internal`, `representation`, `concept`, `label`, `value`
+(`jlens.generative.FORBIDDEN_PROMPT_TERMS`, enforced at import time by
+`assert_clean_prompt`, so a default prompt cannot silently regain the priming
+vocabulary):
+
+| id | text |
+|---|---|
+| `noun-phrase-only` | `Reply with only a specific one- to four-word noun phrase.` |
+| `what-is-described` | `What is being described? Reply with only its specific name.` |
+| `name-the-entity` | `Answer with only the specific name of the entity, object, event, or phenomenon.` |
+
+The three confounded prompts survive **only** as
+`jlens.generative.LEGACY_DIAGNOSTIC_PROMPTS` (`legacy-label-colon`,
+`legacy-answer-four-words`, `legacy-shortest-label-is`); the old unprefixed ids
+no longer resolve, so a stale config fails loudly instead of quietly running
+the confounded wording. A config must list at least one default prompt, and
+`--smoke` and the parity/greedy gates always pick a default one — a single
+smoke decode judged on a legacy prompt would be uninterpretable for exactly the
+reason this fix exists.
+
+**Contextual target ids.** Targets are derived as the assistant continuation of
+the exact formatted prompt: `rendered_prompt + target_phrase` is tokenized and
+the prompt's own ids are sliced off
+(`jlens.generative.contextual_target_token_ids`). A phrase can segment
+differently after `<start_of_turn>model` than it does standalone, and it is the
+in-context segmentation the model actually produces. BOS, chat-control tokens,
+and the assistant end-of-turn marker are removed, so scoring covers answer
+content only. The 2–6 token rule applies to these contextual ids. If appending
+the phrase re-tokenizes the prompt itself (prompt ids no longer a prefix of the
+joint ids), the run aborts rather than score a misaligned target. A manifest's
+pre-resolved `target_token_ids` is deliberately **ignored** in chat mode — it is
+a standalone segmentation. `legacy_raw` preserves the old standalone,
+unfiltered derivation exactly.
+
+**Steering anchor.** The anchor is recomputed from the *formatted* prompt length
+(`jlens.generative.resolve_steering_anchor`), so chat control tokens are counted
+and the anchor still lands on the final prompt position — the one whose
+next-token distribution is the first answer token. Each run records
+`prompt_len`, `anchor_index`, `anchor_token_id`, and the anchor's token string,
+per prompt and per record (the `wrong_position` control's anchor is validated
+against the formatted length too, and the run aborts if that fixed index would
+coincide with the real anchor).
+
+**Not changed, deliberately: greedy decoding.** The decode loop, its stop set
+(`tokenizer.eos_token_id`), and the equivalence gates are untouched, so the
+corrected run is comparable to the earlier ones on the decoding side. One
+consequence to expect in chat mode: Gemma ends an assistant turn with
+`<end_of_turn>`, which is not the tokenizer's `eos_token_id`, so a decode can run
+past the end of the answer and the recorded `generated_text` may carry trailing
+turn machinery (special tokens are skipped when decoding). Exact recovery
+compares only the leading `len(target)` generated ids and substring recovery is a
+containment test, so neither is corrupted by the tail — but read
+`generated_token_ids` rather than eyeballing the text. Adding chat stop tokens is
+a decode-semantics change and is deliberately left for a separate decision.
+
+**`artifacts/prompt_debug.json`** makes all of this auditable after the fact:
+per receiver prompt — id and format, raw and rendered prompt, prompt token ids
+and per-token strings, the decode of those ids, prompt length and steering
+anchor, and every example's contextual target ids, token strings, decoded
+target, raw continuation, and excluded control tokens. Records additionally
+carry `receiver_prompt_id`, `receiver_format`, `receiver_prompt_len`,
+`anchor_token_id`, `anchor_token_string`, and `generated_token_ids` (always
+present, `null` when the record was not decoded).
+
 ### Natural-scale-matched controls
 
 `natural_scale`'s low-strength gain (`+2.9` to `+3.1` mean target log-prob vs
-zero at layer 14 on `dev-phrase-solar-eclipse`, varying by schedule) cannot by
-itself show the gain is *specific to the correct direction*: `GONOGO_CONTROLS`
+zero at layer 14 on `dev-phrase-solar-eclipse`, varying by schedule — **measured
+under the confounded receiver prompting described at the top of this document,
+so treat the numbers as void; the design argument below is unaffected**) cannot
+by itself show the gain is *specific to the correct direction*: `GONOGO_CONTROLS`
 (random/shuffled/sign-reversed/unrelated) were only ever evaluated at a
 calibrated *ratio*, i.e. at a different injected norm than `natural_scale`'s
 own — and only under `prompt_only`. A control that "loses" at a different
@@ -138,8 +257,14 @@ Enforced, not merely documented:
 
 Hard gates before any steering (any failure aborts): architecture
 verification, lens SHA-256 fingerprint, zero-vector logit parity within
-`parity.max_abs_logit_diff_tol`, and manual-uncached vs `generate()` greedy
-equivalence. The reference `generate()` call explicitly sets
+`parity.max_abs_logit_diff_tol`, manual-uncached vs `generate()` greedy
+equivalence, and generated-token hygiene — `generate()`'s sequence must still
+begin with the exact prompt ids (so the slice defining "generated" is right) and
+the manual decoder's recorded text must be the decode of its generated ids
+alone, so no prompt echo can be recorded as a generation. The gate prompt is
+encoded through the same `encode_receiver_prompt` helper at the run's receiver
+format, so the gates cannot pass on a prompt shape the sweep never uses. The
+reference `generate()` call explicitly sets
 `do_sample=False`, `num_beams=1`, `use_cache=False` and matching EOS handling,
 because the Gemma 4 E4B-it checkpoint's stored generation config defaults to
 `do_sample=True, top_k=64, top_p=0.95`.
@@ -210,11 +335,15 @@ success.
 ## Local (CPU, mock) checks
 
 ```bash
-python -m pytest tests/test_generative.py tests/test_generative_runner.py -q
+python -m pytest tests/test_generative.py tests/test_generative_runner.py tests/test_receiver_prompting.py -q
 ```
 
 The runner test executes the full pipeline on the Gemma4-shaped mock —
 gates, dictionaries, pursuits, all conditions, records, go/no-go artifacts.
+`tests/test_receiver_prompting.py` covers the receiver fix specifically: clean
+prompt safety, chat vs `legacy_raw` encoding, contextual target extraction,
+hook anchoring against the formatted prompt, generated-token serialization, and
+none/zero parity on a chat-formatted prompt. No weights are downloaded.
 
 ## Remote GPU workflow (Colab CLI)
 
@@ -304,9 +433,14 @@ echo "import subprocess,os; os.chdir('/content/jacobian-lens-gemma'); subprocess
 ```
 
 Downloads the tokenizer only (no weights, no GPU) and applies the same 2–6 token
-requirement the run enforces, printing each target's count, ids, and per-token
-strings. Exits non-zero if any target violates it, so a bad concept costs
-seconds instead of a full run.
+requirement the run enforces, using the same **contextual** derivation against
+every configured receiver prompt at the config's `receiver.format`, and printing
+each rendered prompt, its anchor, and each target's count, ids, and per-token
+strings. Exits non-zero if any target violates the requirement under any
+receiver prompt, so a bad concept — or a phrase whose in-context segmentation
+drifts out of 2–6 tokens — costs seconds instead of a full run. Run this first
+after the receiver change: the contextual counts under the real Gemma tokenizer
+have not yet been observed.
 
 ### Run the validation experiment
 
@@ -320,6 +454,23 @@ run (`pilot_20260715T200437612150_311fd108c23a/artifacts/lens.pt`) — on
 Drive if mounted, otherwise `colab upload` the lens into a local
 `runs/` mirror. Runs are timestamped directories; records are appended
 (fsynced JSONL) after every condition.
+
+**Next GPU step after the receiver fix** — a two-concept smoke run under the
+corrected prompting, before anything larger. `--limit-examples 2` scores the
+first two dev examples (each also serving as the other's unrelated-cone donor,
+same split), and `--smoke` is deliberately *not* passed because it collapses to
+one example and one prompt:
+
+```bash
+echo "import subprocess,os; os.chdir('/content/jacobian-lens-gemma'); subprocess.run(['python','scripts/run_generative_validation.py','--config','configs/gemma_generative_validation.yaml','--allow-model-load','--device-map','cuda','--runs-root','/content/drive/MyDrive/jacobian-lens-gemma/runs','--limit-examples','2','--layers','14','21','--ratios','0.05','0.1','0.25'],check=True)" | colab exec -s jlens
+```
+
+Read `artifacts/prompt_debug.json` **first**: confirm the rendered prompt has
+one BOS, one user turn, and the `<start_of_turn>model` prefix; that the anchor
+token is the last formatted prompt token; and that each contextual target is the
+segmentation you expect. Only then look at the scores — and note that a decode
+echoing the prompt would now be visible as such rather than being mistaken for a
+concept.
 
 ### Broad development calibration
 
@@ -362,17 +513,24 @@ colab run --gpu L4 scripts/colab_smoke.py
 ## Outputs
 
 Each run directory contains `run_started.json`, `resolved_config.json`,
-`artifacts/gates.json`, `artifacts/targets.json` (validated target token ids,
-per-token strings, and counts per example), `artifacts/pursuits.json` (active
+`artifacts/gates.json` (including the encoded gate prompt),
+`artifacts/prompt_debug.json` (per receiver prompt: raw and rendered text, token
+ids/tokens, decoded prompt, length, steering anchor, and each example's
+contextual target — see "The receiver" above), `artifacts/targets.json`
+(validated target token ids, per-token strings, and counts, keyed by receiver
+prompt then example, because contextual targets are a property of the pair),
+`artifacts/pursuits.json` (active
 generator ids / labels / coefficients / explained fractions per example x
 layer), `artifacts/records.jsonl` (schema `jlens.generative.record.v1`: run id,
 commit, model revision, example, layers/positions, condition, schedule,
-requested + measured ratios, vector + receiving norms, generator metadata
+receiver prompt id / format / formatted length and the anchor token id and
+string, requested + measured ratios, vector + receiving norms, generator metadata
 (including `scaling_mode`, and for natural-scale-matched conditions
 `raw_delta_norm` / `scale_factor` / `reference_natural_cone_norm`), subset
 indices and mass thresholds, target token ids **and token strings**, per-token
 and total target log-probabilities, deltas vs zero and vs unrelated, KL from
-baseline, generated tokens/text/stop reason, seeds), `artifacts/
+baseline, `generated_token_ids` (always present; `null` when not decoded) plus
+text/stop reason, seeds), `artifacts/
 summary_by_condition.json` (each row tagged with `scaling_mode`),
 `artifacts/calibration.json` (dev), `artifacts/gonogo.json` (ratio-scaled
 go/no-go), `artifacts/natural_scale_comparison.json` (natural-scale-matched

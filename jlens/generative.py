@@ -48,6 +48,7 @@ import math
 from collections.abc import Sequence
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
+from typing import Any
 
 import torch
 from torch import nn
@@ -134,6 +135,41 @@ def condition_scaling_mode(condition: str) -> str:
 
 
 SCHEDULE_KINDS = ("prompt_only", "constant", "decaying")
+
+#: How a receiver prompt is turned into token ids (see the receiver section
+#: below for the full rationale).
+#:
+#: - ``chat``: one user message through the tokenizer's own chat template with
+#:   ``add_generation_prompt=True`` — exactly one BOS, one user turn, the
+#:   end-of-turn marker, and the model-generation prefix.
+#: - ``legacy_raw``: the previous behaviour (raw text through the tokenizer,
+#:   BOS ensured), retained only so earlier runs can be reproduced.
+RECEIVER_FORMATS = ("chat", "legacy_raw")
+
+DEFAULT_RECEIVER_FORMAT = "chat"
+
+#: Substrings a **default** receiver prompt must not contain. Each one primed
+#: the instruction-tuned model to echo the prompt's own vocabulary back
+#: ("Internal Concept" was the observed output), which is indistinguishable
+#: from a steering effect in the recorded metrics. Matched case-insensitively
+#: as substrings, so inflections ("labels", "valued") are caught too.
+FORBIDDEN_PROMPT_TERMS = (
+    "internal",
+    "representation",
+    "concept",
+    "label",
+    "value",
+)
+
+#: Chat-control token surfaces excluded from a contextual target. Looked up
+#: through the tokenizer, so a tokenizer without them is fine.
+CHAT_CONTROL_TOKENS = (
+    "<bos>",
+    "<eos>",
+    "<pad>",
+    "<start_of_turn>",
+    "<end_of_turn>",
+)
 
 
 class GenerativeError(ValueError):
@@ -952,9 +988,22 @@ def make_generative_record(
     target_recovered_substring: bool | None,
     seed: int | None,
     provenance: dict,
+    receiver_prompt_id: str | None = None,
+    receiver_format: str = DEFAULT_RECEIVER_FORMAT,
+    receiver_prompt_len: int | None = None,
+    anchor_token_id: int | None = None,
+    anchor_token_string: str | None = None,
 ) -> dict:
     """Assemble one JSON-safe result record (schema
-    ``jlens.generative.record.v1``). No activation tensors are stored."""
+    ``jlens.generative.record.v1``). No activation tensors are stored.
+
+    ``receiver_prompt_id`` / ``receiver_format`` / ``receiver_prompt_len`` and
+    the anchor token identify *how the prompt was presented to the model*,
+    which the first generative runs did not record and which turned out to be
+    the thing that invalidated them. ``generated_token_ids`` is always present
+    (``None`` when the record was not decoded) so a reader never has to infer
+    whether decoding happened from a missing key.
+    """
     record = {
         "schema": GENERATIVE_RECORD_SCHEMA,
         "run_id": run_id,
@@ -966,6 +1015,15 @@ def make_generative_record(
         "injection_anchor": int(injection_anchor),
         "steering_schedule": schedule.describe(),
         "neutral_prompt_id": neutral_prompt_id,
+        # Same value as neutral_prompt_id, under the name the receiver-format
+        # work uses; both are written so old readers keep working.
+        "receiver_prompt_id": (
+            neutral_prompt_id if receiver_prompt_id is None else receiver_prompt_id
+        ),
+        "receiver_format": receiver_format,
+        "receiver_prompt_len": receiver_prompt_len,
+        "anchor_token_id": anchor_token_id,
+        "anchor_token_string": anchor_token_string,
         "requested_ratio": strength_ratio,
         "measured_ratio": hook_stats.get("measured_ratio"),
         "delta_norm": hook_stats.get("delta_norm"),
@@ -983,6 +1041,8 @@ def make_generative_record(
         "kl_divergence_from_baseline": kl_divergence,
         "target_recovered_exact": target_recovered_exact,
         "target_recovered_substring": target_recovered_substring,
+        # Always present; DecodeResult.to_dict() overwrites it when decoded.
+        "generated_token_ids": None,
         "random_seed": seed,
         "provenance": dict(provenance),
     }
@@ -1088,6 +1148,7 @@ def validate_target_tokens(
     resolve,
     min_tokens: int = MIN_TARGET_TOKENS,
     max_tokens: int = MAX_TARGET_TOKENS,
+    use_manifest_ids: bool = True,
 ) -> dict[str, dict]:
     """Resolve every example's target against the **pinned** tokenizer and
     require ``min_tokens <= n <= max_tokens``.
@@ -1103,6 +1164,12 @@ def validate_target_tokens(
         resolve: ``(tokenizer, phrase) -> list[int]`` continuation tokenizer.
         min_tokens: Inclusive lower bound (see :data:`MIN_TARGET_TOKENS`).
         max_tokens: Inclusive upper bound.
+        use_manifest_ids: Honour a manifest's pre-resolved
+            ``target_token_ids``. Must be ``False`` whenever ``resolve``
+            derives ids **contextually** (chat mode): a standalone id list
+            written into the manifest is not the segmentation the model sees
+            after the formatted prompt, so silently preferring it would score
+            the wrong tokens.
 
     Returns:
         ``{example_id: {"target_token_ids": [...], "target_token_strings":
@@ -1122,9 +1189,8 @@ def validate_target_tokens(
     for example in examples:
         example_id = example["example_id"]
         phrase = example["target_phrase"]
-        ids = [int(t) for t in (example.get("target_token_ids") or resolve(
-            tokenizer, phrase
-        ))]
+        manifest_ids = example.get("target_token_ids") if use_manifest_ids else None
+        ids = [int(t) for t in (manifest_ids or resolve(tokenizer, phrase))]
         strings = token_strings(tokenizer, ids)
         resolved[example_id] = {
             "target_token_ids": ids,
@@ -1189,19 +1255,552 @@ def select_split_examples(
     return list(selected), donor_only
 
 
-#: Neutral verbalization prompts. None mentions any target concept; each ends
-#: at the point where the concept label should be produced.
+# ---------------------------------------------------------------- receiver
+#
+# The receiver is the neutral prompt the steering vector is injected into, plus
+# the exact way that prompt is turned into token ids. Both halves were wrong in
+# the first generative runs and the two failures compounded:
+#
+# 1. **No chat formatting.** The pinned checkpoint is ``google/gemma-4-E4B-it``,
+#    an *instruction-tuned* model. Prompts were tokenized with the raw
+#    ``model.encode()`` path, so the model never saw ``<start_of_turn>user ...
+#    <end_of_turn>`` or the ``<start_of_turn>model`` generation prefix it was
+#    tuned to answer after. Its continuation of a bare instruction fragment is
+#    not the same distribution as its answer to a user turn.
+# 2. **Lexically priming prompts.** The original prompts contained the literal
+#    words "internal concept", "internal representation", and "Label:", so the
+#    highest-probability continuation of the *prompt itself* was a paraphrase of
+#    the prompt ("Internal Concept"). Any such output says nothing about the
+#    injected vector — it is a property of the wording.
+#
+# So the receiver now has an explicit **format** (:data:`RECEIVER_FORMATS`) and
+# a set of default prompts that are target-independent *and* free of the
+# priming vocabulary (:data:`FORBIDDEN_PROMPT_TERMS`). The old prompts are kept
+# only as clearly named legacy diagnostics, and the raw encoding only as
+# ``legacy_raw``, so previous runs stay reproducible without being the default.
+
+#: Default receiver prompts: target-independent, free of
+#: :data:`FORBIDDEN_PROMPT_TERMS`, and phrased as an instruction a chat model
+#: answers rather than a fragment it continues. Checked at import time.
 NEUTRAL_PROMPTS: dict[str, str] = {
-    "label-colon": (
+    "noun-phrase-only": (
+        "Reply with only a specific one- to four-word noun phrase."
+    ),
+    "what-is-described": (
+        "What is being described? Reply with only its specific name."
+    ),
+    "name-the-entity": (
+        "Answer with only the specific name of the entity, object, event, or "
+        "phenomenon."
+    ),
+}
+
+#: The original prompts, retained **only** as diagnostics for reproducing the
+#: confounded runs. Every one of them contains at least one
+#: :data:`FORBIDDEN_PROMPT_TERMS` entry — that is the point: they are what the
+#: "Internal Concept" outputs were a response to. Never use them as a default,
+#: and never in smoke mode.
+LEGACY_DIAGNOSTIC_PROMPTS: dict[str, str] = {
+    "legacy-label-colon": (
         "Return only the shortest noun or noun phrase naming the represented "
         "internal concept.\nLabel:"
     ),
-    "answer-four-words": (
+    "legacy-answer-four-words": (
         "Name the represented internal concept using no more than four "
         "words.\nAnswer:"
     ),
-    "shortest-label-is": "The shortest label for the internal representation is:",
+    "legacy-shortest-label-is": (
+        "The shortest label for the internal representation is:"
+    ),
 }
+
+
+def prompt_safety_violations(text: str) -> list[str]:
+    """Which :data:`FORBIDDEN_PROMPT_TERMS` appear in ``text`` (lowercased
+    substring match), in declaration order. Empty means clean."""
+    lowered = str(text).lower()
+    return [term for term in FORBIDDEN_PROMPT_TERMS if term in lowered]
+
+
+def assert_clean_prompt(text: str, *, prompt_id: str = "<prompt>") -> None:
+    """Raise unless ``text`` is free of the priming vocabulary.
+
+    A prompt containing "concept"/"label"/... makes its own restatement the
+    model's most likely continuation, so a decode that echoes it is evidence
+    about the wording, not about the injected vector.
+    """
+    if not str(text).strip():
+        raise GenerativeError(f"receiver prompt {prompt_id!r} is empty")
+    violations = prompt_safety_violations(text)
+    if violations:
+        raise GenerativeError(
+            f"receiver prompt {prompt_id!r} contains priming term(s) "
+            f"{violations}: {text!r}. Default prompts must be "
+            f"target-independent and free of {list(FORBIDDEN_PROMPT_TERMS)}; "
+            f"use LEGACY_DIAGNOSTIC_PROMPTS explicitly if reproducing a "
+            f"confounded run."
+        )
+
+
+# Import-time guard: a default prompt can never silently regain priming
+# vocabulary. Legacy diagnostics are deliberately not checked.
+for _prompt_id, _prompt_text in NEUTRAL_PROMPTS.items():
+    assert_clean_prompt(_prompt_text, prompt_id=_prompt_id)
+del _prompt_id, _prompt_text
+
+
+def is_clean_prompt_id(prompt_id: str) -> bool:
+    """Whether ``prompt_id`` names a default (non-legacy, clean) prompt."""
+    return prompt_id in NEUTRAL_PROMPTS
+
+
+def resolve_neutral_prompt(prompt_id: str) -> str:
+    """Prompt text for ``prompt_id``, from the defaults or the legacy
+    diagnostics. Unknown ids raise rather than silently falling back."""
+    if prompt_id in NEUTRAL_PROMPTS:
+        return NEUTRAL_PROMPTS[prompt_id]
+    if prompt_id in LEGACY_DIAGNOSTIC_PROMPTS:
+        return LEGACY_DIAGNOSTIC_PROMPTS[prompt_id]
+    raise GenerativeError(
+        f"unknown receiver prompt id {prompt_id!r}; known ids are "
+        f"{sorted(NEUTRAL_PROMPTS)} (default) and "
+        f"{sorted(LEGACY_DIAGNOSTIC_PROMPTS)} (legacy diagnostics)"
+    )
+
+
+def receiver_format_from_config(config: dict) -> str:
+    """The validated ``receiver.format`` of a generative config, defaulting to
+    :data:`DEFAULT_RECEIVER_FORMAT`."""
+    section = config.get("receiver") or {}
+    fmt = section.get("format", DEFAULT_RECEIVER_FORMAT)
+    if fmt not in RECEIVER_FORMATS:
+        raise GenerativeError(
+            f"receiver.format {fmt!r} not in {RECEIVER_FORMATS}"
+        )
+    return str(fmt)
+
+
+def _tokenize_ids(
+    tokenizer, text: str, *, add_special_tokens: bool, max_length: int
+) -> list[int]:
+    """Token ids of ``text`` as a plain list (no tensors, no device)."""
+    encoded = tokenizer(
+        text,
+        return_tensors=None,
+        truncation=True,
+        max_length=int(max_length),
+        add_special_tokens=add_special_tokens,
+    )
+    ids = encoded.input_ids if hasattr(encoded, "input_ids") else encoded["input_ids"]
+    if ids and isinstance(ids[0], (list, tuple)):  # some tokenizers batch
+        ids = ids[0]
+    return [int(t) for t in ids]
+
+
+def _ensure_single_bos(tokenizer, ids: Sequence[int], *, max_length: int) -> list[int]:
+    """Exactly one leading BOS, matching :meth:`Gemma4LensModel.encode`'s
+    deterministic prepend. A tokenizer without a BOS is left alone."""
+    out = [int(t) for t in ids]
+    bos = getattr(tokenizer, "bos_token_id", None)
+    if bos is None:
+        return out
+    if not out or out[0] != int(bos):
+        out = [int(bos), *out]
+    return out[: int(max_length)]
+
+
+def chat_control_token_ids(tokenizer) -> set[int]:
+    """Token ids that are chat/control machinery rather than answer content.
+
+    Union of the tokenizer's declared special ids and any of
+    :data:`CHAT_CONTROL_TOKENS` it knows — notably the assistant end-of-turn
+    marker, which a contextual target must never include.
+    """
+    control: set[int] = set()
+    for attribute in ("bos_token_id", "eos_token_id", "pad_token_id"):
+        value = getattr(tokenizer, attribute, None)
+        if isinstance(value, int):
+            control.add(int(value))
+    special = getattr(tokenizer, "all_special_ids", None)
+    if isinstance(special, (list, tuple, set)):
+        control.update(int(t) for t in special if isinstance(t, int))
+    convert = getattr(tokenizer, "convert_tokens_to_ids", None)
+    unk = getattr(tokenizer, "unk_token_id", None)
+    if callable(convert):
+        for token in CHAT_CONTROL_TOKENS:
+            try:
+                value = convert(token)
+            except Exception:  # noqa: BLE001 - tokenizer-specific failures
+                continue
+            if isinstance(value, int) and value >= 0 and value != unk:
+                control.add(int(value))
+    return control
+
+
+def render_receiver_prompt(
+    tokenizer, text: str, *, receiver_format: str = DEFAULT_RECEIVER_FORMAT
+) -> str:
+    """The exact string that gets tokenized for one receiver prompt.
+
+    ``chat`` renders a single user message through the tokenizer's own chat
+    template with ``add_generation_prompt=True``; ``legacy_raw`` returns the
+    text unchanged. Source prompts are **not** affected — only the receiver.
+    """
+    if receiver_format not in RECEIVER_FORMATS:
+        raise GenerativeError(
+            f"receiver format {receiver_format!r} not in {RECEIVER_FORMATS}"
+        )
+    if receiver_format == "legacy_raw":
+        return text
+    apply_chat_template = getattr(tokenizer, "apply_chat_template", None)
+    if not callable(apply_chat_template):
+        raise GenerativeError(
+            "receiver format 'chat' requires a tokenizer with "
+            "apply_chat_template; pass receiver.format: legacy_raw to opt out"
+        )
+    return apply_chat_template(
+        [{"role": "user", "content": text}],
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+
+
+def _check_chat_structure(
+    tokenizer, text: str, rendered: str, ids: Sequence[int]
+) -> dict:
+    """Verify the chat rendering has exactly the shape steering assumes.
+
+    Required: exactly one BOS (at position 0), the user content present exactly
+    once, and a non-empty model-generation prefix appended after the
+    end-of-turn marker. When the tokenizer's template uses Gemma's turn markers
+    the counts are checked exactly (two ``<start_of_turn>``, one
+    ``<end_of_turn>``); a template without them is still checked structurally.
+    """
+    problems: list[str] = []
+    bos = getattr(tokenizer, "bos_token_id", None)
+    n_bos = None
+    if bos is not None:
+        n_bos = sum(1 for t in ids if int(t) == int(bos))
+        if n_bos != 1:
+            problems.append(f"expected exactly 1 BOS token, found {n_bos}")
+        elif int(ids[0]) != int(bos):
+            problems.append("BOS is present but not at position 0")
+    base = tokenizer.apply_chat_template(
+        [{"role": "user", "content": text}],
+        tokenize=False,
+        add_generation_prompt=False,
+    )
+    generation_prefix = ""
+    if not rendered.startswith(base):
+        problems.append(
+            "add_generation_prompt=True rendering is not an extension of the "
+            "add_generation_prompt=False rendering"
+        )
+    else:
+        generation_prefix = rendered[len(base) :]
+        if not generation_prefix.strip():
+            problems.append(
+                "chat template appended no model-generation prefix "
+                "(add_generation_prompt had no effect)"
+            )
+    n_content = rendered.count(text)
+    if n_content != 1:
+        problems.append(
+            f"user content appears {n_content} time(s) in the rendered prompt, "
+            f"expected exactly 1"
+        )
+    markers_checked = any(marker in rendered for marker in ("<start_of_turn>", "<end_of_turn>"))
+    n_start = rendered.count("<start_of_turn>")
+    n_end = rendered.count("<end_of_turn>")
+    if markers_checked:
+        if n_start != 2:
+            problems.append(
+                f"expected 2 <start_of_turn> markers (user turn + model "
+                f"generation prefix), found {n_start}"
+            )
+        if n_end != 1:
+            problems.append(
+                f"expected 1 <end_of_turn> marker (end of the user turn), "
+                f"found {n_end}"
+            )
+    if problems:
+        raise GenerativeError(
+            "chat receiver rendering is malformed:\n  "
+            + "\n  ".join(problems)
+            + f"\nrendered prompt: {rendered!r}"
+        )
+    return {
+        "n_bos_tokens": n_bos,
+        "generation_prefix": generation_prefix,
+        "n_start_of_turn_markers": n_start,
+        "n_end_of_turn_markers": n_end,
+        "turn_markers_checked": markers_checked,
+        "n_user_content_occurrences": n_content,
+    }
+
+
+def resolve_steering_anchor(
+    token_ids: Sequence[int], tokenizer=None, *, anchor: int | None = None
+) -> dict:
+    """Resolve and describe the injection anchor for a formatted prompt.
+
+    The default anchor is the **final prompt position** — the one whose
+    next-token distribution is the first answer token — computed from the
+    *formatted* prompt length, so chat control tokens are counted. Site
+    controls pass ``anchor`` explicitly (``wrong_position``); negative indices
+    count from the end.
+
+    Returns ``prompt_len``, ``anchor_index``, ``anchor_token_id``,
+    ``anchor_token_string``, and whether the anchor is the final prompt
+    position.
+    """
+    ids = [int(t) for t in token_ids]
+    prompt_len = len(ids)
+    if prompt_len < 1:
+        raise GenerativeError("cannot anchor steering in an empty prompt")
+    index = prompt_len - 1 if anchor is None else int(anchor)
+    if index < 0:
+        index = prompt_len + index
+    if not (0 <= index < prompt_len):
+        raise GenerativeError(
+            f"steering anchor {anchor} out of range for formatted prompt "
+            f"length {prompt_len}"
+        )
+    token_id = ids[index]
+    token_string = None
+    if tokenizer is not None:
+        token_string = tokenizer.decode([token_id])
+    return {
+        "prompt_len": prompt_len,
+        "anchor_index": index,
+        "anchor_token_id": token_id,
+        "anchor_token_string": token_string,
+        "is_final_prompt_position": index == prompt_len - 1,
+        "predicts_first_answer_token": index == prompt_len - 1,
+    }
+
+
+@dataclass(frozen=True)
+class ReceiverPrompt:
+    """One receiver prompt, encoded and fully described.
+
+    Everything the run needs to defend the prompting decision later: the raw
+    prompt, the rendering that was actually tokenized, its ids and per-token
+    strings, the decode of those ids, and the resolved steering anchor.
+    """
+
+    prompt_id: str
+    receiver_format: str
+    raw_prompt: str
+    rendered_prompt: str
+    token_ids: tuple[int, ...]
+    token_strings: tuple[str, ...]
+    decoded_prompt: str
+    steering_anchor: dict
+    structure: dict
+
+    @property
+    def prompt_len(self) -> int:
+        return len(self.token_ids)
+
+    def input_ids(self, *, device=None, dtype=torch.long) -> torch.Tensor:
+        """``[1, prompt_len]`` ids for the decode / scoring entry points."""
+        return torch.tensor([list(self.token_ids)], dtype=dtype, device=device)
+
+    def to_debug_dict(self) -> dict:
+        return {
+            "prompt_id": self.prompt_id,
+            "receiver_format": self.receiver_format,
+            "raw_prompt": self.raw_prompt,
+            "rendered_prompt": self.rendered_prompt,
+            "prompt_token_ids": list(self.token_ids),
+            "prompt_tokens": list(self.token_strings),
+            "decoded_prompt": self.decoded_prompt,
+            "prompt_len": self.prompt_len,
+            "steering_anchor": dict(self.steering_anchor),
+            "structure": dict(self.structure),
+            "prompt_safety_violations": prompt_safety_violations(self.raw_prompt),
+            "is_default_prompt": is_clean_prompt_id(self.prompt_id),
+        }
+
+
+def encode_receiver_prompt(
+    tokenizer,
+    text: str,
+    *,
+    prompt_id: str = "<prompt>",
+    receiver_format: str = DEFAULT_RECEIVER_FORMAT,
+    max_length: int = 512,
+    anchor: int | None = None,
+) -> ReceiverPrompt:
+    """**The** receiver encoding path. Every receiver prompt goes through here.
+
+    Centralized on purpose: the confounded runs encoded receiver prompts in one
+    place (the runner's sweep), the parity gate in another, and the target ids
+    in a third, so a formatting change could reach one and miss the others.
+    """
+    if receiver_format not in RECEIVER_FORMATS:
+        raise GenerativeError(
+            f"receiver format {receiver_format!r} not in {RECEIVER_FORMATS}"
+        )
+    rendered = render_receiver_prompt(
+        tokenizer, text, receiver_format=receiver_format
+    )
+    # chat: the template already emits BOS as literal text, so specials must not
+    # be added again. legacy_raw: exactly the old model.encode() behaviour.
+    ids = _tokenize_ids(
+        tokenizer,
+        rendered,
+        add_special_tokens=receiver_format == "legacy_raw",
+        max_length=max_length,
+    )
+    ids = _ensure_single_bos(tokenizer, ids, max_length=max_length)
+    if not ids:
+        raise GenerativeError(f"receiver prompt {prompt_id!r} tokenized to nothing")
+    if receiver_format == "chat":
+        structure = _check_chat_structure(tokenizer, text, rendered, ids)
+    else:
+        structure = {
+            "n_bos_tokens": sum(
+                1
+                for t in ids
+                if getattr(tokenizer, "bos_token_id", None) is not None
+                and int(t) == int(tokenizer.bos_token_id)
+            ),
+            "generation_prefix": None,
+            "turn_markers_checked": False,
+        }
+    return ReceiverPrompt(
+        prompt_id=prompt_id,
+        receiver_format=receiver_format,
+        raw_prompt=text,
+        rendered_prompt=rendered,
+        token_ids=tuple(ids),
+        token_strings=tuple(token_strings(tokenizer, ids)),
+        decoded_prompt=tokenizer.decode(ids),
+        steering_anchor=resolve_steering_anchor(ids, tokenizer, anchor=anchor),
+        structure=structure,
+    )
+
+
+def contextual_target_token_ids(
+    tokenizer,
+    receiver: ReceiverPrompt,
+    target_phrase: str,
+    *,
+    max_length: int = 512,
+) -> dict:
+    """Target token ids as the assistant continuation of the **formatted**
+    prompt.
+
+    In ``chat`` mode the target is whatever ``rendered_prompt + target_phrase``
+    tokenizes to beyond the prompt's own ids — the segmentation the model
+    actually sees after ``<start_of_turn>model``, which is not in general the
+    same as tokenizing the phrase on its own. BOS, chat-control tokens, and the
+    assistant end-of-turn marker are removed
+    (:func:`chat_control_token_ids`), so scoring covers answer content only.
+
+    In ``legacy_raw`` mode the old behaviour is preserved exactly: the phrase
+    is tokenized standalone with no special tokens and nothing is filtered.
+
+    Raises:
+        GenerativeError: If appending the phrase re-tokenizes the prompt itself
+            (the prompt ids are then not a prefix of the joint ids, so no
+            alignment between the two is safe), or if nothing survives
+            filtering.
+    """
+    phrase = str(target_phrase)
+    if not phrase:
+        raise GenerativeError("target_phrase is empty")
+    if receiver.receiver_format == "legacy_raw":
+        ids = _tokenize_ids(
+            tokenizer, phrase, add_special_tokens=False, max_length=max_length
+        )
+        if not ids:
+            raise GenerativeError(f"target phrase {phrase!r} tokenized to nothing")
+        return {
+            "target_token_ids": ids,
+            "target_token_strings": token_strings(tokenizer, ids),
+            "n_target_tokens": len(ids),
+            "decoded_target": tokenizer.decode(ids),
+            "raw_continuation_token_ids": list(ids),
+            "excluded_token_ids": [],
+            "derivation": "legacy_raw_standalone_phrase",
+        }
+
+    prompt_ids = list(receiver.token_ids)
+    full_ids = _ensure_single_bos(
+        tokenizer,
+        _tokenize_ids(
+            tokenizer,
+            receiver.rendered_prompt + phrase,
+            add_special_tokens=False,
+            max_length=max_length,
+        ),
+        max_length=max_length,
+    )
+    if full_ids[: len(prompt_ids)] != prompt_ids:
+        shared = 0
+        for a, b in zip(full_ids, prompt_ids, strict=False):
+            if a != b:
+                break
+            shared += 1
+        raise GenerativeError(
+            f"appending target phrase {phrase!r} re-tokenized the formatted "
+            f"prompt (prompt ids are not a prefix of the joint ids; they agree "
+            f"on {shared}/{len(prompt_ids)} tokens), so the continuation cannot "
+            f"be sliced off safely. Adjust the target phrase's leading "
+            f"whitespace, or run with receiver.format: legacy_raw."
+        )
+    continuation = full_ids[len(prompt_ids) :]
+    if not continuation:
+        raise GenerativeError(
+            f"target phrase {phrase!r} added no tokens after the formatted "
+            f"prompt"
+        )
+    control = chat_control_token_ids(tokenizer)
+    kept = [t for t in continuation if t not in control]
+    excluded = [t for t in continuation if t in control]
+    if not kept:
+        raise GenerativeError(
+            f"target phrase {phrase!r} produced only control tokens "
+            f"{excluded} after the formatted prompt"
+        )
+    return {
+        "target_token_ids": kept,
+        "target_token_strings": token_strings(tokenizer, kept),
+        "n_target_tokens": len(kept),
+        "decoded_target": tokenizer.decode(kept),
+        "raw_continuation_token_ids": list(continuation),
+        "excluded_token_ids": excluded,
+        "derivation": "chat_assistant_continuation",
+    }
+
+
+def contextual_target_resolver(
+    receiver: ReceiverPrompt, *, max_length: int = 512
+):
+    """A ``(tokenizer, phrase) -> list[int]`` resolver bound to one formatted
+    receiver prompt, for :func:`validate_target_tokens`."""
+
+    def resolve(tokenizer, phrase: str) -> list[int]:
+        return contextual_target_token_ids(
+            tokenizer, receiver, phrase, max_length=max_length
+        )["target_token_ids"]
+
+    return resolve
+
+
+def receiver_prompt_debug(
+    receiver: ReceiverPrompt, targets: dict[str, dict] | None = None
+) -> dict:
+    """Run-level debug entry for one receiver prompt: the rendering, its ids
+    and tokens, the anchor, and every example's contextual target."""
+    entry: dict[str, Any] = receiver.to_debug_dict()
+    entry["targets"] = {
+        example_id: dict(info) for example_id, info in (targets or {}).items()
+    }
+    return entry
 
 
 # ------------------------------------------------------------- aggregation

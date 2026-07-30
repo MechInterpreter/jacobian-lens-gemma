@@ -154,7 +154,8 @@ def test_gates_force_greedy_despite_sampling_default_generation_config(tmp_path)
     model = Gemma4LensModel(MockSamplingDefaultModel(), MockTokenizer())
     config = {
         "parity": {"max_abs_logit_diff_tol": 0.05},
-        "neutral_prompts": ["label-colon"],
+        "neutral_prompts": ["noun-phrase-only"],
+        "receiver": {"format": "chat"},
         "steering": {"layers": [1]},
     }
     run_dir = tmp_path / "run"
@@ -162,6 +163,13 @@ def test_gates_force_greedy_despite_sampling_default_generation_config(tmp_path)
     gates = runner.run_gates(model, config, str(run_dir))
     assert gates["greedy_equivalence_ok"] is True
     assert gates["greedy_first_step_ok"] is True
+    # The gate runs on the chat-formatted receiver prompt the sweep uses, not on
+    # a raw-text prompt the experiment never sees.
+    assert gates["receiver_format"] == "chat"
+    assert gates["gate_prompt"]["prompt_id"] == "noun-phrase-only"
+    assert "<start_of_turn>model" in gates["gate_prompt"]["rendered_prompt"]
+    assert gates["generated_ids_are_new_only"] is True
+    assert gates["generated_text_matches_generated_ids"] is True
 
 
 def _mock_load_gemma4(*args, **kwargs):
@@ -327,6 +335,7 @@ def test_runner_end_to_end_on_mock(experiment, monkeypatch):
     for name in (
         "gates.json",
         "targets.json",
+        "prompt_debug.json",
         "pursuits.json",
         "records.jsonl",
         "summary_by_condition.json",
@@ -336,13 +345,37 @@ def test_runner_end_to_end_on_mock(experiment, monkeypatch):
     ):
         assert (artifacts / name).is_file(), name
 
-    # Validated target tokenization is recorded, ids and strings together.
+    # Validated target tokenization is recorded, ids and strings together, per
+    # receiver prompt (targets are contextual: they continue the *formatted*
+    # prompt, so they are a property of (prompt, example), not of the example).
     targets = json.loads((artifacts / "targets.json").read_text(encoding="utf-8"))
-    assert set(targets) == {"mock-a", "mock-b"}
-    for entry in targets.values():
-        assert entry["n_target_tokens"] >= 2
-        assert len(entry["target_token_strings"]) == entry["n_target_tokens"]
-        assert len(entry["target_token_ids"]) == entry["n_target_tokens"]
+    prompt_ids = experiment["config"]["neutral_prompts"]
+    assert set(targets) == set(prompt_ids)
+    for per_prompt in targets.values():
+        assert set(per_prompt) == {"mock-a", "mock-b"}
+        for entry in per_prompt.values():
+            assert entry["n_target_tokens"] >= 2
+            assert len(entry["target_token_strings"]) == entry["n_target_tokens"]
+            assert len(entry["target_token_ids"]) == entry["n_target_tokens"]
+
+    # The prompt-debug artifact documents exactly what the model was shown.
+    debug = json.loads((artifacts / "prompt_debug.json").read_text(encoding="utf-8"))
+    assert debug["receiver_format"] == "chat"
+    assert [p["prompt_id"] for p in debug["prompts"]] == list(prompt_ids)
+    for entry in debug["prompts"]:
+        assert entry["prompt_safety_violations"] == []
+        assert entry["is_default_prompt"] is True
+        assert "<start_of_turn>model" in entry["rendered_prompt"]
+        assert entry["structure"]["n_bos_tokens"] == 1
+        assert entry["prompt_len"] == len(entry["prompt_token_ids"])
+        anchor = entry["steering_anchor"]
+        assert anchor["anchor_index"] == entry["prompt_len"] - 1
+        assert anchor["anchor_token_id"] == entry["prompt_token_ids"][-1]
+        assert anchor["is_final_prompt_position"] is True
+        assert set(entry["targets"]) == {"mock-a", "mock-b"}
+        for target in entry["targets"].values():
+            assert target["derivation"] == "chat_assistant_continuation"
+            assert target["target_token_ids"]
 
     gates = json.loads((artifacts / "gates.json").read_text(encoding="utf-8"))
     assert gates["zero_parity_ok"] is True

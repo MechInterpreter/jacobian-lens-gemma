@@ -265,8 +265,11 @@ activation transplantation). Backend in `jlens/generative.py`, runner in
 `scripts/run_generative_validation.py`, benchmark in
 `configs/generative_benchmark.json`; protocol, control battery, and the
 verified Colab CLI workflow are documented in
-**[docs/generative_validation.md](docs/generative_validation.md)**. No GPU
-measurements exist yet on this branch.
+**[docs/generative_validation.md](docs/generative_validation.md)**. No valid
+GPU measurements exist yet on this branch: the earlier smoke decodes
+("Internal Concept") were confounded by receiver prompts that named the
+priming vocabulary and by raw (non-chat) prompting of an instruction-tuned
+checkpoint. Both are fixed; a corrected GPU run has not been performed.
 
 ## What is inherited vs new
 

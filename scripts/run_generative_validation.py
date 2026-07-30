@@ -16,6 +16,14 @@ verbalization prompts under the configured steering schedules, and records
 teacher-forced multi-token target log-probabilities, KL from baseline, and
 (for the configured subset) uncached greedy decodes.
 
+Receiver prompts are encoded through
+:func:`jlens.generative.encode_receiver_prompt` at the config's
+``receiver.format`` — ``chat`` (the default: one user turn through the
+tokenizer's chat template, as the instruction-tuned checkpoint expects) or
+``legacy_raw`` (the previous raw-text behaviour). Target token ids are derived
+**contextually**, as the assistant continuation of the exact formatted prompt.
+Source prompts are untouched by this.
+
 Hard gates before any steering: architecture verification, lens fingerprint,
 zero-vector logit parity, and manual-uncached vs ``generate()`` greedy
 equivalence (both decoded tokens and first-step log-prob values). Any gate
@@ -23,7 +31,9 @@ failure aborts the run.
 
 Outputs (in the timestamped run directory): ``run_started.json``,
 ``resolved_config.json``, ``artifacts/gates.json``,
-``artifacts/pursuits.json``, ``artifacts/records.jsonl``,
+``artifacts/prompt_debug.json`` (per receiver prompt: raw and rendered text,
+token ids/tokens, decoded prompt, length, steering anchor, and every example's
+contextual target), ``artifacts/pursuits.json``, ``artifacts/records.jsonl``,
 ``artifacts/summary_by_condition.json``, ``artifacts/calibration.json``
 (dev split), ``artifacts/gonogo.json``, ``summary.md``,
 ``run_metadata.json``.
@@ -39,6 +49,7 @@ import logging
 import os
 import sys
 import time
+from collections.abc import Sequence
 
 import torch
 
@@ -50,7 +61,6 @@ from jlens.generative import (
     MAX_TARGET_TOKENS,
     MIN_TARGET_TOKENS,
     NATURAL_SCALE_MATCHED_CONDITIONS,
-    NEUTRAL_PROMPTS,
     GenerativeError,
     SteeringSchedule,
     SteeringSpec,
@@ -59,15 +69,23 @@ from jlens.generative import (
     choose_calibration,
     compare_next_token_distributions,
     condition_scaling_mode,
+    contextual_target_resolver,
+    contextual_target_token_ids,
+    encode_receiver_prompt,
     first_token_distribution,
     gonogo_report,
     greedy_decode,
+    is_clean_prompt_id,
     kl_from_baseline,
     load_benchmark,
     make_generative_record,
     natural_scale_gonogo_report,
     natural_scale_verdicts,
     per_example_verdicts,
+    receiver_format_from_config,
+    receiver_prompt_debug,
+    resolve_neutral_prompt,
+    resolve_steering_anchor,
     scale_to_norm,
     scale_to_ratio,
     select_split_examples,
@@ -132,12 +150,31 @@ def derived_seed(base_seed: int, *parts: object) -> int:
     return int(hashlib.sha256(payload.encode()).hexdigest()[:8], 16) % (2**31)
 
 
-def resolve_target_ids(tokenizer, phrase: str) -> list[int]:
-    """Token ids of the target phrase as a continuation (no BOS/specials)."""
-    ids = tokenizer(phrase, add_special_tokens=False, return_tensors=None).input_ids
-    if not ids:
-        raise GenerativeError(f"target phrase {phrase!r} tokenized to nothing")
-    return [int(t) for t in ids]
+def first_clean_prompt_id(prompt_ids: Sequence[str]) -> str:
+    """The first configured **default** (non-legacy, priming-free) prompt id.
+
+    Used wherever a single prompt must stand in for the run — the parity /
+    greedy gates and ``--smoke``. Legacy diagnostic prompts contain the
+    vocabulary that produced the confounded "Internal Concept" decodes, so they
+    must never be the one prompt a smoke run is judged on.
+    """
+    for prompt_id in prompt_ids:
+        if is_clean_prompt_id(prompt_id):
+            return str(prompt_id)
+    raise GenerativeError(
+        f"no default (non-legacy) receiver prompt in {list(prompt_ids)}; "
+        f"gates and --smoke require a priming-free prompt"
+    )
+
+
+def build_receiver(model, config: dict, prompt_id: str):
+    """Encode one receiver prompt through the single centralized helper."""
+    return encode_receiver_prompt(
+        model.tokenizer,
+        resolve_neutral_prompt(prompt_id),
+        prompt_id=prompt_id,
+        receiver_format=receiver_format_from_config(config),
+    )
 
 
 def capture_activation(model, prompt: str, layer: int, position: int) -> torch.Tensor:
@@ -186,6 +223,15 @@ def run_gates(model, config: dict, run_dir: str) -> dict:
        with ``generate()``'s logits on the argmax, on the top-k ranking, on
        top-k log-probabilities, and in total variation — so (2) cannot pass on a
        coincidental argmax tie while the two paths actually disagree.
+    4. Generated-token hygiene: ``generate()``'s sequence must still begin with
+       the exact prompt ids (so the slice that defines "generated" is right),
+       and the manual decoder's text must decode its generated ids and nothing
+       else — no prompt echo can leak into a recorded generation.
+
+    The gate prompt is encoded through the same
+    :func:`jlens.generative.encode_receiver_prompt` helper the sweep uses, at
+    the run's receiver format, so the gates cannot pass on a prompt shape the
+    experiment never runs.
 
     (3) deliberately does **not** gate on a max-over-vocabulary log-probability
     difference. See :func:`jlens.generative.compare_next_token_distributions`:
@@ -201,8 +247,9 @@ def run_gates(model, config: dict, run_dir: str) -> dict:
         config["parity"].get("max_abs_logprob_diff_topk_tol", tol)
     )
     tv_tol = float(config["parity"].get("max_total_variation_tol", 0.02))
-    prompt = NEUTRAL_PROMPTS[config["neutral_prompts"][0]]
-    ids = model.encode(prompt)
+    gate_prompt_id = first_clean_prompt_id(config["neutral_prompts"])
+    receiver = build_receiver(model, config, gate_prompt_id)
+    ids = receiver.input_ids(device=model.input_device)
     layer = int(config["steering"]["layers"][0])
     with torch.no_grad():
         baseline = model.logits_from_ids(ids, n_last=1)[0, -1].float()
@@ -244,6 +291,21 @@ def run_gates(model, config: dict, run_dir: str) -> dict:
     manual_tokens = manual.token_ids[: len(hf_tokens)]
     greedy_equal = manual_tokens == hf_tokens[: len(manual_tokens)]
 
+    # Generated ids must be *only* the new tokens: the reference sequence still
+    # starts with the exact prompt ids (so slicing at prompt_len is correct),
+    # and the manual decoder's recorded text is the decode of its generated ids
+    # alone. A prompt echo here would make every recorded "generation" partly a
+    # restatement of the receiver prompt.
+    prompt_id_list = [int(t) for t in ids[0]]
+    generated_ids_are_new_only = (
+        [int(t) for t in sequences[0, : ids.shape[1]]] == prompt_id_list
+        and len(sequences[0]) == ids.shape[1] + len(hf_tokens)
+        and len(manual.token_ids) <= n_check
+    )
+    generated_text_matches_ids = manual.text == tokenizer.decode(
+        manual.token_ids, skip_special_tokens=True
+    )
+
     # Distribution-level check on the first step: token equality alone can pass
     # by luck (a near-tie, or a degenerate distribution with one dominant token)
     # while the two paths compute materially different logits. Read the manual
@@ -266,9 +328,13 @@ def run_gates(model, config: dict, run_dir: str) -> dict:
     )
 
     gates = {
+        "receiver_format": receiver.receiver_format,
+        "gate_prompt": receiver.to_debug_dict(),
         "zero_parity_max_abs_logit_diff": max_diff,
         "zero_parity_tol": tol,
         "zero_parity_ok": max_diff <= tol,
+        "generated_ids_are_new_only": generated_ids_are_new_only,
+        "generated_text_matches_generated_ids": generated_text_matches_ids,
         "greedy_manual_tokens": manual.token_ids,
         "greedy_generate_tokens": hf_tokens,
         "greedy_equivalence_ok": greedy_equal,
@@ -293,6 +359,19 @@ def run_gates(model, config: dict, run_dir: str) -> dict:
         raise GenerativeError(
             f"greedy equivalence gate failed: manual {manual_tokens} vs "
             f"generate() {hf_tokens}"
+        )
+    if not gates["generated_ids_are_new_only"]:
+        raise GenerativeError(
+            "generated-token gate failed: generate()'s sequence does not begin "
+            "with the exact prompt ids, so the generated slice would include "
+            "prompt tokens"
+        )
+    if not gates["generated_text_matches_generated_ids"]:
+        raise GenerativeError(
+            "generated-token gate failed: the decoded text is not the decode "
+            "of the generated ids alone "
+            f"({manual.text!r} vs "
+            f"{tokenizer.decode(manual.token_ids, skip_special_tokens=True)!r})"
         )
     if not gates["greedy_first_step_ok"]:
         raise GenerativeError(
@@ -341,7 +420,10 @@ def main() -> None:
         config["steering"]["layers"] = config["steering"]["layers"][:1]
         config["steering"]["strength_ratios"] = [1.0]
         config["steering"]["mass_thresholds"] = config["steering"]["mass_thresholds"][:1]
-        config["neutral_prompts"] = config["neutral_prompts"][:1]
+        # Smoke runs on exactly one prompt, and it must be a default
+        # (priming-free) one — a legacy diagnostic prompt would make the single
+        # smoke decode uninterpretable for exactly the reason this fix exists.
+        config["neutral_prompts"] = [first_clean_prompt_id(config["neutral_prompts"])]
         config["decode"]["max_new_tokens"] = 4
         config["decode"]["ratios"] = [1.0]
         args.limit_examples = 1
@@ -418,27 +500,83 @@ def main() -> None:
     gates = run_gates(model, config, run_dir)
 
     tokenizer = model.tokenizer
-    # Target token counts are a property of the pinned checkpoint's vocabulary,
-    # so this can only be checked now that the real tokenizer is loaded. Aborts
-    # the run (listing every offender) rather than silently scoring a
-    # single-token target, which tests no multi-token scoring and makes all
-    # three steering schedules produce identical target log-probabilities.
+    neutral_ids = list(config["neutral_prompts"])
+    fmt = receiver_format_from_config(config)
+
+    # ------------------------------------------------------------- receivers
+    # Every receiver prompt is encoded once, here, through the single
+    # centralized helper, and reused for gates, scoring, and decoding. The
+    # steering anchor is derived from the *formatted* prompt length (chat
+    # control tokens included), so it still points at the final prompt position
+    # — the one whose next-token distribution is the first answer token.
+    receivers = {
+        prompt_id: build_receiver(model, config, prompt_id)
+        for prompt_id in neutral_ids
+    }
+    prompt_tensors = {
+        prompt_id: receiver.input_ids(device=model.input_device)
+        for prompt_id, receiver in receivers.items()
+    }
+    for logged_id, logged_receiver in receivers.items():
+        logged_anchor = logged_receiver.steering_anchor
+        logger.info(
+            "receiver %s (%s): prompt_len=%d anchor=%d token_id=%d token=%r",
+            logged_id,
+            fmt,
+            logged_anchor["prompt_len"],
+            logged_anchor["anchor_index"],
+            logged_anchor["anchor_token_id"],
+            logged_anchor["anchor_token_string"],
+        )
+
+    # Target token counts are a property of the pinned checkpoint's vocabulary
+    # *and* of the formatted prompt the target continues, so this can only be
+    # checked now that the real tokenizer is loaded. Aborts the run (listing
+    # every offender) rather than silently scoring a single-token target, which
+    # tests no multi-token scoring and makes all three steering schedules
+    # produce identical target log-probabilities.
     target_bounds = config["benchmark"].get("target_token_bounds") or {}
-    resolved_targets = validate_target_tokens(
-        examples,
-        tokenizer,
-        resolve=resolve_target_ids,
-        min_tokens=int(target_bounds.get("min", MIN_TARGET_TOKENS)),
-        max_tokens=int(target_bounds.get("max", MAX_TARGET_TOKENS)),
-    )
+    resolved_targets: dict[str, dict] = {}
+    target_details: dict[str, dict] = {}
+    for target_prompt_id, target_receiver in receivers.items():
+        resolved_targets[target_prompt_id] = validate_target_tokens(
+            examples,
+            tokenizer,
+            resolve=contextual_target_resolver(target_receiver),
+            min_tokens=int(target_bounds.get("min", MIN_TARGET_TOKENS)),
+            max_tokens=int(target_bounds.get("max", MAX_TARGET_TOKENS)),
+            # Contextual ids are derived from the formatted prompt; a manifest's
+            # standalone id list is a different segmentation and must not win.
+            use_manifest_ids=False,
+        )
+        target_details[target_prompt_id] = {
+            example["example_id"]: contextual_target_token_ids(
+                tokenizer, target_receiver, example["target_phrase"]
+            )
+            for example in examples
+        }
     with open(
         os.path.join(run_dir, "artifacts", "targets.json"), "w", encoding="utf-8"
     ) as handle:
         json.dump(resolved_targets, handle, indent=2, ensure_ascii=False)
+    prompt_debug = {
+        "receiver_format": fmt,
+        "prompts": [
+            receiver_prompt_debug(entry, target_details[entry.prompt_id])
+            for entry in receivers.values()
+        ],
+    }
+    with open(
+        os.path.join(run_dir, "artifacts", "prompt_debug.json"), "w", encoding="utf-8"
+    ) as handle:
+        json.dump(prompt_debug, handle, indent=2, ensure_ascii=False)
     logger.info(
-        "target tokenization validated for %d example(s): %s",
-        len(resolved_targets),
-        {k: v["n_target_tokens"] for k, v in resolved_targets.items()},
+        "contextual target tokenization validated (%s): %s",
+        fmt,
+        {
+            prompt_id: {k: v["n_target_tokens"] for k, v in resolved.items()}
+            for prompt_id, resolved in resolved_targets.items()
+        },
     )
     eos_ids = [int(tokenizer.eos_token_id)] if tokenizer.eos_token_id is not None else []
     base_seed = int(config["eval"]["control_seed"])
@@ -450,7 +588,6 @@ def main() -> None:
     ]
     conditions = list(config["steering"]["conditions"])
     mass_thresholds = [float(t) for t in config["steering"]["mass_thresholds"]]
-    neutral_ids = list(config["neutral_prompts"])
     decode_cfg = config["decode"]
     records_path = os.path.join(run_dir, "artifacts", "records.jsonl")
     provenance = {
@@ -460,6 +597,7 @@ def main() -> None:
         "lens_fingerprint": lens_sha,
         "model_revision": load_info["model_revision"],
         "benchmark_split": config["benchmark"]["split"],
+        "receiver_format": fmt,
         "local_commit": os.popen("git rev-parse HEAD").read().strip() or None,
     }
 
@@ -574,19 +712,26 @@ def main() -> None:
                     coefficients=entry["active_coeffs"],
                 ).delta.float().norm()
             )
-            target = resolved_targets[example["example_id"]]
-            target_ids = target["target_token_ids"]
-            target_strings = target["target_token_strings"]
             example_conditions = list(conditions)
             manual_map = example.get("manual_subcone") or {}
             if str(layer) in manual_map and "manual_subcone" not in example_conditions:
                 example_conditions.append("manual_subcone")
 
             for prompt_id in neutral_ids:
-                prompt_text = NEUTRAL_PROMPTS[prompt_id]
-                prompt_ids_tensor = model.encode(prompt_text)
-                prompt_len = prompt_ids_tensor.shape[1]
-                anchor_default = prompt_len - 1
+                receiver = receivers[prompt_id]
+                # Targets are contextual, so they are per (prompt, example).
+                target = resolved_targets[prompt_id][example["example_id"]]
+                target_ids = target["target_token_ids"]
+                target_strings = target["target_token_strings"]
+                prompt_ids_tensor = prompt_tensors[prompt_id]
+                prompt_len = receiver.steering_anchor["prompt_len"]
+                anchor_default = receiver.steering_anchor["anchor_index"]
+                if prompt_ids_tensor.shape[1] != prompt_len:
+                    raise GenerativeError(
+                        f"receiver {prompt_id!r}: encoded length "
+                        f"{prompt_ids_tensor.shape[1]} disagrees with the "
+                        f"resolved anchor's prompt_len {prompt_len}"
+                    )
                 norms = {
                     (layer, anchor_default): receiving_norm(
                         model, prompt_ids_tensor, layer, anchor_default
@@ -596,10 +741,33 @@ def main() -> None:
                     norms[(wrong_layer, anchor_default)] = receiving_norm(
                         model, prompt_ids_tensor, wrong_layer, anchor_default
                     )
-                wrong_anchor = int(config["steering"]["wrong_position_anchor"])
+                # Revalidated against the *formatted* prompt: a fixed absolute
+                # index is only meaningful once the chat control tokens are
+                # counted, and it must not collide with the real anchor.
+                wrong_anchor_info = resolve_steering_anchor(
+                    receiver.token_ids,
+                    tokenizer,
+                    anchor=int(config["steering"]["wrong_position_anchor"]),
+                )
+                if wrong_anchor_info["is_final_prompt_position"]:
+                    raise GenerativeError(
+                        f"steering.wrong_position_anchor "
+                        f"{config['steering']['wrong_position_anchor']} is the "
+                        f"final position of the formatted prompt {prompt_id!r} "
+                        f"(length {prompt_len}); the wrong-position control "
+                        f"would be identical to the correct site"
+                    )
+                wrong_anchor = wrong_anchor_info["anchor_index"]
                 norms[(layer, wrong_anchor)] = receiving_norm(
                     model, prompt_ids_tensor, layer, wrong_anchor
                 )
+                # Anchor descriptions by resolved index, so a record always
+                # names the token its injection actually landed on (the
+                # wrong-position control included).
+                anchor_meta = {
+                    anchor_default: receiver.steering_anchor,
+                    wrong_anchor: wrong_anchor_info,
+                }
                 log_p_baseline = first_token_distribution(model, prompt_ids_tensor)
 
                 zero_total: float | None = None
@@ -622,15 +790,19 @@ def main() -> None:
                     entry=entry,
                     layer=layer,
                     prompt_id=prompt_id,
+                    receiver=receiver,
                     prompt_ids_tensor=prompt_ids_tensor,
                     target_ids=target_ids,
                     target_strings=target_strings,
                     norms=norms,
                     anchor_default=anchor_default,
+                    anchor_meta=anchor_meta,
                     log_p_baseline=log_p_baseline,
                     unrelated_totals=unrelated_totals,
                 ) -> dict:
                     nonlocal zero_total
+                    resolved_anchor = anchor if anchor is not None else anchor_default
+                    anchor_info = anchor_meta[resolved_anchor]
                     spec = (
                         None
                         if delta is None
@@ -653,10 +825,7 @@ def main() -> None:
                             None if delta is None else float(delta.float().norm())
                         ),
                         "anchor_activation_norm": norms.get(
-                            (
-                                injection_layer,
-                                anchor if anchor is not None else anchor_default,
-                            )
+                            (injection_layer, resolved_anchor)
                         ),
                         "measured_ratio": None,
                     }
@@ -695,11 +864,14 @@ def main() -> None:
                         source_layer=layer,
                         injection_layer=injection_layer,
                         source_position=int(example["extraction_position"]),
-                        injection_anchor=(
-                            anchor if anchor is not None else anchor_default
-                        ),
+                        injection_anchor=resolved_anchor,
                         schedule=schedule,
                         neutral_prompt_id=prompt_id,
+                        receiver_prompt_id=prompt_id,
+                        receiver_format=receiver.receiver_format,
+                        receiver_prompt_len=receiver.steering_anchor["prompt_len"],
+                        anchor_token_id=anchor_info["anchor_token_id"],
+                        anchor_token_string=anchor_info["anchor_token_string"],
                         strength_ratio=ratio,
                         vector_meta={**vector_meta, **(scale_info or {})},
                         hook_stats=hook_stats,
@@ -865,11 +1037,7 @@ def main() -> None:
                         )
                         if injection_layer is None:
                             continue
-                        anchor = (
-                            int(config["steering"]["wrong_position_anchor"])
-                            if condition == "wrong_position"
-                            else None
-                        )
+                        anchor = wrong_anchor if condition == "wrong_position" else None
                         norm_key = (
                             injection_layer,
                             anchor if anchor is not None else anchor_default,
@@ -1046,6 +1214,14 @@ def main() -> None:
         f"- split: {config['benchmark']['split']}",
         f"- examples: {[e['example_id'] for e in examples]}",
         f"- layers: {steering_layers}, ratios: {ratios}",
+        f"- receiver format: {fmt}; prompts: {neutral_ids}",
+        "- receiver anchors: "
+        + ", ".join(
+            f"{pid} (len {r.steering_anchor['prompt_len']}, anchor "
+            f"{r.steering_anchor['anchor_index']}, "
+            f"{r.steering_anchor['anchor_token_string']!r})"
+            for pid, r in receivers.items()
+        ),
         f"- records: {len(all_records)}",
         f"- gates: parity diff {gates['zero_parity_max_abs_logit_diff']:.3g}, "
         f"greedy equivalence {gates['greedy_equivalence_ok']}, "
@@ -1119,6 +1295,10 @@ def main() -> None:
                 ),
             ),
             "environment": environment_manifest(),
+            "receiver_format": fmt,
+            "receiver_prompts": [
+                receiver.to_debug_dict() for receiver in receivers.values()
+            ],
             "gates": gates,
             "n_records": len(all_records),
             "wall_seconds": round(time.time() - started, 1),

@@ -431,6 +431,9 @@ _GENERATIVE_SCHEMA: tuple[tuple[str, tuple[type, ...], bool], ...] = (
     ("decode.ratios", (list,), True),
     ("decode.schedule_kinds", (list,), True),
     ("neutral_prompts", (list,), True),
+    # Optional; defaults to jlens.generative.DEFAULT_RECEIVER_FORMAT ("chat").
+    ("receiver", (dict,), False),
+    ("receiver.format", (str,), False),
     ("eval.control_seed", (int,), True),
     ("parity.max_abs_logit_diff_tol", (float, int), True),
     # Optional greedy-equivalence gate thresholds. The runner supplies defaults:
@@ -511,6 +514,40 @@ def validate_generative_config(config: dict) -> None:
                     f"steering.schedules: each entry needs kind in "
                     f"{SCHEDULE_KINDS}, got {entry!r}"
                 )
+    found, receiver_format = _get_dotted(config, "receiver.format")
+    if found:
+        from jlens.generative import RECEIVER_FORMATS
+
+        if receiver_format not in RECEIVER_FORMATS:
+            problems.append(
+                f"receiver.format: {receiver_format!r} not in {RECEIVER_FORMATS}"
+            )
+    # Receiver prompt ids must exist, and at least one must be a default
+    # (priming-free) prompt: the parity/greedy gates and --smoke each run on a
+    # single prompt and must never be judged on a legacy diagnostic one.
+    found, prompts = _get_dotted(config, "neutral_prompts")
+    if found and isinstance(prompts, list):
+        from jlens.generative import (
+            LEGACY_DIAGNOSTIC_PROMPTS,
+            NEUTRAL_PROMPTS,
+        )
+
+        unknown = [
+            p
+            for p in prompts
+            if p not in NEUTRAL_PROMPTS and p not in LEGACY_DIAGNOSTIC_PROMPTS
+        ]
+        if unknown:
+            problems.append(
+                f"neutral_prompts: unknown prompt id(s) {unknown}; known ids "
+                f"are {sorted(NEUTRAL_PROMPTS)} (default) and "
+                f"{sorted(LEGACY_DIAGNOSTIC_PROMPTS)} (legacy diagnostics)"
+            )
+        if not any(p in NEUTRAL_PROMPTS for p in prompts):
+            problems.append(
+                "neutral_prompts: at least one default (non-legacy) prompt is "
+                f"required; got {list(prompts)}"
+            )
     if problems:
         raise ValueError("invalid generative config:\n  " + "\n  ".join(problems))
 

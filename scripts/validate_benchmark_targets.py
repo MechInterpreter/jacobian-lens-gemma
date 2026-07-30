@@ -12,9 +12,16 @@ spending GPU time: a target that tokenizes to one token cannot test multi-token
 scoring, and forces prompt_only / constant / decaying to identical target
 log-probabilities.
 
+Targets are resolved exactly as the run resolves them: **contextually**, as the
+assistant continuation of each configured receiver prompt at the config's
+``receiver.format`` (see :func:`jlens.generative.contextual_target_token_ids`).
+A phrase can segment differently after ``<start_of_turn>model`` than it does
+standalone, so a standalone check would validate something the run does not use.
+
 Prints a per-example table (token count, ids, per-token strings) for every
-split, then exits non-zero if any example in the checked splits violates the
-requirement — so it works as a pre-run gate in a shell pipeline.
+receiver prompt and split, then exits non-zero if any example in the checked
+splits violates the requirement — so it works as a pre-run gate in a shell
+pipeline.
 """
 
 from __future__ import annotations
@@ -31,8 +38,12 @@ from jlens.generative import (
     MAX_TARGET_TOKENS,
     MIN_TARGET_TOKENS,
     GenerativeError,
+    contextual_target_resolver,
+    contextual_target_token_ids,
+    encode_receiver_prompt,
     load_benchmark,
-    token_strings,
+    receiver_format_from_config,
+    resolve_neutral_prompt,
     validate_target_tokens,
 )
 from jlens.metadata import load_generative_config
@@ -50,18 +61,6 @@ def parse_args() -> argparse.Namespace:
         help="Which split(s) must satisfy the requirement (default: both).",
     )
     return parser.parse_args()
-
-
-def resolve_target_ids(tokenizer, phrase: str) -> list[int]:
-    """Token ids of the target phrase as a continuation (no BOS/specials).
-
-    Must stay identical to the runner's resolution, or this check would validate
-    something the run does not use.
-    """
-    ids = tokenizer(phrase, add_special_tokens=False, return_tensors=None).input_ids
-    if not ids:
-        raise GenerativeError(f"target phrase {phrase!r} tokenized to nothing")
-    return [int(t) for t in ids]
 
 
 def main() -> int:
@@ -86,54 +85,81 @@ def main() -> int:
     tokenizer = transformers.AutoTokenizer.from_pretrained(
         repo_id, revision=revision, token=os.environ.get("HF_TOKEN")
     )
+    receiver_format = receiver_format_from_config(config)
+    prompt_ids = list(config["neutral_prompts"])
     print(f"tokenizer: {repo_id}@{revision} ({type(tokenizer).__name__})")
+    print(f"receiver format: {receiver_format}; prompts: {prompt_ids}")
     print(f"requirement: {min_tokens}-{max_tokens} tokens per target\n")
+
+    receivers = {
+        prompt_id: encode_receiver_prompt(
+            tokenizer,
+            resolve_neutral_prompt(prompt_id),
+            prompt_id=prompt_id,
+            receiver_format=receiver_format,
+        )
+        for prompt_id in prompt_ids
+    }
 
     splits = ("dev", "heldout") if args.split == "both" else (args.split,)
     failures: dict[str, str] = {}
     report: dict[str, dict] = {}
 
-    for split in ("dev", "heldout"):
-        print(f"--- {split} ---")
-        for example in manifest[split]:
-            ids = resolve_target_ids(tokenizer, example["target_phrase"])
-            strings = token_strings(tokenizer, ids)
-            ok = min_tokens <= len(ids) <= max_tokens
-            mark = "ok " if ok else "BAD"
-            print(
-                f"  [{mark}] {example['example_id']:34s} n={len(ids)}  "
-                f"{example['target_phrase']!r} -> {strings} {ids}"
-            )
-            report[example["example_id"]] = {
-                "split": split,
-                "target_phrase": example["target_phrase"],
-                "target_token_ids": ids,
-                "target_token_strings": strings,
-                "n_target_tokens": len(ids),
-                "satisfies_requirement": ok,
-            }
-        print()
+    for prompt_id, receiver in receivers.items():
+        anchor = receiver.steering_anchor
+        print(
+            f"=== receiver {prompt_id} (prompt_len {anchor['prompt_len']}, "
+            f"anchor {anchor['anchor_index']} = "
+            f"{anchor['anchor_token_string']!r}) ==="
+        )
+        print(f"  rendered: {receiver.rendered_prompt!r}")
+        for split in ("dev", "heldout"):
+            print(f"  --- {split} ---")
+            for example in manifest[split]:
+                info = contextual_target_token_ids(
+                    tokenizer, receiver, example["target_phrase"]
+                )
+                ids = info["target_token_ids"]
+                ok = min_tokens <= len(ids) <= max_tokens
+                mark = "ok " if ok else "BAD"
+                print(
+                    f"    [{mark}] {example['example_id']:34s} n={len(ids)}  "
+                    f"{example['target_phrase']!r} -> "
+                    f"{info['target_token_strings']} {ids}"
+                )
+                report.setdefault(prompt_id, {})[example["example_id"]] = {
+                    "split": split,
+                    "target_phrase": example["target_phrase"],
+                    "satisfies_requirement": ok,
+                    **info,
+                }
+            print()
 
     # Authoritative pass/fail via the same function the run uses, so this script
     # can never disagree with the run's gate.
-    for split in splits:
-        try:
-            validate_target_tokens(
-                manifest[split],
-                tokenizer,
-                resolve=resolve_target_ids,
-                min_tokens=min_tokens,
-                max_tokens=max_tokens,
-            )
-        except GenerativeError as exc:
-            failures[split] = str(exc)
+    for prompt_id, receiver in receivers.items():
+        for split in splits:
+            try:
+                validate_target_tokens(
+                    manifest[split],
+                    tokenizer,
+                    resolve=contextual_target_resolver(receiver),
+                    min_tokens=min_tokens,
+                    max_tokens=max_tokens,
+                    use_manifest_ids=False,
+                )
+            except GenerativeError as exc:
+                failures[f"{prompt_id}/{split}"] = str(exc)
 
     print(json.dumps(report, indent=2, ensure_ascii=False))
     if failures:
-        for split, message in failures.items():
-            print(f"\nFAILED [{split}]: {message}", file=sys.stderr)
+        for key, message in failures.items():
+            print(f"\nFAILED [{key}]: {message}", file=sys.stderr)
         return 1
-    print(f"\nAll targets in {', '.join(splits)} satisfy the requirement.")
+    print(
+        f"\nAll targets in {', '.join(splits)} satisfy the requirement under "
+        f"every configured receiver prompt ({receiver_format})."
+    )
     return 0
 
 
