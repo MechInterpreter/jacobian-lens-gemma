@@ -963,6 +963,102 @@ def build_condition_vector(
 # ----------------------------------------------------------------- records
 
 
+def tensor_sha256(tensor: torch.Tensor) -> str:
+    """Deterministic ``sha256:`` fingerprint of a vector's float32 contents.
+
+    Hashed as little-endian float32 bytes on CPU, so the value depends only on
+    the numbers — not on the device, the storage dtype, or whether the tensor
+    is a view. Two records carrying the same fingerprint were built from the
+    same numbers; two carrying different ones were not. That is the property
+    that makes "did this Mandela record actually get Mandela's activation?"
+    answerable from ``records.jsonl`` alone, without rerunning anything.
+    """
+    import hashlib
+
+    flat = tensor.detach().to(device="cpu", dtype=torch.float32).contiguous()
+    payload = flat.numpy().astype("<f4", copy=False).tobytes()
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def vector_identity(tensor: torch.Tensor | None) -> tuple[float | None, str | None]:
+    """``(norm, sha256)`` for a vector, or ``(None, None)`` for ``None``.
+
+    Never fabricates a value: a condition with no vector (``none``) records
+    both fields as null rather than a placeholder zero.
+    """
+    if tensor is None:
+        return None, None
+    return float(tensor.detach().float().norm()), tensor_sha256(tensor)
+
+
+#: Which example's J-cone a condition's steering vector is built from.
+#:
+#: - ``"self"``: the scored example's own active generators.
+#: - ``"donor"``: the unrelated-cone donor's generators — the *only* conditions
+#:   in which a record's injected vector legitimately comes from a different
+#:   example. Any other condition whose recorded ``cone_source_example_id``
+#:   differs from its ``example_id`` is a bug, not a control.
+#: - ``"none"``: no cone is involved (``none``/``zero``, the isotropic random
+#:   directions, and the raw-activation transplants, which use the example's
+#:   own activation rather than a reconstruction).
+CONE_SOURCE_SELF_CONDITIONS = (
+    "full_cone",
+    "natural_scale",
+    "mass_subcone",
+    "natural_mass_subcone",
+    "manual_subcone",
+    "shuffled",
+    "natural_shuffled",
+    "sign_reversed",
+    "natural_sign_reversed",
+    "wrong_layer",
+    "wrong_position",
+)
+
+CONE_SOURCE_DONOR_CONDITIONS = (
+    "unrelated_cone",
+    "natural_unrelated_cone",
+)
+
+
+def cone_source_role(condition: str) -> str:
+    """``"self"``, ``"donor"``, or ``"none"`` — whose cone ``condition`` uses.
+
+    A pure function of the condition name, so the runner's per-record
+    ``cone_source_example_id`` and any downstream contamination check derive
+    the expectation from the same place and cannot disagree.
+    """
+    if condition not in VECTOR_CONDITIONS:
+        raise GenerativeError(f"condition {condition!r} not in {VECTOR_CONDITIONS}")
+    if condition in CONE_SOURCE_SELF_CONDITIONS:
+        return "self"
+    if condition in CONE_SOURCE_DONOR_CONDITIONS:
+        return "donor"
+    return "none"
+
+
+def expected_cone_source_example_id(
+    condition: str, *, example_id: str, donor_example_id: str | None
+) -> str | None:
+    """The ``cone_source_example_id`` a correct run must record.
+
+    ``None`` when the condition uses no cone. Raises if a donor-sourced
+    condition has no donor, which would mean the run built an "unrelated" cone
+    out of nothing.
+    """
+    role = cone_source_role(condition)
+    if role == "self":
+        return example_id
+    if role == "donor":
+        if donor_example_id is None:
+            raise GenerativeError(
+                f"condition {condition!r} needs a donor example but none was "
+                f"recorded for {example_id!r}"
+            )
+        return donor_example_id
+    return None
+
+
 def make_generative_record(
     *,
     run_id: str,
@@ -993,6 +1089,15 @@ def make_generative_record(
     receiver_prompt_len: int | None = None,
     anchor_token_id: int | None = None,
     anchor_token_string: str | None = None,
+    source_example_id: str | None = None,
+    cone_source_example_id: str | None = None,
+    donor_example_id: str | None = None,
+    source_prompt: str | None = None,
+    source_activation_norm: float | None = None,
+    source_activation_sha256: str | None = None,
+    cone_norm: float | None = None,
+    cone_sha256: str | None = None,
+    injected_delta_sha256: str | None = None,
 ) -> dict:
     """Assemble one JSON-safe result record (schema
     ``jlens.generative.record.v1``). No activation tensors are stored.
@@ -1003,6 +1108,38 @@ def make_generative_record(
     the thing that invalidated them. ``generated_token_ids`` is always present
     (``None`` when the record was not decoded) so a reader never has to infer
     whether decoding happened from a missing key.
+
+    The identity block written into ``provenance`` answers "which example did
+    each artifact in this record actually come from?" without rerunning
+    anything:
+
+    - ``source_example_id`` — whose source activation was captured (always the
+      scored example; recorded explicitly so a mix-up would be *visible*
+      rather than merely absent).
+    - ``cone_source_example_id`` — whose J-cone the injected vector was built
+      from. Equal to ``example_id`` for every condition except the
+      unrelated-cone controls, where it must equal ``donor_example_id``; see
+      :func:`expected_cone_source_example_id`.
+    - ``donor_example_id`` — the run's unrelated-cone donor for this example,
+      recorded on **every** record so a reader always knows which example
+      *could* have contributed a cone here, not just the ones where it did.
+    - ``source_prompt`` — the prompt the activation was captured from, so the
+      record is interpretable without the manifest.
+    - ``source_activation_norm`` / ``source_activation_sha256`` — the captured
+      activation the pursuit ran on.
+    - ``cone_norm`` / ``cone_sha256`` — the **unscaled** built steering vector
+      (the weighted J-cone reconstruction for cone-based conditions; the raw
+      unit direction for ``random_matched_norm``, which is why the role is
+      still reported separately by :func:`cone_source_role`).
+    - ``injected_delta_sha256`` — the vector that actually entered the model
+      after scaling, so the injected quantity is identified and not just the
+      thing it was derived from.
+
+    Together the fingerprints make cross-example artifact reuse checkable by
+    equality rather than by inference from decoded text.
+
+    Every field defaults to ``None`` and is written as ``None`` when the caller
+    does not supply it. Nothing here is invented or back-filled.
     """
     record = {
         "schema": GENERATIVE_RECORD_SCHEMA,
@@ -1044,7 +1181,24 @@ def make_generative_record(
         # Always present; DecodeResult.to_dict() overwrites it when decoded.
         "generated_token_ids": None,
         "random_seed": seed,
-        "provenance": dict(provenance),
+        "provenance": {
+            **dict(provenance),
+            # Identity block: which example every artifact in this record came
+            # from. Written last so it cannot be shadowed by a caller-supplied
+            # provenance key of the same name.
+            "example_id": example_id,
+            "source_example_id": source_example_id,
+            "cone_source_example_id": cone_source_example_id,
+            "donor_example_id": donor_example_id,
+            "source_prompt": source_prompt,
+            "target_phrase": target_phrase,
+            "source_layer": int(source_layer),
+            "source_activation_norm": source_activation_norm,
+            "source_activation_sha256": source_activation_sha256,
+            "cone_norm": cone_norm,
+            "cone_sha256": cone_sha256,
+            "injected_delta_sha256": injected_delta_sha256,
+        },
     }
     record.update(scoring)
     if decode is not None:

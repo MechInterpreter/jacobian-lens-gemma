@@ -72,6 +72,7 @@ from jlens.generative import (
     contextual_target_resolver,
     contextual_target_token_ids,
     encode_receiver_prompt,
+    expected_cone_source_example_id,
     first_token_distribution,
     gonogo_report,
     greedy_decode,
@@ -92,6 +93,7 @@ from jlens.generative import (
     summarize_by_condition,
     target_logprob,
     validate_target_tokens,
+    vector_identity,
 )
 from jlens.hooks import ActivationRecorder
 from jlens.interventions import append_record
@@ -191,7 +193,13 @@ def capture_activation(model, prompt: str, layer: int, position: int) -> torch.T
         raise GenerativeError(
             f"extraction position {position} out of range for length {seq_len}"
         )
-    return hidden[0, resolved].detach().float()
+    # .clone() on purpose: indexing returns a *view* of the block's output, and
+    # .float() is a no-op (returns the same tensor) when the block already runs
+    # in float32. Keeping a view would leave one example's stored activation
+    # aliasing a buffer the next forward pass owns. Nothing observed doing that
+    # today, but an owned copy costs one d_model vector per example and removes
+    # the whole class of question.
+    return hidden[0, resolved].detach().float().clone()
 
 
 def receiving_norm(model, input_ids: torch.Tensor, layer: int, position: int) -> float:
@@ -662,9 +670,17 @@ def main() -> None:
                     layer,
                     int(example["extraction_position"]),
                 )
+            # Identity of the captured activation, fingerprinted at the moment
+            # of capture and carried onto every record built from it. If a
+            # later example's records ever carried this hash, the mix-up would
+            # be visible in records.jsonl instead of having to be inferred
+            # from what the model happened to say.
+            h_source_norm, h_source_sha = vector_identity(h_source)
             per_example[example["example_id"]] = {
                 "example": example,
                 "h_source": h_source,
+                "h_source_norm": h_source_norm,
+                "h_source_sha256": h_source_sha,
                 "h_control": h_control,
                 "active_ids": active_ids,
                 "active_coeffs": active_coeffs,
@@ -675,6 +691,9 @@ def main() -> None:
                 {
                     "example_id": example["example_id"],
                     "layer": layer,
+                    "source_prompt": example["source_prompt"],
+                    "source_activation_norm": h_source_norm,
+                    "source_activation_sha256": h_source_sha,
                     "active_token_ids": active_ids,
                     "active_labels": per_example[example["example_id"]]["active_labels"],
                     "active_coefficients": active_coeffs,
@@ -696,7 +715,14 @@ def main() -> None:
             entry = per_example[example["example_id"]]
             # Donor is the next example in this same-split run list, so the
             # unrelated cone never comes from the other split.
-            donor = per_example[example_ids[(index + 1) % len(example_ids)]]
+            donor_example_id = example_ids[(index + 1) % len(example_ids)]
+            if donor_example_id == example["example_id"]:
+                raise GenerativeError(
+                    f"unrelated-cone donor for {example['example_id']!r} "
+                    f"resolved to the example itself; the control would be the "
+                    f"correct cone"
+                )
+            donor = per_example[donor_example_id]
             # The natural-scale reference: this example's own full-cone
             # reconstruction, unscaled. Depends only on this (layer, example)'s
             # active generators, not on the neutral prompt, so it is computed
@@ -786,8 +812,10 @@ def main() -> None:
                     anchor: int | None,
                     seed: int | None,
                     scale_info: dict | None,
+                    cone: torch.Tensor | None = None,
                     example=example,
                     entry=entry,
+                    donor_example_id=donor_example_id,
                     layer=layer,
                     prompt_id=prompt_id,
                     receiver=receiver,
@@ -852,6 +880,17 @@ def main() -> None:
                             example["target_phrase"].strip().lower()
                             in decode_result.text.lower()
                         )
+                    # Which example's cone this condition is *supposed* to use,
+                    # derived from the condition name alone (single source of
+                    # truth in jlens.generative), so the record cannot claim
+                    # self-provenance for a donor-sourced control or vice versa.
+                    cone_source_id = expected_cone_source_example_id(
+                        condition,
+                        example_id=example["example_id"],
+                        donor_example_id=donor_example_id,
+                    )
+                    cone_norm, cone_sha = vector_identity(cone)
+                    _, injected_sha = vector_identity(delta)
                     total = scoring["total_logprob"]
                     if condition == "zero":
                         zero_total = total
@@ -896,6 +935,15 @@ def main() -> None:
                         target_recovered_exact=exact,
                         target_recovered_substring=substring,
                         seed=seed,
+                        source_example_id=example["example_id"],
+                        cone_source_example_id=cone_source_id,
+                        donor_example_id=donor_example_id,
+                        source_prompt=example["source_prompt"],
+                        source_activation_norm=entry["h_source_norm"],
+                        source_activation_sha256=entry["h_source_sha256"],
+                        cone_norm=cone_norm,
+                        cone_sha256=cone_sha,
+                        injected_delta_sha256=injected_sha,
                         provenance={
                             **provenance,
                             "active_token_ids": entry["active_ids"],
@@ -1052,6 +1100,7 @@ def main() -> None:
                                 emit(
                                     condition,
                                     delta=built.delta,
+                                    cone=built.delta,
                                     vector_meta=built.meta,
                                     ratio=None,
                                     schedule=schedule,
@@ -1112,6 +1161,7 @@ def main() -> None:
                                 emit(
                                     condition,
                                     delta=scaled,
+                                    cone=built.delta,
                                     vector_meta=built.meta,
                                     ratio=None,
                                     schedule=schedule,
@@ -1140,6 +1190,7 @@ def main() -> None:
                                 emit(
                                     condition,
                                     delta=scaled,
+                                    cone=built.delta,
                                     vector_meta=built.meta,
                                     ratio=ratio,
                                     schedule=schedule,
