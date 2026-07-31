@@ -316,3 +316,226 @@ code path that hides a NO-GO.
 6. **WikiText domain.** Phrases mined from WikiText-103 skew encyclopedic;
    `q` for a mid-sentence entity mention may be more "next-word prediction"
    than "concept". Cross-domain transfer is untested.
+
+---
+
+# Implementation report
+
+Branch `experiment/jspace-language-autoencoder`, based on `cd61969`
+(`experiment/generative-jlens-validation`). Pushed to
+`origin/experiment/jspace-language-autoencoder`.
+
+## What was implemented
+
+The whole cycle, behind four CLI stages and one notebook:
+
+| stage | script | produces |
+|---|---|---|
+| 2 | `build_jspace_language_dataset.py` | `dataset/{records.jsonl,tensors.pt,manifest.json}`, `artifacts/{benchmark,leakage}.json` |
+| 3 | `train_phrase_reconstructor.py` | `reconstructor.pt` + sidecar, `artifacts/reconstructor_{metrics,gate}.json` |
+| 4-5 | `train_cone_adapter.py` | `adapter_warm.pt`, `adapter.pt`, `adapter_epoch*.pt` resume points, `artifacts/adapter_training.json` |
+| 6-8 | `evaluate_jspace_language.py` | `artifacts/{evaluation,gonogo,prompt_robustness}.json`, `summary.md` |
+
+Conditioning is soft-prefix memory in the input-embedding stream, behind the
+`ConditioningBackend` protocol. Generation is uncached batched beam search
+(width 8, at most 8 tokens, stopping on `<end_of_turn>` or EOS). Preference
+training is offline pairwise DPO against a frozen copy of the warm-start
+adapter; REINFORCE exists and is off by default.
+
+## Trainable and frozen parameter counts
+
+At the shipped pilot config (`d_model = 2560`):
+
+| module | trainable | frozen |
+|---|---|---|
+| `ConeAdapter` (M=4, hidden 1024) | **14,183,424** | 0 |
+| `PhraseReconstructor` (hidden 512, 2 layers, 8 heads) | **6,869,504** | 0 |
+| **total trainable** | **21,052,928** | — |
+| Gemma 4 E4B | 0 | all (`requires_grad=False`, asserted) |
+| fitted lens `J_14`, dictionary `W_U J_14` | 0 | frozen inputs, never written |
+
+The reconstructor's checkpoint reports `trainable_parameters: 0` because it is
+frozen *before* being saved; the pre-freeze count is recorded separately under
+`extra.training_summary`.
+
+## Data-generation procedure
+
+1. Stream WikiText-103 documents of at least 400 characters.
+2. Per sentence, propose 2-4 word spans: capitalized runs (not sentence-initial)
+   and content-word bigrams/trigrams whose first and last words are not function
+   words.
+3. Rank candidates by corpus frequency (ties alphabetical, so the order is
+   deterministic), then filter: function-word-only, contextual token count
+   outside 2-6, fewer occurrences than required, and **substring overlap with an
+   already-accepted phrase**.
+4. For each accepted phrase, take the first *N* occurrences; the context is the
+   document text up to the phrase's first character.
+5. Tokenize the context keeping the **tail** (`max_context_tokens`, one leading
+   BOS), and drop occurrences with less than `min_context_tokens` of preceding
+   context.
+6. Capture the layer-14 `block_output` residual at the last context position —
+   the position whose next-token distribution is the phrase's first token.
+7. Run `gradient_pursuit` (`k=10`, nonnegative, `normalize_atoms`,
+   `refine_steps=2`) against rows of `W_U J_14`; `q = Σ a_i v_i`.
+8. Assign splits by hash rank over the mined phrase set; write records, tensors,
+   and a manifest with file-level sha256s.
+
+Phrase token ids are always the **contextual** segmentation — what appending the
+phrase adds beyond the constant prompt's tail — so the dataset, the
+reconstructor, and the adapter cannot disagree about how a phrase is split.
+
+## Leakage safeguards (as implemented)
+
+1. `ConeAdapter.forward(self, q)` — asserted by signature inspection in
+   `tests/test_jspace_language_models.py` and again in the end-to-end test.
+2. One constant instruction, screened by `assert_clean_prompt`; the end-to-end
+   test asserts the rendered prompt and memory span are byte-identical across
+   all four stages.
+3. Splits by phrase identity, re-derived and re-checked by
+   `assert_no_split_leakage` (recomputation **and** substring containment); the
+   miner drops overlapping phrases up front.
+4. The reconstructor is frozen before the adapter is trained; the adapter's
+   checkpoint stores the reconstructor's parameter sha256 and the evaluator
+   refuses a mismatched pair.
+5. `assert_gemma_frozen` before and after every loop,
+   `assert_no_frozen_parameters_in_optimizer` by tensor identity, and
+   `assert_no_gemma_gradients` after every backward pass.
+6. Records separate tensors from provenance strings; training reads only
+   `cones`, `phrase_token_ids`, and split membership.
+
+## Reconstructor gate results on the deterministic mock
+
+The mock has no semantics, so these numbers validate the *plumbing*, not the
+hypothesis. Smoke build: 32 phrases / 62 occurrences, splits 20/6/6 phrases.
+
+| split | AUROC | top-1 | top-5 | explained fraction | specificity margin |
+|---|---|---|---|---|---|
+| train | 0.770 | — | 1.000 | 0.124 | +0.008 |
+| val | 0.503 | 0.167 | 0.667 | 0.051 | −0.209 |
+| heldout | 0.497 | 0.167 | 0.667 | 0.045 | −0.181 |
+
+Gate verdict **NO-GO** (AUROC 0.497 below the 0.80 threshold), and the final
+report attributes it to `insufficient_data` — the intended behaviour on a
+semantics-free 32-phrase mock, and a demonstration that the gate and the
+attribution logic fire, not a claim about J-space.
+
+## Tests and validation
+
+`128 passed` across six new files:
+
+- `test_jspace_language_config.py` (13) — schema, unknown-key rejection, the
+  brief's fixed parameters, smoke overrides, fingerprints.
+- `test_jspace_language_dataset.py` (16) — mining, overlap filter, tail-keeping
+  context, split determinism and non-emptiness, prototypes, leakage detection,
+  persistence, benchmark shape.
+- `test_jspace_language_models.py` (33) — prompt structure and memory span,
+  conditioning (logits change, hook removal, batch broadcast, span mismatch,
+  NaN rejection), adapter signature / permutation / scale-invariance,
+  reconstructor unit-norm and padding invariance, differentiability into the
+  adapter only, padding-independence of scores, beam determinism, checkpoint
+  hashing.
+- `test_jspace_language_eval.py` (35) — scale fit, AUROC ties, rank ties, reward
+  decomposition, preference pairs, baselines, and seven GO/NO-GO cases including
+  three that force a NO-GO.
+- `test_jspace_language_e2e.py` (16) — the four scripts in order on CPU.
+- `test_jspace_language_notebook.py` (15) — nine sections, no stored outputs,
+  every cell parses, token / lens / deletion invariants.
+
+`ruff check` is clean on every file added here. Seven pre-existing ruff findings
+in `jlens/jspace_analysis.py`, `scripts/analyze_jspace.py`, and
+`tests/test_explorer_export.py` are untouched and out of scope. The full suite
+reports `566 passed, 3 failed`; all three failures reproduce on the base commit
+in this working tree (two notebooks carry uncommitted stored outputs, and
+`test_explorer_export` needs a run directory that is not present) and none of
+them involve this experiment.
+
+## Commits
+
+| hash | phase |
+|---|---|
+| `882a112` | scaffold + design note |
+| `b4ea8cc` | dataset builder |
+| `acee105` | reconstructor + gate |
+| `45fd022` | adapter + verbalizer + preference |
+| `4b31ba4` | inference + baselines + evaluation |
+| `cedfc12` | Colab runner + end-to-end smoke test |
+
+## Exact Colab pilot instructions
+
+1. Open `notebooks/jspace_language_autoencoder_colab.ipynb` on an **L4** runtime.
+2. Run section 1 in order (runtime facts, clone and HEAD assertion, API check, HF
+   token, Drive mount, configuration, **lens verification**, test suite, stage
+   runner).
+3. Upload the pilot lens to
+   `MyDrive/jacobian-lens-gemma/runs/pilot_20260715T200437612150_311fd108c23a/artifacts/lens.pt`
+   (91,753,066 bytes, sha256 `7229c756...c96f474`). Section 1g aborts on a
+   mismatch.
+4. Set `SMOKE = False` in cell 1f and rerun it.
+5. Run sections 2 through 7 in order, stopping at section 4 if the gate fails.
+
+Equivalently, from a shell in the checkout (`DRIVE` pointing at
+`MyDrive/jacobian-lens-gemma`):
+
+```bash
+python -u scripts/build_jspace_language_dataset.py --config configs/jspace_language_autoencoder.yaml --output-dir "$DRIVE/jlang_runs/jlang_pilot" --allow-model-load --device-map cuda --runs-root "$DRIVE/runs" --benchmark
+```
+
+```bash
+python -u scripts/train_phrase_reconstructor.py --config configs/jspace_language_autoencoder.yaml --output-dir "$DRIVE/jlang_runs/jlang_pilot" --allow-model-load --device-map cuda --runs-root "$DRIVE/runs"
+```
+
+```bash
+python -u scripts/train_cone_adapter.py --config configs/jspace_language_autoencoder.yaml --output-dir "$DRIVE/jlang_runs/jlang_pilot" --allow-model-load --device-map cuda --runs-root "$DRIVE/runs"
+```
+
+```bash
+python -u scripts/evaluate_jspace_language.py --config configs/jspace_language_autoencoder.yaml --output-dir "$DRIVE/jlang_runs/jlang_pilot" --allow-model-load --device-map cuda --runs-root "$DRIVE/runs"
+```
+
+Exit codes: `0` GO, `2` aborted precondition, `3` reconstructor gate failed,
+`4` NO-GO. Any stage can be rerun; the adapter resumes from `adapter_epoch*.pt`.
+
+## Expected runtime and storage
+
+Measured on the CPU mock (32 phrases): 0.0039 s per occurrence end to end,
+1,280 bytes per occurrence, 444 model forward calls for a 12-record held-out
+evaluation. These do **not** transfer to an L4 running E4B — which is why
+`--benchmark` exists and why the pilot must be sized from its output rather
+than from anything in this document.
+
+What *is* known analytically, and is the main cost risk:
+
+| stage | model forward calls (pilot config) |
+|---|---|
+| dataset capture | 1,800 (one per occurrence, ~128 tokens) |
+| adapter warm start | 4,500 (batch 8, ~40 tokens) |
+| **preference training** | **about 57,600 beam steps** (4 epochs x 1,800 examples x 8 steps, batch 8) plus ~3,600 scoring passes |
+| held-out evaluation | 8 baselines x held-out records x 8 steps |
+
+Storage: the dataset holds two float32 `d_model` vectors per occurrence, about
+21 KB each, so roughly 40 MB at 1,800 occurrences; checkpoints are about 57 MB
+(adapter) and 28 MB (reconstructor), plus one resume point per epoch.
+
+Preference training dominates and could plausibly run for several hours on an
+L4. If the first benchmark says so, the knobs — in order of least damage to the
+claim — are `preference.epochs`, `adapter.beam_width` during training only, and
+subsampling the training split for the preference phase. Reducing
+`evaluation.beam_width` or the held-out set instead would weaken the result and
+should not be the first choice.
+
+## Unresolved scientific risks
+
+The six risks in the design note above are unchanged and none is resolved by any
+gate implemented here; output-token dominance of `q` (risk 1) is the most
+serious, and `naive_token_average` is the only instrument pointed at it.
+Additionally:
+
+- **Preference training has never run against real cones.** Its stability, the
+  reward scale, and whether a gap of 0.02 produces usable pairs are all untested
+  outside the mock.
+- **The memory scale is calibrated, not validated.** `memory_rms_scale = 1.0`
+  puts the memory at real-token magnitude; whether frozen Gemma *attends* to it
+  at that magnitude is an empirical question the first warm start answers.
+- **Soft-prefix versus native-layer memory.** The pilot result is about the
+  embedding-stream interface. A NO-GO there does not rule out a layer-14 memory,
+  which is why the backend sits behind an interface.
