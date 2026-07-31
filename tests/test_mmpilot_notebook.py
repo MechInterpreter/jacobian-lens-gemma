@@ -358,7 +358,7 @@ def test_runtime_expansion_precedes_selection_and_model_scoring(notebook):
         "FINAL_MANIFEST_KIND",
         "expanded_derived",
         "GROUPS_PER_CONCEPT = 6",
-        "N_CONCEPTS_TO_KEEP = 2",
+        "N_CONCEPTS_TO_KEEP = 4",
         "TINY_SMOKE = False",
     ):
         assert expected in source, expected

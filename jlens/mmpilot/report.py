@@ -77,12 +77,22 @@ def evaluate_criteria(
     }
 
     median_ef = code_stats.get("median_explained_fraction")
+    heldout_text_ef = code_stats.get("heldout_text_median_explained_fraction")
+    text_median_ef = code_stats.get("text_median_explained_fraction")
+    reconstruction_ef = (
+        heldout_text_ef
+        if heldout_text_ef is not None
+        else (text_median_ef if text_median_ef is not None else median_ef)
+    )
     criteria["lens_reconstruction"] = {
         "passed": bool(lens_validation)
-        and median_ef is not None
-        and median_ef >= limits["min_median_explained_fraction"],
+        and reconstruction_ef is not None
+        and reconstruction_ef >= limits["min_median_explained_fraction"],
         "evidence": {
             "median_explained_fraction": median_ef,
+            "text_median_explained_fraction": text_median_ef,
+            "heldout_text_median_explained_fraction": heldout_text_ef,
+            "value_used_for_gate": reconstruction_ef,
             "required": limits["min_median_explained_fraction"],
             "lens_checksum": (lens_validation or {}).get("lens_checksum"),
         },
@@ -97,26 +107,43 @@ def evaluate_criteria(
         jspace = entry["jspace_retrieval"]["top1_accuracy"]
         shuffled = entry["shuffled_control"]["p95_top1_accuracy"]
         raw = entry["raw_residual_retrieval"]["top1_accuracy"]
+        jspace_gap = entry["jspace_separation"]["gap"]
+        raw_gap = entry["raw_residual_separation"]["gap"]
         structure_rows.append(
             {
                 "pair": key,
                 "jspace_top1": jspace,
                 "shuffled_p95_top1": shuffled,
                 "raw_top1": raw,
-                "jspace_gap": entry["jspace_separation"]["gap"],
-                "raw_gap": entry["raw_residual_separation"]["gap"],
+                "jspace_gap": jspace_gap,
+                "raw_gap": raw_gap,
                 "beats_shuffled": jspace
                 >= shuffled + limits["min_retrieval_margin_over_shuffled"],
-                "beats_raw": jspace >= raw,
+                "beats_raw": (jspace > raw)
+                or (jspace == raw and jspace_gap > raw_gap),
             }
         )
+    representation_evaluable = len(retained) >= 2
     criteria["representational_structure"] = {
-        "passed": bool(structure_rows) and all(row["beats_shuffled"] for row in structure_rows),
-        "evidence": {"text_image_pairs": structure_rows},
+        "passed": representation_evaluable
+        and bool(structure_rows)
+        and all(row["beats_shuffled"] for row in structure_rows),
+        "evidence": {
+            "evaluable": representation_evaluable,
+            "reason": None
+            if representation_evaluable
+            else "fewer than two retained concepts makes retrieval and label shuffling trivial",
+            "text_image_pairs": structure_rows,
+        },
     }
     criteria["jspace_beats_raw_residual"] = {
-        "passed": bool(structure_rows) and all(row["beats_raw"] for row in structure_rows),
-        "evidence": {"text_image_pairs": structure_rows},
+        "passed": representation_evaluable
+        and bool(structure_rows)
+        and all(row["beats_raw"] for row in structure_rows),
+        "evidence": {
+            "evaluable": representation_evaluable,
+            "text_image_pairs": structure_rows,
+        },
     }
 
     best = _best_effect_row(interventions, control_kind="source_concept")
@@ -146,11 +173,10 @@ def evaluate_criteria(
             )
             control_rows[kind] = matched[0] if matched else None
         blocking = [
-            control_rows[kind]
+            control_rows.get(kind)
             for kind in ("random_norm_matched", "unrelated_concept")
-            if control_rows.get(kind)
         ]
-        if blocking:
+        if all(row is not None for row in blocking):
             strongest = max(row["mean_signed_target_effect"] for row in blocking)
             specificity_passed = best["mean_signed_target_effect"] >= (
                 limits["control_separation_factor"] * max(strongest, 0.0)
@@ -194,15 +220,24 @@ def evaluate_criteria(
     specific_not_global = bool(best) and best["mean_abs_unrelated_change"] < abs(
         best["mean_signed_target_effect"]
     )
-    criteria["effect_precedes_output_convergence"] = {
+    criteria["effect_specificity_not_global"] = {
         "passed": specific_not_global,
+        "evidence": {
+            "mean_signed_target_effect": (best or {}).get("mean_signed_target_effect"),
+            "mean_abs_unrelated_change": (best or {}).get(
+                "mean_abs_unrelated_change"
+            ),
+        },
+    }
+    criteria["effect_precedes_output_convergence"] = {
+        "passed": bool((best or {}).get("pre_output_convergence_validated", False)),
         "evidence": {
             "layer": (best or {}).get("layer"),
             "mean_signed_target_effect": (best or {}).get("mean_signed_target_effect"),
             "mean_abs_unrelated_change": (best or {}).get("mean_abs_unrelated_change"),
             "reading": (
-                "the edit moved the target concept more than it moved the other "
-                "candidates, so the effect is not a global output shift"
+                "not established by a final-prompt intervention alone; a late "
+                "decoder layer may already contain an answer-scoring direction"
             ),
         },
     }
@@ -222,7 +257,7 @@ def decide(criteria: Mapping) -> dict:
 
     representational = ok("behavioral_capability") and ok("representational_structure")
     causal = ok("causal_transfer_sign") and ok("control_specificity")
-    healthy = ok("activation_norm_sanity") and ok("effect_precedes_output_convergence")
+    healthy = ok("activation_norm_sanity") and ok("effect_specificity_not_global")
 
     if not ok("behavioral_capability") or not ok("lens_reconstruction"):
         return {
@@ -302,6 +337,25 @@ def code_statistics(codes: Sequence[Mapping]) -> dict:
         return {"n": 0, "median_explained_fraction": None}
     explained = sorted(float(code["explained_fraction"]) for code in codes)
     actives = sorted(int(code["n_active"]) for code in codes)
+    by_modality = {}
+    for modality in sorted(
+        {str(code.get("modality")) for code in codes if code.get("modality")}
+    ):
+        values = sorted(
+            float(code["explained_fraction"])
+            for code in codes
+            if code.get("modality") == modality
+        )
+        by_modality[modality] = {
+            "n": len(values),
+            "median_explained_fraction": values[len(values) // 2],
+            "mean_explained_fraction": sum(values) / len(values),
+        }
+    heldout_text = sorted(
+        float(code["explained_fraction"])
+        for code in codes
+        if code.get("modality") == "text" and code.get("split") == "test"
+    )
     return {
         "n": len(codes),
         "median_explained_fraction": explained[len(explained) // 2],
@@ -309,6 +363,13 @@ def code_statistics(codes: Sequence[Mapping]) -> dict:
         "mean_explained_fraction": sum(explained) / len(explained),
         "median_n_active": actives[len(actives) // 2],
         "convergence_statuses": sorted({str(code["convergence_status"]) for code in codes}),
+        "by_modality": by_modality,
+        "text_median_explained_fraction": by_modality.get("text", {}).get(
+            "median_explained_fraction"
+        ),
+        "heldout_text_median_explained_fraction": (
+            heldout_text[len(heldout_text) // 2] if heldout_text else None
+        ),
     }
 
 
@@ -411,8 +472,8 @@ def gonogo_report(
         f"5. **Were the effects larger and more specific than controls?** "
         f"{yes_no('control_specificity')}.",
         f"6. **Did results occur before obvious output-language convergence?** "
-        f"{yes_no('effect_precedes_output_convergence')} — the edit moved the "
-        f"target more than the other candidates rather than shifting everything.",
+        f"{yes_no('effect_precedes_output_convergence')} — a final-prompt edit "
+        f"does not by itself establish that the effect precedes answer-language convergence.",
         f"7. **Is there enough signal to justify the larger framework?** "
         f"{decision['recommendation']}.",
         "",

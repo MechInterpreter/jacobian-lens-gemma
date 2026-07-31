@@ -11,6 +11,7 @@ import json
 import pytest
 
 from jlens.mmpilot import mock as K
+from jlens.mmpilot.report import code_statistics, evaluate_criteria
 from jlens.mmpilot.store import IncompatibleStateError, RunFingerprint, UnitStore
 
 
@@ -192,3 +193,69 @@ def test_derived_manifest_is_written_and_the_original_is_untouched(run):
         (root / "data" / "spokencoco_manifest.json").read_text(encoding="utf-8")
     )
     assert "captions" in original["data"][0]  # unchanged shape
+
+
+def _criterion_inputs(*, retained=("cat", "dog"), unrelated=True):
+    retrieval = {
+        "jspace_retrieval": {"top1_accuracy": 1.0},
+        "shuffled_control": {"p95_top1_accuracy": 0.5},
+        "raw_residual_retrieval": {"top1_accuracy": 1.0},
+        "jspace_separation": {"gap": 0.2},
+        "raw_residual_separation": {"gap": 0.9},
+    }
+    rows = [
+        {
+            "concept": "cat", "source_modality": "text", "target_modality": "image",
+            "pair": "text->image", "off_diagonal": True, "layer": 38,
+            "control_kind": "source_concept", "alpha": 0.25,
+            "mean_signed_target_effect": 20.0, "fraction_expected_sign": 1.0,
+            "mean_abs_unrelated_change": 2.0, "mean_activation_norm_ratio": 1.03,
+        },
+        {
+            "concept": "cat", "source_modality": "text", "target_modality": "image",
+            "pair": "text->image", "off_diagonal": True, "layer": 38,
+            "control_kind": "random_norm_matched", "alpha": 0.25,
+            "mean_signed_target_effect": 1.0, "fraction_expected_sign": 0.5,
+            "mean_abs_unrelated_change": 2.0, "mean_activation_norm_ratio": 1.03,
+        },
+    ]
+    if unrelated:
+        rows.append({**rows[-1], "control_kind": "unrelated_concept", "mean_signed_target_effect": 2.0})
+    return {
+        "capability": {"text_image_retained_concepts": list(retained)},
+        "lens_validation": {"lens_checksum": "sha256:test"},
+        "code_stats": {"median_explained_fraction": 0.8, "text_median_explained_fraction": 0.8},
+        "representational": {"pairs": {pair: retrieval for pair in ("text->image", "image->text")}},
+        "interventions": {"rows": rows},
+    }
+
+
+def test_report_refuses_trivial_one_concept_retrieval_and_raw_ties():
+    inputs = _criterion_inputs(retained=("cat",))
+    criteria = evaluate_criteria(**inputs)
+    assert not criteria["representational_structure"]["passed"]
+    assert not criteria["representational_structure"]["evidence"]["evaluable"]
+    assert not criteria["jspace_beats_raw_residual"]["passed"]
+
+
+def test_report_requires_the_unrelated_concept_control():
+    criteria = evaluate_criteria(**_criterion_inputs(unrelated=False))
+    assert not criteria["control_specificity"]["passed"]
+    assert criteria["control_specificity"]["evidence"]["matched_controls"]["unrelated_concept"] is None
+
+
+def test_final_prompt_effect_does_not_claim_pre_language_convergence():
+    criteria = evaluate_criteria(**_criterion_inputs())
+    assert criteria["effect_specificity_not_global"]["passed"]
+    assert not criteria["effect_precedes_output_convergence"]["passed"]
+
+
+def test_code_statistics_exposes_text_only_reconstruction_gate_value():
+    stats = code_statistics([
+        {"modality": "text", "split": "test", "explained_fraction": 0.1, "n_active": 2, "convergence_status": "ok"},
+        {"modality": "image", "split": "test", "explained_fraction": 0.9, "n_active": 2, "convergence_status": "ok"},
+    ])
+    assert stats["text_median_explained_fraction"] == pytest.approx(0.1)
+    assert stats["heldout_text_median_explained_fraction"] == pytest.approx(0.1)
+    criteria = evaluate_criteria(**{**_criterion_inputs(), "code_stats": stats})
+    assert not criteria["lens_reconstruction"]["passed"]
