@@ -342,11 +342,13 @@ def gonogo_report(
     )
     decision = decide(criteria)
     is_mock = mode.lower() == "mock"
+    is_tiny_smoke = mode.lower() == "tiny_smoke"
+    is_scientific = not (is_mock or is_tiny_smoke)
     summary = {
         "schema": "jlens.mmpilot.gonogo.v1",
         "mode": mode,
         "run_dir": run_dir,
-        "scientific_evidence": not is_mock,
+        "scientific_evidence": is_scientific,
         "recommendation": decision["recommendation"],
         "rationale": decision["rationale"],
         "next_experiment": decision["next_experiment"],
@@ -366,11 +368,17 @@ def gonogo_report(
         return "yes" if criteria.get(name, {}).get("passed") else "no"
 
     best = criteria["causal_transfer_sign"]["evidence"].get("best_off_diagonal_row")
+    if is_tiny_smoke:
+        mode_note = "  \n- **TINY_SMOKE run: plumbing validation only, NOT scientifically meaningful, never used for GO/NO-GO research verdict.**"
+    elif is_mock:
+        mode_note = "  \n- **MOCK run: pipeline evidence only, not scientific evidence.**"
+    else:
+        mode_note = ""
+
     lines = [
         f"# Multimodal J-space transfer pilot — {decision['recommendation']}",
         "",
-        f"- mode: **{mode}**"
-        + ("  \n- **MOCK run: pipeline evidence only, not scientific evidence.**" if is_mock else ""),
+        f"- mode: **{mode}**{mode_note}",
         f"- run directory: `{run_dir}`",
         f"- modalities blocked: {list(blocked_modalities) or 'none'}",
         "",

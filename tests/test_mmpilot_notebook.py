@@ -341,3 +341,31 @@ def test_mock_execution_from_a_clean_environment(tmp_path):
     assert (run_dir / "report.md").is_file()
     assert (run_dir / "summary.json").is_file()
     assert (run_dir / "derived_manifest.json").is_file()
+    assert (run_dir / "expanded_manifest.json").is_file()
+
+def test_runtime_expansion_precedes_selection_and_model_scoring(notebook):
+    source = _code_source(notebook)
+    discovery = source.index("discover_metadata_sources")
+    ranking = source.index("concept coverage ranking")
+    capability = source.index("stage_capability")
+    assert discovery < ranking < capability
+    for expected in (
+        "BASELINE_COVERAGE_SUFFICIENT",
+        "max_files=40",
+        "max_depth=3",
+        "coco_object_annotation",
+        "persist_expanded_manifest",
+        "FINAL_MANIFEST_KIND",
+        "expanded_derived",
+        "GROUPS_PER_CONCEPT = 6",
+        "N_CONCEPTS_TO_KEEP = 2",
+        "TINY_SMOKE = False",
+    ):
+        assert expected in source, expected
+
+
+def test_notebook_does_not_download_or_mutate_original_manifest(notebook):
+    source = _code_source(notebook)
+    assert "media_redownloaded\": False" in source
+    assert "MANIFEST_PATH = \"/content/drive/MyDrive/datasets/spokencoco_manifest.json\"" in source
+    assert "write_text" not in "\n".join(line for line in source.splitlines() if "MANIFEST_PATH" in line)

@@ -1117,7 +1117,13 @@ def build_subset(
         matched = {
             concept
             for concept, keywords in concepts.items()
-            if any(caption_mentions(g["caption"], keywords) for g in image_groups)
+            if any(
+                (concept.lower() in {str(label).lower() for label in g.get("concept_annotations", [])}
+                 if g.get("concept_annotations")
+                 else caption_mentions(g["caption"], keywords))
+                for g in image_groups
+            )
+
         }
         image_concepts[image_id] = matched
 
@@ -1129,13 +1135,22 @@ def build_subset(
              if matched == {concept} and image_id not in used_images),
             key=lambda image_id: _stable_rank(image_id, f"{seed}|{concept}"),
         )
-        chosen = pure[:groups_per_concept]
+        source_train = [image_id for image_id in pure if any(str(g.get("source_split", "")).lower().startswith("train") for g in by_image[image_id])]
+        source_test = [image_id for image_id in pure if any(str(g.get("source_split", "")).lower().startswith(("val", "test")) for g in by_image[image_id])]
+        if groups_per_concept >= 6 and len(source_train) >= 4 and len(source_test) >= 2:
+            chosen = source_train[:4] + source_test[:2]
+            n_train = 4
+            split_method = "source_provided_train_validation"
+        else:
+            chosen = pure[:groups_per_concept]
+            n_train = min(max(1, groups_per_concept - 2), max(1, len(chosen) - 1))
+            split_method = "stable_id_seeded_4_to_2"
         used_images.update(chosen)
-        n_train = max(1, len(chosen) // 2)
         selected[concept] = {
             "train_images": chosen[:n_train],
             "test_images": chosen[n_train:],
             "n_available_images": len(pure),
+            "split_method": split_method,
         }
 
     negatives = sorted(

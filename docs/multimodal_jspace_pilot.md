@@ -143,6 +143,39 @@ Retrieval never scores a query against a group from its own image. The caption,
 its recording, and the image share content by construction; matching them would
 measure the dataset's pairing, not the model.
 
+## Local metadata expansion and coverage gate
+
+The committed 48-record manifest remains immutable. After Drive is mounted,
+section 6 performs a bounded breadth-first search (depth 3, at most 40 candidate
+files, at most 512 MiB per file) under the configured SpokenCOCO and COCO roots.
+It considers JSON, JSONL, CSV, and TSV metadata only; it does not recursively
+stat media trees and never downloads anything. Every candidate is printed with
+size, checksum, format, top-level schema, likely role fields, record count, and
+an accept/reject reason.
+
+Synchronized sources must expose deterministic image, caption, and audio fields.
+The converter rejects conflicting audio-to-caption joins and missing explicit
+identifiers; filename-derived identifiers are allowed only when a known metadata
+ID set validates exactly one match. Official COCO category annotations are used
+when locally available. Otherwise captions are normalized to lowercase word
+tokens with conservative plural handling and whole-word boundaries; substring
+matches are forbidden. Each group records its annotation source.
+
+The expanded manifest is atomically written under the persistent run directory
+and reused only when the original checksum, every discovered-source checksum,
+and conversion hash match. The final path is printed as `original` or
+`expanded_derived`. Ranking preserves the scientific gate: two concepts, six
+distinct image/groups each, four source-training positives, two held-out
+positives, and six negatives. Source train/validation splits are preferred when
+they satisfy those counts; otherwise stable IDs and the saved seed produce a
+4/2 image-disjoint split. If two concepts do not qualify, section 7 raises
+`DATASET NO-GO` before model execution and reports exact shortfalls. It does not
+lower `GROUPS_PER_CONCEPT=6`.
+
+`TINY_SMOKE=False` by default. Setting it explicitly uses two concepts and two
+groups only to validate real-media plumbing; its report is marked non-scientific
+and cannot contribute to the research GO/WEAK-GO/NO-GO verdict.
+
 ## Assumptions this pilot makes explicit
 
 **Gemma audio support is not assumed.** The processor is probed at run time for

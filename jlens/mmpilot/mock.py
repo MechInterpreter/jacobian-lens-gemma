@@ -145,6 +145,7 @@ def build_mock_dataset(
     captions_per_image: int = 2,
     speakers: Sequence[str] = ("spk-a", "spk-b", "spk-c"),
     layout: str = "flat",
+    manifest_records: int | None = None,
 ) -> dict:
     """Write a synthetic SpokenCOCO-shaped dataset and manifest.
 
@@ -224,20 +225,66 @@ def build_mock_dataset(
         index += 1
 
     manifest_path = root / "spokencoco_manifest.json"
+    full_records = records
+    if manifest_records is not None:
+        # Reproduces the real situation: a small hand-made manifest sitting
+        # next to SpokenCOCO's own far larger annotation file.
+        records = records[:manifest_records]
     manifest_path.write_text(
         json.dumps({"split": "pilot", "data": records}, indent=2), encoding="utf-8"
     )
+    annotation_path = None
     if layout == "sibling":
         (root / "cstf_dataset_marker.json").write_text(
             json.dumps({"dataset": "cstf_spokencoco", "mock": True}), encoding="utf-8"
         )
+        annotation_path = audio_root / "SpokenCOCO_train.json"
+        annotation_path.parent.mkdir(parents=True, exist_ok=True)
+        annotation_path.write_text(
+            json.dumps({"data": full_records}, indent=2), encoding="utf-8"
+        )
+        # A COCO caption file: discoverable, but carrying no audio, so it must
+        # be reported and then rejected as unable to form synchronized groups.
+        coco_annotations = image_root / "annotations"
+        coco_annotations.mkdir(parents=True, exist_ok=True)
+        (coco_annotations / "captions_train2014.json").write_text(
+            json.dumps(
+                {
+                    "images": [
+                        {"id": index, "file_name": record["image"].split("/")[-1]}
+                        for index, record in enumerate(full_records)
+                    ],
+                    "annotations": [
+                        {"image_id": index, "id": index, "caption": entry["text"]}
+                        for index, record in enumerate(full_records)
+                        for entry in record["captions"][:1]
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        category_names = sorted(MOCK_CONCEPTS)
+        category_ids = {name: index + 1 for index, name in enumerate(category_names)}
+        object_annotations = []
+        for record in full_records:
+            words = record["captions"][0]["text"].lower().split()
+            for name in category_names:
+                if name in words:
+                    object_annotations.append({"image_id": record["image_id"], "category_id": category_ids[name], "id": len(object_annotations) + 1})
+        (coco_annotations / "instances_train2014.json").write_text(
+            json.dumps({"categories": [{"id": category_ids[name], "name": name} for name in category_names], "annotations": object_annotations}, indent=2),
+            encoding="utf-8",
+        )
     return {
         "root": str(root),
         "manifest_path": str(manifest_path),
+        "annotation_path": str(annotation_path) if annotation_path else None,
         "world": world,
         "layout": layout,
         "image_root": str(image_root),
         "audio_root": str(audio_root),
+        "n_records_in_manifest": len(records),
+        "n_records_total": len(full_records),
     }
 
 
