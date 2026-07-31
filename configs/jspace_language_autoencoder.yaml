@@ -1,0 +1,171 @@
+# J-space language autoencoder — feasibility study on Gemma 4 E4B.
+#
+#   q --(cone adapter)--> memory --(frozen Gemma)--> phrase
+#                                                      |
+#     q_hat <--(frozen phrase reconstructor)-----------+
+#
+# Only the cone adapter and the phrase reconstructor are trained. Gemma, the
+# tokenizer, the fitted lens, the J-space dictionary, and the pursuit are frozen
+# and asserted so. Validated by jlens.autoencoder.config.load_autoencoder_config;
+# run by the four scripts/*jspace_language* / *cone_adapter* / *reconstructor*
+# entry points. See docs/jspace_language_autoencoder.md.
+#
+# This experiment does not touch the completed generative-validation run
+# (configs/gemma_generative_validation.yaml).
+mode: jspace_language_autoencoder
+
+model:
+  repo_id: google/gemma-4-E4B-it
+  revision: fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd  # immutable, same as the lens fit
+  dtype: bfloat16
+  device_map: null            # scripts override with --device-map cuda
+  allow_model_load: false     # scripts override with --allow-model-load (recorded)
+  expect_n_layers: 42
+  expect_d_model: 2560
+  expect_vocab_size: 262144
+
+lens:
+  run_dir_name: pilot_20260715T200437612150_311fd108c23a
+  artifact_relpath: artifacts/lens.pt
+  expect_file_sha256: sha256:7229c7562d1d55420b70abb13f481934649c4b01417bd851e97cedb47c96f474
+  expect_model_revision: fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd
+  # Layer 14 only, as the brief fixes. The pilot lens fitted
+  # [3, 7, 14, 21, 28, 35, 38]; the rest are listed so the checksum-verified
+  # artifact is recognised, but only 14 is used.
+  expect_source_layers: [3, 7, 14, 21, 28, 35, 38]
+
+pursuit:
+  k: 10
+  normalize_atoms: true
+  refine_steps: 2
+  tol_relative_residual: 0.0
+  correlation_chunk_size: 65536
+  atoms_dtype: float32
+  # Build the [262144, 2560] dictionary in row chunks: the one-shot path needs a
+  # transient float32 copy of W_U (~2.7 GB on top of the 2.7 GB output).
+  build_chunk_rows: 16384
+
+dataset:
+  mode: pilot                 # scripts/--smoke overrides this to a mock build
+  corpus: wikitext
+  source_layer: 14
+  # Pilot size from the brief: 500-1000 phrases, 3-5 occurrences each. Start at
+  # the low end; scripts/build_jspace_language_dataset.py --benchmark measures
+  # the real per-occurrence cost before the full build is attempted.
+  n_phrases: 600
+  occurrences_per_phrase: 3
+  min_phrase_tokens: 2
+  max_phrase_tokens: 6
+  # The activation is captured at the last context position, i.e. the one whose
+  # next-token distribution is the phrase's first token. Occurrences with less
+  # preceding context than min_context_tokens are dropped, not padded.
+  min_context_tokens: 8
+  max_context_tokens: 128
+  max_documents: 4000
+  min_document_chars: 400
+  val_fraction: 0.2
+  heldout_fraction: 0.2
+  # Splits are assigned by hash *rank* over the mined phrase set (see
+  # jlens.autoencoder.dataset.assign_splits): deterministic, order-independent,
+  # and guaranteed to leave every split non-empty.
+  split_salt: jspace-language-autoencoder-v1
+  seed: 1234
+  capture_batch_size: 8
+  benchmark_batches: 1
+
+reconstructor:
+  # Small on purpose: the reconstructor must map phrases to J-space, not learn a
+  # language model. Input is the frozen Gemma embedding rows of the phrase's own
+  # tokens; only this stack is trained.
+  hidden_dim: 512
+  n_layers: 2
+  n_heads: 8
+  dropout: 0.1
+  max_phrase_tokens: 8
+  use_source_layer_embedding: true
+  epochs: 40
+  batch_size: 32
+  learning_rate: 0.001
+  weight_decay: 0.01
+  grad_clip: 1.0
+  seed: 17
+  # The contrastive term is not optional in practice: a pure cosine regression
+  # collapses every phrase onto the dataset mean, which scores well on cosine and
+  # at chance on the retrieval the gate actually tests.
+  contrastive_weight: 1.0
+  temperature: 0.07
+  n_distractors: 16
+  gate_auroc_min: 0.80
+  gate_top5_min: 0.50
+
+adapter:
+  # 4 continuous memory vectors spliced into the input-embedding stream at a
+  # known token span. See docs/jspace_language_autoencoder.md, "Where the adapter
+  # memory enters Gemma".
+  n_memory_tokens: 4
+  hidden_dim: 1024
+  dropout: 0.0
+  # Multiplier on the *measured* embedding RMS. 1.0 puts the memory at the same
+  # magnitude as a real token embedding.
+  memory_rms_scale: 1.0
+  epochs: 20
+  batch_size: 8
+  learning_rate: 0.001
+  weight_decay: 0.01
+  grad_clip: 1.0
+  seed: 23
+  max_new_tokens: 8           # the brief's cap
+  beam_width: 8
+
+preference:
+  epochs: 4
+  batch_size: 4
+  learning_rate: 0.0002
+  beta: 0.1
+  reward_gap: 0.02
+  max_pairs_per_example: 4
+  weight_reconstruction: 1.0
+  weight_margin: 1.0
+  brevity_penalty: 0.02
+  brevity_target_tokens: 4
+  duplicate_penalty: 0.1
+  n_unrelated_cones: 8
+  length_normalize: true
+  seed: 29
+  policy_gradient:
+    # Disabled by default: a high-variance policy gradient on a small adapter is
+    # a good way to produce a result that does not reproduce. The pairwise
+    # objective above is what the conclusions rest on.
+    enabled: false
+    epochs: 2
+    learning_rate: 0.00001
+    baseline: mean
+
+evaluation:
+  beam_width: 8
+  max_new_tokens: 8
+  n_unrelated_cones: 8
+  n_distractors: 16
+  accept_recon_min: 0.30
+  accept_margin_min: 0.05
+  paraphrase_prompt_ids:
+    - verbalizer-default
+    - verbalizer-paraphrase-a
+    - verbalizer-paraphrase-b
+  # Famous phrases an English-fluent reconstructor reaches for. If any of them
+  # scores above the acceptance threshold against unrelated cones, the
+  # acceptance numbers measure fluency rather than geometry.
+  confabulation_attractors:
+    - black hole
+    - photosynthesis
+    - quantum entanglement
+    - Great Barrier Reef
+  gate_auroc_min: 0.80
+  gate_top5_min: 0.50
+  gate_beam_gain_min: 0.10
+  gate_precision_gain_min: 0.10
+  gate_control_acceptance_ratio_max: 0.5
+  seed: 31
+
+paths:
+  output_dir: runs/jspace_language_autoencoder

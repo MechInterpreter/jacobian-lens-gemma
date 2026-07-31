@@ -33,7 +33,7 @@ select = ["E", "F", "W", "I", "B", "UP"]
 ignore = ["E501", "E741"]
 
 [tool.setuptools]
-packages = ["jlens"]
+packages = ["jlens", "jlens.autoencoder"]
 
 [tool.setuptools.package-data]
 jlens = ["data/*"]
