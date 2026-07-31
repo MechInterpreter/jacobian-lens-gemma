@@ -19,6 +19,7 @@ from jlens.mmpilot.backend import (
     run_invariance_gate,
 )
 from jlens.mmpilot.capability import (
+    _extend_tensors,
     build_prompt,
     build_question,
     candidate_token_ids,
@@ -118,6 +119,30 @@ def test_scoring_does_not_disturb_the_media_tensors(backend, question, candidate
     before = inputs.tensors["evidence"].clone()
     score_candidate_sequences(backend, inputs, candidates)
     assert torch.equal(inputs.tensors["evidence"], before)
+
+
+def test_candidate_extension_never_extends_gemma_audio_feature_mask():
+    prompt_len = 4
+    audio_mask = torch.tensor([[True, True, False, False]])
+    tensors = {
+        "input_ids": torch.tensor([[7, 8, 9, 10]]),
+        "attention_mask": torch.ones(1, prompt_len, dtype=torch.long),
+        "mm_token_type_ids": torch.tensor([[1, 1, 0, 0]]),
+        "position_ids": torch.arange(prompt_len).unsqueeze(0),
+        "input_features": torch.randn(1, prompt_len, 3),
+        # Deliberately the same width as the prompt: shape is not semantics.
+        "input_features_mask": audio_mask,
+    }
+
+    extended = _extend_tensors(tensors, prompt_len, [11, 12])
+
+    assert extended["input_ids"].tolist() == [[7, 8, 9, 10, 11, 12]]
+    assert extended["attention_mask"].tolist() == [[1, 1, 1, 1, 1, 1]]
+    assert extended["mm_token_type_ids"].tolist() == [[1, 1, 0, 0, 0, 0]]
+    assert extended["position_ids"].tolist() == [[0, 1, 2, 3, 4, 5]]
+    assert extended["input_features"] is tensors["input_features"]
+    assert extended["input_features_mask"] is audio_mask
+    assert extended["input_features_mask"].shape == (1, prompt_len)
 
 
 def test_prediction_and_margin_are_consistent(backend, question, candidates):

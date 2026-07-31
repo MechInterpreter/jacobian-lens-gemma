@@ -75,23 +75,43 @@ def _extend_tensors(tensors: Mapping, prompt_len: int, candidate: Sequence[int])
 
     Media tensors (``pixel_values``, ``input_features``, their masks) are
     indexed by pixels or audio frames, not by text position, so they pass
-    through untouched. The rule is structural — any 2-D integer tensor whose
-    second dimension equals the prompt length is a text-aligned tensor.
+    through untouched. Some media masks can coincidentally have the prompt
+    width, so only explicitly named decoder-sequence fields are extended.
     """
     extended = dict(tensors)
-    device = tensors["input_ids"].device
-    suffix = torch.tensor([list(candidate)], dtype=torch.long, device=device)
-    for key, value in tensors.items():
+    input_ids = tensors["input_ids"]
+    suffix = torch.tensor(
+        [list(candidate)], dtype=torch.long, device=input_ids.device
+    )
+    extended["input_ids"] = torch.cat([input_ids, suffix], dim=1)
+
+    # Only named decoder-sequence fields may be extended. Media masks such as
+    # Gemma 4's input_features_mask can coincidentally have prompt_len columns.
+    for key in ("attention_mask", "token_type_ids", "mm_token_type_ids"):
+        value = tensors.get(key)
         if not torch.is_tensor(value) or value.ndim != 2 or value.shape[1] != prompt_len:
             continue
-        if key == "input_ids":
-            extended[key] = torch.cat([value, suffix], dim=1)
-        elif value.dtype in (torch.long, torch.int, torch.bool):
-            fill = 1 if key == "attention_mask" else 0
-            pad = torch.full(
-                (value.shape[0], len(candidate)), fill, dtype=value.dtype, device=device
-            )
-            extended[key] = torch.cat([value, pad], dim=1)
+        fill = 1 if key == "attention_mask" else 0
+        pad = torch.full(
+            (value.shape[0], len(candidate)), fill, dtype=value.dtype, device=value.device
+        )
+        extended[key] = torch.cat([value, pad], dim=1)
+
+    position_ids = tensors.get("position_ids")
+    if (
+        torch.is_tensor(position_ids)
+        and position_ids.ndim == 2
+        and position_ids.shape[1] == prompt_len
+    ):
+        offsets = torch.arange(
+            1,
+            len(candidate) + 1,
+            dtype=position_ids.dtype,
+            device=position_ids.device,
+        ).unsqueeze(0)
+        extended["position_ids"] = torch.cat(
+            [position_ids, position_ids[:, -1:] + offsets], dim=1
+        )
     return extended
 
 
