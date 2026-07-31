@@ -54,6 +54,12 @@ DERIVATION_SCHEMA_VERSION = "jlens.mmpilot.expanded_manifest.v2"
 
 #: Directories never searched — the run's own outputs must not feed back in.
 EXCLUDED_DIR_NAMES = frozenset({"units", "__pycache__", ".ipynb_checkpoints"})
+#: Large media-only trees are pruned before traversal. Metadata belongs beside
+#: these directories or under ``annotations/``, never inside media folders.
+MEDIA_TREE_DIR_NAMES = frozenset(
+    {"wavs", "train2014", "val2014", "test2014", "train2017", "val2017", "images"}
+)
+
 
 
 class DatasetCoverageError(RuntimeError):
@@ -289,13 +295,15 @@ def _walk_metadata(root: Path, *, max_depth: int, max_candidates: int) -> list[t
         except OSError:
             continue
         for child in children:
-            if child.name in EXCLUDED_DIR_NAMES:
+            name = child.name.lower()
+            if child.name in EXCLUDED_DIR_NAMES or name in MEDIA_TREE_DIR_NAMES:
                 continue
-            if child.is_file() and child.suffix.lower() in SUPPORTED_SUFFIXES:
-                found.append((child, depth))
-                if len(found) >= max_candidates:
-                    break
-            elif child.is_dir() and depth < max_depth:
+            if child.suffix.lower() in SUPPORTED_SUFFIXES:
+                if child.is_file():
+                    found.append((child, depth))
+                    if len(found) >= max_candidates:
+                        break
+            elif depth < max_depth and child.is_dir():
                 frontier.append((child, depth + 1))
     return found
 

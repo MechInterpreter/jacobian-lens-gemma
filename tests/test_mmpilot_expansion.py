@@ -342,3 +342,15 @@ def test_metadata_is_filtered_before_bulk_media_validation():
     bounded, seen, kept = E._bounded_sync_payload(rows, schema, candidate_concepts={"cat": ["cat"]}, object_image_ids=set(), max_records=12)
     assert seen == 100 and kept == 12 and len(bounded) == 12
     assert sum("cat" in row["caption"] for row in bounded) == 10
+
+def test_discovery_prunes_known_media_trees(tmp_path):
+    annotations = tmp_path / "annotations"
+    annotations.mkdir()
+    (annotations / "meta.json").write_text("[]", encoding="utf-8")
+    for media_dir in ("wavs", "train2014", "val2014"):
+        directory = tmp_path / media_dir / "nested"
+        directory.mkdir(parents=True)
+        (directory / "must_not_be_seen.json").write_text("[]", encoding="utf-8")
+        (directory / "media.wav").write_bytes(b"not metadata")
+    sources = E.discover_metadata_sources([tmp_path], max_depth=3)
+    assert {Path(source.path).name for source in sources} == {"meta.json"}
