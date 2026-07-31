@@ -51,6 +51,14 @@ class SynchronizationError(RuntimeError):
     """Image / caption / audio could not be synchronized well enough to continue."""
 
 
+class MediaRootError(SynchronizationError):
+    """The configured media roots cannot resolve the manifest's paths.
+
+    A subclass of :class:`SynchronizationError` because it is one specific,
+    common cause of that failure and callers already handle the base class.
+    """
+
+
 # ------------------------------------------------------------------ schema
 
 
@@ -321,15 +329,271 @@ class NormalizedManifest:
         }
 
 
-def _resolve_media(relative: str, roots: Sequence[Path]) -> str | None:
+@dataclass(frozen=True)
+class MediaResolution:
+    """Where one manifest-relative media path was found, and under which root.
+
+    Attributes:
+        relative: The path as the manifest wrote it.
+        resolved: Absolute path on disk, or ``None`` if nothing matched.
+        root: The root that produced ``resolved``.
+        mode: ``"absolute"``, ``"exact"`` (root + the manifest's relative path),
+            or ``"basename"`` (the fallback for manifests carrying a prefix the
+            layout does not have).
+        candidates: Every distinct file that matched, in root priority order.
+        ambiguous: Two or more roots matched with *different* file sizes, so
+            which one the manifest meant cannot be decided.
+    """
+
+    relative: str
+    resolved: str | None
+    root: str | None
+    mode: str | None
+    candidates: tuple[str, ...] = ()
+    ambiguous: bool = False
+
+
+def _unique_existing(probes: Sequence[Path]) -> list[Path]:
+    """Distinct existing files, preserving root priority order."""
+    seen: set[str] = set()
+    out: list[Path] = []
+    for probe in probes:
+        if not probe.is_file():
+            continue
+        key = os.path.normcase(os.path.abspath(str(probe)))
+        if key not in seen:
+            seen.add(key)
+            out.append(probe)
+    return out
+
+
+def _resolve_one(relative: str, roots: Sequence[Path]) -> MediaResolution:
+    """Resolve one relative media path against ``roots``, in priority order.
+
+    Exact ``root / relative`` joins are tried first across *every* root, then
+    the basename fallback. Trying every root rather than stopping at the first
+    hit is what makes ambiguity detectable: when two roots hold different files
+    for the same manifest path, neither can be assumed correct.
+
+    Two roots holding the *same-sized* file (a download cache mirroring the
+    dataset, say) is not ambiguity — the first root by configured priority wins
+    and both are recorded in ``candidates``.
+    """
     candidate = Path(relative)
     if candidate.is_absolute():
-        return str(candidate) if candidate.is_file() else None
-    for root in roots:
-        for probe in (root / candidate, root / candidate.name):
-            if probe.is_file():
-                return str(probe)
-    return None
+        exists = candidate.is_file()
+        return MediaResolution(
+            relative=relative,
+            resolved=str(candidate) if exists else None,
+            root=None,
+            mode="absolute" if exists else None,
+            candidates=(str(candidate),) if exists else (),
+        )
+
+    matches = _unique_existing([root / candidate for root in roots])
+    mode = "exact"
+    if not matches:
+        matches = _unique_existing([root / candidate.name for root in roots])
+        mode = "basename" if matches else None
+    if not matches:
+        return MediaResolution(relative, None, None, None)
+
+    if len(matches) > 1 and len({probe.stat().st_size for probe in matches}) > 1:
+        return MediaResolution(
+            relative=relative,
+            resolved=None,
+            root=None,
+            mode=mode,
+            candidates=tuple(str(probe) for probe in matches),
+            ambiguous=True,
+        )
+
+    winner = matches[0]
+    owning_root = next(
+        (
+            str(root)
+            for root in roots
+            if os.path.normcase(os.path.abspath(str(winner))).startswith(
+                os.path.normcase(os.path.abspath(str(root)))
+            )
+        ),
+        None,
+    )
+    return MediaResolution(
+        relative=relative,
+        resolved=str(winner),
+        root=owning_root,
+        mode=mode,
+        candidates=tuple(str(probe) for probe in matches),
+    )
+
+
+def _resolve_media(relative: str, roots: Sequence[Path]) -> str | None:
+    """Backward-compatible thin wrapper returning just the resolved path."""
+    return _resolve_one(relative, roots).resolved
+
+
+def resolve_media_roots(
+    *,
+    media_roots: Sequence[str | os.PathLike[str]] | None = None,
+    image_roots: Sequence[str | os.PathLike[str]] | None = None,
+    audio_roots: Sequence[str | os.PathLike[str]] | None = None,
+    require_existing: bool = True,
+) -> dict[str, list[Path]]:
+    """Normalize root configuration into ``{"image": [...], "audio": [...]}``.
+
+    Images and audio may live under different sibling roots — SpokenCOCO ships
+    COCO images under ``coco/`` and recordings under ``SpokenCOCO/`` — so the
+    two roles are resolved independently. Passing only ``media_roots`` keeps
+    the older single-root behaviour: both roles use that list.
+
+    Non-existent roots are dropped (a download cache that was never created is
+    not an error), but a role left with no existing root at all is.
+
+    Raises:
+        MediaRootError: If a role ends up with no usable root.
+    """
+    if media_roots is None and image_roots is None and audio_roots is None:
+        raise MediaRootError(
+            "no media roots given; pass media_roots, or image_roots/audio_roots"
+        )
+    fallback = list(media_roots or [])
+    per_role = {
+        "image": list(image_roots if image_roots is not None else fallback),
+        "audio": list(audio_roots if audio_roots is not None else fallback),
+    }
+    out: dict[str, list[Path]] = {}
+    for role, configured in per_role.items():
+        paths = [Path(root) for root in configured]
+        usable = [path for path in paths if path.is_dir()] if require_existing else paths
+        if not usable:
+            raise MediaRootError(
+                f"no existing directory among the {role} roots "
+                f"{[str(path) for path in paths]}; check the configured paths"
+            )
+        out[role] = usable
+    return out
+
+
+def _role_fields(schema: ManifestSchema) -> dict[str, str]:
+    return {"image": schema.image_field, "audio": schema.audio_field}
+
+
+def audit_media_roots(
+    payload,
+    schema: ManifestSchema,
+    roots: Mapping[str, Sequence[Path]],
+    *,
+    expected_roots: Mapping[str, str | os.PathLike[str]] | None = None,
+    n_samples: int = 8,
+) -> dict:
+    """Probe representative manifest paths and report which root resolves each.
+
+    Runs *before* normalization so a root misconfiguration is diagnosed against
+    a handful of paths with the evidence printed, rather than showing up as
+    "96 of 96 media references did not resolve".
+
+    Args:
+        expected_roots: ``{"image": path, "audio": path}`` — the roots the
+            configuration intends for each role. Supplying them enables the
+            swapped-roots check.
+
+    Raises:
+        MediaRootError: If a role resolves nothing, if any sampled path is
+            ambiguous, or if the image and audio roots appear to be swapped.
+    """
+    _, records = (
+        _find_records(payload)
+        if schema.records_key is None
+        else (schema.records_key, [r for r in payload[schema.records_key] if isinstance(r, Mapping)])
+    )
+    rows = _flatten(records, schema)
+    report: dict = {
+        "roots": {role: [str(path) for path in paths] for role, paths in roots.items()},
+        "samples": {},
+        "resolution_by_root": {},
+        "unresolved": {},
+        "ambiguous": {},
+        "n_sampled": min(n_samples, len(rows)),
+    }
+    problems: list[str] = []
+    winners: dict[str, str | None] = {}
+
+    for role, field_name in _role_fields(schema).items():
+        resolutions: list[MediaResolution] = []
+        for row in rows[:n_samples]:
+            relative = str(row.get(field_name, "") or "")
+            if relative:
+                resolutions.append(_resolve_one(relative, roots[role]))
+        counts: dict[str, int] = {}
+        for resolution in resolutions:
+            if resolution.root:
+                counts[resolution.root] = counts.get(resolution.root, 0) + 1
+        report["samples"][role] = [
+            {
+                "relative": r.relative,
+                "resolved": r.resolved,
+                "root": r.root,
+                "mode": r.mode,
+                "candidates": list(r.candidates),
+            }
+            for r in resolutions
+        ]
+        report["resolution_by_root"][role] = counts
+        report["unresolved"][role] = [
+            r.relative for r in resolutions if r.resolved is None and not r.ambiguous
+        ]
+        report["ambiguous"][role] = [
+            {"relative": r.relative, "candidates": list(r.candidates)}
+            for r in resolutions
+            if r.ambiguous
+        ]
+        winners[role] = max(counts, key=lambda key: (counts[key], key)) if counts else None
+
+        if resolutions and not counts and not report["ambiguous"][role]:
+            problems.append(
+                f"no configured {role} root resolves any sampled {role} path. "
+                f"Tried {[str(path) for path in roots[role]]}; examples: "
+                f"{[r.relative for r in resolutions[:3]]}"
+            )
+        if report["ambiguous"][role]:
+            problems.append(
+                f"{len(report['ambiguous'][role])} sampled {role} path(s) resolve "
+                f"under several roots to files of different sizes, e.g. "
+                f"{report['ambiguous'][role][0]}"
+            )
+
+    if expected_roots and winners.get("image") and winners.get("audio"):
+        def same(a, b) -> bool:
+            return os.path.normcase(os.path.abspath(str(a))) == os.path.normcase(
+                os.path.abspath(str(b))
+            )
+
+        expected_image = expected_roots.get("image")
+        expected_audio = expected_roots.get("audio")
+        if (
+            expected_image
+            and expected_audio
+            and not same(expected_image, expected_audio)
+            and same(winners["image"], expected_audio)
+            and same(winners["audio"], expected_image)
+        ):
+            problems.append(
+                f"the image and audio roots look swapped: image paths resolve "
+                f"under {expected_audio} and audio paths under {expected_image}. "
+                "Exchange IMAGE_MEDIA_ROOT and AUDIO_MEDIA_ROOT."
+            )
+
+    report["winning_root"] = winners
+    report["ok"] = not problems
+    report["problems"] = problems
+    if problems:
+        raise MediaRootError(
+            "media-root audit failed:\n  - "
+            + "\n  - ".join(problems)
+            + f"\n\nSampled resolutions: {json.dumps(report['samples'], indent=2)}"
+        )
+    return report
 
 
 def _flatten(records: Sequence[Mapping], schema: ManifestSchema) -> list[dict]:
@@ -351,8 +615,10 @@ def normalize_manifest(
     payload,
     schema: ManifestSchema,
     *,
-    media_roots: Sequence[str | os.PathLike[str]],
     source_checksum: str,
+    media_roots: Sequence[str | os.PathLike[str]] | None = None,
+    image_roots: Sequence[str | os.PathLike[str]] | None = None,
+    audio_roots: Sequence[str | os.PathLike[str]] | None = None,
     max_missing_examples: int = 20,
     min_complete_groups: int = 24,
     max_missing_fraction: float = 0.5,
@@ -362,8 +628,12 @@ def normalize_manifest(
     Args:
         payload: Parsed manifest (read-only).
         schema: Mapping from :func:`inspect_manifest`.
-        media_roots: Directories to resolve relative media paths against, in
-            priority order (dataset root first, download cache last).
+        media_roots: Roots applied to *both* modalities, in priority order.
+            Enough for a layout that keeps images and audio under one tree.
+        image_roots / audio_roots: Per-role roots, for layouts that do not —
+            SpokenCOCO puts COCO images under ``coco/`` and recordings under
+            ``SpokenCOCO/``. Either one falls back to ``media_roots`` when not
+            given, so the older single-root call still works.
         source_checksum: ``sha256:`` of the original manifest file.
         max_missing_examples: How many missing-file examples to keep in the audit.
         min_complete_groups: Refuse below this many fully synchronized groups.
@@ -372,10 +642,14 @@ def normalize_manifest(
             is slightly incomplete.
 
     Raises:
+        MediaRootError: If a role has no usable root, or if a media path is
+            ambiguous between roots holding different files.
         SynchronizationError: When the audit shows synchronization cannot be
             trusted. Nothing downstream runs on a guessed correspondence.
     """
-    roots = [Path(root) for root in media_roots]
+    roots = resolve_media_roots(
+        media_roots=media_roots, image_roots=image_roots, audio_roots=audio_roots
+    )
     records_key, records = _find_records(payload) if schema.records_key is None else (
         schema.records_key,
         [r for r in payload[schema.records_key] if isinstance(r, Mapping)],
@@ -386,14 +660,33 @@ def normalize_manifest(
     groups: list[dict] = []
     missing_image: list[str] = []
     missing_audio: list[str] = []
+    ambiguous: list[dict] = []
+    roots_used: dict[str, dict[str, int]] = {"image": {}, "audio": {}}
     seen: dict[str, int] = {}
     duplicates: list[str] = []
     for index, row in enumerate(rows):
         raw_image = str(row.get(schema.image_field, "") or "")
         raw_audio = str(row.get(schema.audio_field, "") or "")
         caption = str(row.get(schema.caption_field, "") or "").strip()
-        image_path = _resolve_media(raw_image, roots) if raw_image else None
-        audio_path = _resolve_media(raw_audio, roots) if raw_audio else None
+        image = _resolve_one(raw_image, roots["image"]) if raw_image else None
+        audio = _resolve_one(raw_audio, roots["audio"]) if raw_audio else None
+        image_path = image.resolved if image else None
+        audio_path = audio.resolved if audio else None
+        for role, resolution in (("image", image), ("audio", audio)):
+            if resolution is None:
+                continue
+            if resolution.ambiguous:
+                ambiguous.append(
+                    {
+                        "role": role,
+                        "relative": resolution.relative,
+                        "candidates": list(resolution.candidates),
+                    }
+                )
+            elif resolution.root:
+                roots_used[role][resolution.root] = (
+                    roots_used[role].get(resolution.root, 0) + 1
+                )
         if image_path is None and raw_image:
             missing_image.append(raw_image)
         if audio_path is None and raw_audio:
@@ -452,18 +745,45 @@ def normalize_manifest(
         "n_speakers": len(speakers),
         "speaker_examples": speakers[:max_missing_examples],
         "speaker_metadata_available": bool(speakers),
-        "media_roots": [str(root) for root in roots],
+        "media_roots": {role: [str(path) for path in paths] for role, paths in roots.items()},
+        "resolved_by_root": roots_used,
+        "n_ambiguous_media": len(ambiguous),
+        "ambiguous_media_examples": ambiguous[:max_missing_examples],
     }
 
-    missing_total = len(missing_image) + len(missing_audio)
-    denominator = max(1, 2 * len(rows))
+    if ambiguous:
+        raise MediaRootError(
+            f"{len(ambiguous)} media path(s) resolve under several roots to files "
+            f"of different sizes, so which one the manifest meant cannot be "
+            f"decided. Remove or reorder the overlapping root. Examples: "
+            f"{json.dumps(ambiguous[:3], indent=2)}"
+        )
+
     # Root-level failures are diagnosed first: "the paths are wrong" is a much
     # more useful message than "too few groups", and it is the usual cause.
-    if missing_total / denominator > max_missing_fraction:
+    #
+    # The fraction is evaluated **per role**. One modality losing every file
+    # while the other resolves cleanly is the signature of sibling roots, and
+    # it would hide behind a combined ratio: 72 missing images out of 144 total
+    # references is exactly half, under any sensible global threshold, yet the
+    # run is completely broken.
+    failed_roles = []
+    for role, missing in (("image", missing_image), ("audio", missing_audio)):
+        denominator = max(1, len(rows))
+        if len(missing) / denominator > max_missing_fraction:
+            failed_roles.append((role, len(missing), denominator))
+    if failed_roles:
+        detail = ", ".join(
+            f"{count} of {total} {role} references" for role, count, total in failed_roles
+        )
         raise SynchronizationError(
-            f"{missing_total} of {denominator} media references did not resolve "
-            f"under {[str(r) for r in roots]} — the dataset root is probably "
-            f"wrong. Audit: {json.dumps(audit, indent=2)}"
+            f"{detail} did not resolve.\n"
+            f"  image roots: {[str(p) for p in roots['image']]}\n"
+            f"  audio roots: {[str(p) for p in roots['audio']]}\n"
+            "Images and audio may live under different sibling roots (SpokenCOCO "
+            "keeps images under coco/ and recordings under SpokenCOCO/) — pass "
+            "image_roots and audio_roots separately, and run audit_media_roots "
+            f"first to see which root resolves what. Audit: {json.dumps(audit, indent=2)}"
         )
     if len(groups) < min_complete_groups:
         raise SynchronizationError(

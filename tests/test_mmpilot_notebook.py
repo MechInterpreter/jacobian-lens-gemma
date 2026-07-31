@@ -172,10 +172,58 @@ def test_every_expensive_action_is_gated_on_the_flag(notebook):
 
 
 def test_configured_drive_paths_match_the_existing_dataset(notebook):
-    source = _code_source(notebook)
-    assert "/content/drive/MyDrive/datasets/cstf_spokencoco" in source
-    assert "/content/drive/MyDrive/datasets/spokencoco_manifest.json" in source
-    assert "/content/drive/MyDrive/datasets/cstf_spokencoco_download_cache" in source
+    """Images live under coco/ and audio under SpokenCOCO/, so the two roots
+    are configured separately — a single dataset root resolves neither."""
+    config = "".join(_code_cells(notebook)[3]["source"])
+    assignments = {
+        node.targets[0].id: node.value.value
+        for node in ast.parse(config).body
+        if isinstance(node, ast.Assign)
+        and isinstance(node.targets[0], ast.Name)
+        and isinstance(node.value, ast.Constant)
+    }
+    assert assignments["SPOKENCOCO_BASE_ROOT"] == (
+        "/content/drive/MyDrive/datasets/cstf_spokencoco"
+    )
+    assert assignments["IMAGE_MEDIA_ROOT"] == (
+        "/content/drive/MyDrive/datasets/cstf_spokencoco/coco"
+    )
+    assert assignments["AUDIO_MEDIA_ROOT"] == (
+        "/content/drive/MyDrive/datasets/cstf_spokencoco/SpokenCOCO"
+    )
+    assert assignments["DOWNLOAD_CACHE"] == (
+        "/content/drive/MyDrive/datasets/cstf_spokencoco_download_cache"
+    )
+    assert assignments["MANIFEST_PATH"] == (
+        "/content/drive/MyDrive/datasets/spokencoco_manifest.json"
+    )
+
+
+def test_all_four_roots_are_offered_in_the_required_order(notebook):
+    cell = next(
+        "".join(c["source"]) for c in _code_cells(notebook) if "CANDIDATE_ROOTS" in "".join(c["source"])
+    )
+    order = re.search(r"CANDIDATE_ROOTS = \[(.*?)\]", cell, re.DOTALL).group(1)
+    names = [name.strip().rstrip(",") for name in order.strip().splitlines() if name.strip()]
+    assert names == [
+        "IMAGE_MEDIA_ROOT",
+        "AUDIO_MEDIA_ROOT",
+        "DOWNLOAD_CACHE",
+        "SPOKENCOCO_BASE_ROOT",
+    ]
+
+
+def test_media_root_audit_runs_before_normalization(notebook):
+    cells = ["".join(cell["source"]) for cell in _code_cells(notebook)]
+    audit_cell = next(i for i, cell in enumerate(cells) if "audit_media_roots" in cell)
+    normalize_cell = next(i for i, cell in enumerate(cells) if "normalize_manifest" in cell)
+    assert audit_cell <= normalize_cell
+    cell = cells[audit_cell]
+    assert cell.index("audit_media_roots") < cell.index("normalize_manifest")
+    # Normalization must receive the per-role roots, not one shared list.
+    assert "image_roots=IMAGE_ROOTS" in cell
+    assert "audio_roots=AUDIO_ROOTS" in cell
+    assert "expected_roots=EXPECTED_ROOTS" in cell
 
 
 def test_notebook_never_downloads_or_rewrites_the_dataset(notebook):

@@ -144,6 +144,7 @@ def build_mock_dataset(
     negative_images: int = 12,
     captions_per_image: int = 2,
     speakers: Sequence[str] = ("spk-a", "spk-b", "spk-c"),
+    layout: str = "flat",
 ) -> dict:
     """Write a synthetic SpokenCOCO-shaped dataset and manifest.
 
@@ -151,19 +152,33 @@ def build_mock_dataset(
     a list of caption entries) and field names the pilot code must discover
     rather than assume.
 
-    Returns ``{"root", "manifest_path", "world"}``.
+    ``layout`` picks the on-disk arrangement:
+
+    - ``"flat"`` — images and audio under one root, the simple case.
+    - ``"sibling"`` — the arrangement the real Drive dataset uses: images under
+      ``coco/train2014/`` addressed as ``train2014/...jpg``, recordings under
+      ``SpokenCOCO/wavs/train/`` addressed as ``wavs/train/...wav``. The two
+      modalities are only resolvable from *different* roots, which is what
+      broke the single-root assumption.
+
+    Returns ``{"root", "manifest_path", "world", "image_root", "audio_root"}``.
     """
+    if layout not in ("flat", "sibling"):
+        raise ValueError(f"unknown layout {layout!r}")
     world = world or MockWorld()
     root = Path(root)
-    (root / "images").mkdir(parents=True, exist_ok=True)
-    (root / "audio").mkdir(parents=True, exist_ok=True)
+    image_root = root / "coco" if layout == "sibling" else root
+    audio_root = root / "SpokenCOCO" if layout == "sibling" else root
 
     records: list[dict] = []
 
     def add_image(image_id: str, concepts_present: Sequence[str], index: int) -> None:
-        image_rel = f"images/{image_id}.jpg"
+        if layout == "sibling":
+            image_rel = f"train2014/COCO_train2014_{image_id}.jpg"
+        else:
+            image_rel = f"images/{image_id}.jpg"
         _write_vector(
-            root / image_rel,
+            image_root / image_rel,
             world.evidence(
                 concepts_present=concepts_present,
                 modality="image",
@@ -177,9 +192,12 @@ def build_mock_dataset(
                 f"a photo number {caption_index} showing a {subject} "
                 f"near a window in scene {index}"
             )
-            audio_rel = f"audio/{image_id}_{caption_index}.wav"
+            if layout == "sibling":
+                audio_rel = f"wavs/train/{image_id}_{caption_index}.wav"
+            else:
+                audio_rel = f"audio/{image_id}_{caption_index}.wav"
             _write_vector(
-                root / audio_rel,
+                audio_root / audio_rel,
                 world.evidence(
                     concepts_present=concepts_present,
                     modality="spoken_audio",
@@ -209,7 +227,18 @@ def build_mock_dataset(
     manifest_path.write_text(
         json.dumps({"split": "pilot", "data": records}, indent=2), encoding="utf-8"
     )
-    return {"root": str(root), "manifest_path": str(manifest_path), "world": world}
+    if layout == "sibling":
+        (root / "cstf_dataset_marker.json").write_text(
+            json.dumps({"dataset": "cstf_spokencoco", "mock": True}), encoding="utf-8"
+        )
+    return {
+        "root": str(root),
+        "manifest_path": str(manifest_path),
+        "world": world,
+        "layout": layout,
+        "image_root": str(image_root),
+        "audio_root": str(audio_root),
+    }
 
 
 # ----------------------------------------------------------------- the model

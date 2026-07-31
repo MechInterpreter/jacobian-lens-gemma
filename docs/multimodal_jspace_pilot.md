@@ -28,6 +28,48 @@ Then run sections 1–16 in order. `RUN_REAL_PILOT` is `False`, so the first pas
 exercises every cell against the synthetic world in about a minute. Set it to
 `True`, restart, and run all to do the real thing.
 
+### Media roots
+
+Images and audio do **not** share a root. The dataset in Drive is laid out as
+
+```
+cstf_spokencoco/
+├── coco/            train2014/ val2014/
+├── SpokenCOCO/      wavs/
+└── cstf_dataset_marker.json
+```
+
+while the manifest addresses images as `train2014/COCO_train2014_….jpg` and
+recordings as `wavs/train/….wav`. An image path therefore resolves only under
+`coco/` and an audio path only under `SpokenCOCO/`, which is why a single
+dataset root resolved nothing at all.
+
+Section 1 configures four roots and section 2 offers all of the ones that exist,
+in this priority order, to both modalities:
+
+```python
+SPOKENCOCO_BASE_ROOT = ".../datasets/cstf_spokencoco"
+IMAGE_MEDIA_ROOT     = ".../datasets/cstf_spokencoco/coco"
+AUDIO_MEDIA_ROOT     = ".../datasets/cstf_spokencoco/SpokenCOCO"
+DOWNLOAD_CACHE       = ".../datasets/cstf_spokencoco_download_cache"
+```
+
+`normalize_manifest` takes `image_roots` and `audio_roots` separately, and each
+role is resolved against its own list. Passing only `media_roots` keeps the old
+behaviour for layouts that do keep everything under one tree, so both
+arrangements work.
+
+Section 6 runs `audit_media_roots` **before** normalization: it probes a handful
+of representative manifest paths and prints which root resolved each and how
+(`exact` join vs `basename` fallback). It fails with the sampled evidence
+attached when nothing resolves for a modality, when a path matches several roots
+holding files of *different sizes* (a byte-identical download-cache mirror is
+not a conflict — the higher-priority root simply wins), or when the image and
+audio roots look exchanged. Normalization's own failure message reports the two
+modalities separately, because one modality losing every file while the other
+resolves cleanly is the signature of sibling roots and would otherwise hide
+behind a combined ratio.
+
 ## What SpokenCOCO can answer
 
 SpokenCOCO carries COCO images, written captions, and spoken readings of those
