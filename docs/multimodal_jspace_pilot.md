@@ -12,6 +12,22 @@ Code: [`jlens/mmpilot/`](../jlens/mmpilot).
 This is a go/no-go probe, not a framework. If it says GO, the larger project is
 worth building; if it says NO-GO, the money is saved.
 
+## Running it
+
+Open the notebook in Colab and run **section 0 first** — three cells that clone
+or update this branch into `/content/jacobian-lens-gemma`, verify the checked-out
+branch and print the commit, install the package with `pip install -e`, change
+into the checkout, and confirm that `import jlens` resolves there. Nothing from
+the repository is imported before that, and Drive is not needed for any of it.
+The clone cell is idempotent: it clones when absent and otherwise fetches,
+checks out, and hard-resets to origin, so a reconnected runtime picks up where
+it left off. A private repo needs a `GITHUB_TOKEN` Colab secret; it is passed
+per invocation as a header override and never written into `.git/config`.
+
+Then run sections 1–16 in order. `RUN_REAL_PILOT` is `False`, so the first pass
+exercises every cell against the synthetic world in about a minute. Set it to
+`True`, restart, and run all to do the real thing.
+
 ## What SpokenCOCO can answer
 
 SpokenCOCO carries COCO images, written captions, and spoken readings of those

@@ -12,6 +12,8 @@ import ast
 import json
 import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -21,7 +23,10 @@ NOTEBOOK_PATH = (
     REPO_ROOT / "notebooks" / "multimodal_jspace_spokencoco_pilot_colab.ipynb"
 )
 
+RUNNER = Path(__file__).resolve().parent / "_mmpilot_notebook_runner.py"
+
 REQUIRED_SECTIONS = [
+    "colab bootstrap",
     "configuration",
     "mount google drive",
     "install dependencies",
@@ -73,11 +78,81 @@ def test_all_code_cells_parse_and_use_no_shell_magics(notebook):
             pytest.fail(f"code cell {index} does not parse: {exc}")
 
 
-def test_sixteen_sections_appear_in_the_required_order(notebook):
+def test_sections_appear_in_the_required_order(notebook):
+    """Bootstrap is section 0; the sixteen commissioned stages follow it."""
     headings = re.findall(r"^## (\d+)\. (.+)$", _source(notebook), re.MULTILINE)
-    assert [int(number) for number, _ in headings] == list(range(1, 17)), headings
+    assert [int(number) for number, _ in headings] == list(range(0, 17)), headings
     for (_, title), expected in zip(headings, REQUIRED_SECTIONS, strict=True):
         assert expected in title.lower(), (expected, title)
+
+
+def test_bootstrap_cells_come_before_any_repository_import(notebook):
+    """The regression this guards: section 1 imported ``jlens`` while the
+    package had not been cloned or installed, so a fresh Colab runtime died
+    with ModuleNotFoundError on the first executed cell."""
+    cells = ["".join(cell["source"]) for cell in _code_cells(notebook)]
+    install = next(i for i, cell in enumerate(cells) if "pip" in cell and "install" in cell
+                   and "-e" in cell)
+    verify = next(i for i, cell in enumerate(cells) if "jlens.__file__" in cell)
+    first_repo_import = next(
+        i for i, cell in enumerate(cells) if re.search(r"^\s*from jlens", cell, re.MULTILINE)
+    )
+    assert install < first_repo_import, "the editable install must precede any jlens import"
+    assert verify < first_repo_import, "`import jlens` must be verified first"
+    # Cells before the verification may only use the standard library.
+    for index in range(verify + 1):
+        assert not re.search(r"^\s*(from|import) jlens\.", cells[index], re.MULTILINE) or (
+            index == verify
+        ), f"cell {index} imports from jlens before the bootstrap verified it"
+
+
+def test_bootstrap_defines_only_primitives_before_cloning(notebook):
+    """The first cell may assign string constants and print. Nothing else —
+    an import here is what broke a fresh runtime."""
+    constants = "".join(_code_cells(notebook)[0]["source"])
+    tree = ast.parse(constants)
+    assigned = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            assert len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+            assert isinstance(node.value, ast.Constant) and isinstance(node.value.value, str), (
+                f"{node.targets[0].id} is not a primitive string constant"
+            )
+            assigned[node.targets[0].id] = node.value.value
+        else:
+            assert isinstance(node, ast.Expr) and isinstance(node.value, ast.Call), (
+                f"unexpected statement in the constants cell: {ast.dump(node)[:80]}"
+            )
+    assert not [node for node in ast.walk(tree)
+                if isinstance(node, (ast.Import, ast.ImportFrom))]
+    assert assigned["BRANCH"] == "experiment/spokencoco-jspace-pilot"
+    assert assigned["REPO_DIR"] == "/content/jacobian-lens-gemma"
+    assert assigned["REPO_URL"].endswith("jacobian-lens-gemma.git")
+
+
+def test_clone_cell_is_idempotent_and_verifies_the_branch(notebook):
+    cells = ["".join(cell["source"]) for cell in _code_cells(notebook)]
+    clone_cell = next(cell for cell in cells if "clone" in cell)
+    for expected in ("fetch", "checkout", "reset", "--hard", "rev-parse"):
+        assert expected in clone_cell, expected
+    assert '(REPO_PATH / ".git").is_dir()' in clone_cell
+    assert "refusing to continue against the wrong code" in clone_cell
+
+
+def test_bootstrap_does_not_need_drive(notebook):
+    cells = ["".join(cell["source"]) for cell in _code_cells(notebook)]
+    verify = next(i for i, cell in enumerate(cells) if "jlens.__file__" in cell)
+    mount = next(i for i, cell in enumerate(cells) if "drive.mount" in cell)
+    assert verify < mount
+    for index in range(verify + 1):
+        assert "drive" not in cells[index].lower()
+
+
+def test_install_failure_is_reported_not_swallowed(notebook):
+    source = _code_source(notebook)
+    assert "pip install -e failed" in source
+    assert "still not importable after installation" in source
+    assert "is shadowing this checkout" in source
 
 
 def test_the_real_pilot_is_off_by_default(notebook):
@@ -155,27 +230,66 @@ def test_no_forbidden_method_is_implemented(notebook):
         assert forbidden not in source, forbidden
 
 
-def test_mock_execution_of_every_code_cell(notebook, tmp_path, monkeypatch):
-    """Execute the notebook's code cells in order, in one namespace."""
-    monkeypatch.setenv("MMPILOT_SCRATCH", str(tmp_path / "scratch"))
-    monkeypatch.setenv("MMPILOT_RUN_DIR", str(tmp_path / "run"))
-    monkeypatch.chdir(REPO_ROOT)
-    namespace: dict = {"__name__": "__notebook__"}
-    for index, cell in enumerate(_code_cells(notebook)):
-        source = "".join(cell["source"])
-        try:
-            exec(compile(source, f"<cell {index}>", "exec"), namespace)  # noqa: S102
-        except Exception as exc:  # pragma: no cover - failure path
-            pytest.fail(f"code cell {index} failed: {type(exc).__name__}: {exc}")
+def _clean_environment(tmp_path):
+    """An environment where ``jlens`` is not importable: no repo on the path,
+    ``PYTHONPATH`` cleared, and a working directory outside the checkout."""
+    env = dict(os.environ)
+    env.pop("PYTHONPATH", None)
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["MMPILOT_REPO_DIR"] = str(REPO_ROOT)
+    env["MMPILOT_SCRATCH"] = str(tmp_path / "scratch")
+    env["MMPILOT_RUN_DIR"] = str(tmp_path / "run")
+    return env
 
-    assert namespace["RUN_REAL_PILOT"] is False
-    assert namespace["MODEL"] is None, "the real model must not load by default"
-    assert namespace["SUMMARY"]["scientific_evidence"] is False
-    assert namespace["SUMMARY"]["recommendation"] in ("GO", "WEAK GO", "NO-GO")
-    assert namespace["LEAKAGE"]["ok"]
-    assert namespace["INVARIANCE"]["passed"]
-    assert (Path(os.environ["MMPILOT_RUN_DIR"]) / "report.md").is_file()
-    assert (Path(os.environ["MMPILOT_RUN_DIR"]) / "summary.json").is_file()
-    assert (Path(os.environ["MMPILOT_RUN_DIR"]) / "derived_manifest.json").is_file()
-    assert namespace["STATUS"]["status"] == "starting"
-    assert namespace["STATUS"]["completed_units"]["intervention"] > 0
+
+def test_the_test_environment_really_is_clean(tmp_path):
+    """Guards the guard: if ``jlens`` were importable here anyway, the
+    execution test below would pass even with the bootstrap broken."""
+    probe = subprocess.run(
+        [sys.executable, "-c", "import jlens"],
+        cwd=tmp_path,
+        env=_clean_environment(tmp_path),
+        capture_output=True,
+        text=True,
+    )
+    assert probe.returncode != 0
+    assert "No module named 'jlens'" in probe.stderr
+
+
+def test_mock_execution_from_a_clean_environment(tmp_path):
+    """Execute every code cell in a subprocess that starts without ``jlens``.
+
+    This is the end-to-end check on the bootstrap: cell 0 has to make the
+    package importable, and everything after it has to run to a decision.
+    """
+    workdir = tmp_path / "elsewhere"
+    workdir.mkdir()
+    result = subprocess.run(
+        [sys.executable, str(RUNNER), str(NOTEBOOK_PATH)],
+        cwd=workdir,
+        env=_clean_environment(tmp_path),
+        capture_output=True,
+        text=True,
+        timeout=900,
+    )
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr[-3000:]}"
+    report = json.loads(result.stdout.strip().splitlines()[-1])
+
+    assert report["ok"]
+    assert Path(report["jlens_file"]).resolve().parent.parent == REPO_ROOT
+    assert Path(report["repo_path"]).resolve() == REPO_ROOT
+    assert Path(report["cwd"]).resolve() == REPO_ROOT, "cell 0c must chdir into the repo"
+    assert report["commit"]
+    assert report["run_real_pilot"] is False
+    assert report["model_is_none"], "the real model must not load by default"
+    assert report["scientific_evidence"] is False
+    assert report["recommendation"] in ("GO", "WEAK GO", "NO-GO")
+    assert report["leakage_ok"]
+    assert report["invariance_passed"]
+    assert report["resume_status"] == "starting"
+    assert report["n_interventions"] > 0
+
+    run_dir = Path(tmp_path / "run")
+    assert (run_dir / "report.md").is_file()
+    assert (run_dir / "summary.json").is_file()
+    assert (run_dir / "derived_manifest.json").is_file()
