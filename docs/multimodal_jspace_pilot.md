@@ -70,6 +70,30 @@ modalities separately, because one modality losing every file while the other
 resolves cleanly is the signature of sibling roots and would otherwise hide
 behind a combined ratio.
 
+### Flaky Drive mounts
+
+A Colab Drive mount intermittently fails a `stat` with
+`OSError: [Errno 5] Input/output error` on a path that exists and reads fine
+moments later. Every media probe therefore goes through `probe_path`, which
+retries transient errnos (`EIO`, `ESTALE`, `EAGAIN`, `EBUSY`, `EINTR`,
+`ETIMEDOUT`, and the two network ones) with bounded exponential backoff —
+4 attempts, about 0.35 s in the worst case.
+
+The distinction the code is careful about: **a transient failure is never
+recorded as a missing file.** Doing so would quietly shrink the pilot's subset
+and change what the experiment measured, without anything in the output saying
+so. `FileNotFoundError`, `ENOENT`, and `ENOTDIR` mean absent; everything else
+either retries or raises.
+
+When retries run out, `MediaIOError` names the path, the configured root, the
+attempt count, the errno, and the fix — remount Drive
+(`drive.flush_and_unmount()`, then `drive.mount(..., force_remount=True)`) and
+re-run, which resumes rather than repeating completed work. A permission error
+is not retried, since waiting cannot fix it, and an unrecognised `OSError` is
+refused rather than guessed to mean absent. Retries that *did* clear are counted
+in the audit (`n_transient_io_retries`) and the notebook prints them, so a mount
+that is merely degraded is visible before it becomes fatal.
+
 ## What SpokenCOCO can answer
 
 SpokenCOCO carries COCO images, written captions, and spoken readings of those

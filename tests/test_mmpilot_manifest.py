@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Manifest inspection, normalization, missing media, and split leakage."""
 
+import errno
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -366,6 +368,172 @@ def test_original_manifest_is_never_mutated_by_resolution(sibling_dataset):
         Path(sibling_dataset["built"]["manifest_path"]).read_text(encoding="utf-8")
     )
     assert json.dumps(on_disk, sort_keys=True) == before
+
+
+# ------------------------------------------------- transient Drive failures
+
+
+class _FlakyStat:
+    """Replaces the module's stat indirection to inject failures per path.
+
+    ``failures`` maps a path substring to a list of exceptions raised on
+    successive calls; once that list is exhausted the real stat runs. Every
+    call is counted, so a test can assert how many retries happened.
+    """
+
+    def __init__(self, failures):
+        self.failures = {key: list(value) for key, value in failures.items()}
+        self.calls = []
+
+    def __call__(self, path):
+        self.calls.append(str(path))
+        for key, queue in self.failures.items():
+            if key in str(path) and queue:
+                raise queue.pop(0)
+        return os.stat(path)
+
+
+def _eio(path="/content/drive/x.jpg"):
+    return OSError(errno.EIO, "Input/output error", path)
+
+
+@pytest.fixture
+def no_sleep(monkeypatch):
+    slept = []
+    monkeypatch.setattr(M, "_sleep", slept.append)
+    return slept
+
+
+def test_transient_eio_then_success_resolves_the_file(tmp_path, monkeypatch, no_sleep):
+    target = tmp_path / "photo.jpg"
+    target.write_bytes(b"pixels")
+    flaky = _FlakyStat({"photo.jpg": [_eio(), _eio()]})
+    monkeypatch.setattr(M, "_stat", flaky)
+    journal = []
+    assert M.safe_is_file(target, root=tmp_path, journal=journal) is True
+    assert len(journal) == 2, journal
+    assert {entry["errno"] for entry in journal} == {errno.EIO}
+    assert all(entry["root"] == str(tmp_path) for entry in journal)
+    assert len(no_sleep) == 2
+    assert no_sleep == sorted(no_sleep), "backoff must not shrink"
+
+
+def test_persistent_eio_raises_media_io_error_naming_the_remedy(tmp_path, monkeypatch, no_sleep):
+    target = tmp_path / "photo.jpg"
+    target.write_bytes(b"pixels")
+    monkeypatch.setattr(M, "_stat", _FlakyStat({"photo.jpg": [_eio() for _ in range(10)]}))
+    with pytest.raises(M.MediaIOError) as excinfo:
+        M.safe_is_file(target, root=tmp_path)
+    message = str(excinfo.value)
+    assert str(target) in message
+    assert str(tmp_path) in message
+    assert "attempts:        4" in message
+    assert "EIO" in message
+    assert "force_remount=True" in message
+
+
+def test_a_transient_failure_is_never_reported_as_a_missing_file(tmp_path, monkeypatch, no_sleep):
+    target = tmp_path / "photo.jpg"
+    target.write_bytes(b"pixels")
+    monkeypatch.setattr(M, "_stat", _FlakyStat({"photo.jpg": [_eio() for _ in range(10)]}))
+    with pytest.raises(M.MediaIOError):
+        M.probe_path(target, root=tmp_path)
+    # The distinction that matters: absent returns None, flaky raises.
+    assert M.probe_path(tmp_path / "not_there.jpg") is None
+
+
+def test_true_missing_file_is_still_missing(tmp_path):
+    assert M.safe_is_file(tmp_path / "absent.jpg") is False
+    assert M.probe_path(tmp_path / "absent.jpg") is None
+
+
+def test_enoent_from_a_raw_oserror_counts_as_missing(tmp_path, monkeypatch):
+    target = tmp_path / "photo.jpg"
+    target.write_bytes(b"pixels")
+    monkeypatch.setattr(
+        M, "_stat", _FlakyStat({"photo.jpg": [OSError(errno.ENOENT, "nope")]})
+    )
+    assert M.safe_is_file(target) is False
+
+
+def test_permission_error_is_not_retried_and_not_called_missing(tmp_path, monkeypatch, no_sleep):
+    target = tmp_path / "photo.jpg"
+    target.write_bytes(b"pixels")
+    flaky = _FlakyStat({"photo.jpg": [PermissionError(errno.EACCES, "denied")]})
+    monkeypatch.setattr(M, "_stat", flaky)
+    with pytest.raises(M.MediaIOError, match="permission denied"):
+        M.safe_is_file(target, root=tmp_path)
+    assert len(flaky.calls) == 1, "a permission error must not be retried"
+    assert no_sleep == []
+
+
+def test_unrecognised_oserror_is_refused_rather_than_guessed(tmp_path, monkeypatch, no_sleep):
+    target = tmp_path / "photo.jpg"
+    target.write_bytes(b"pixels")
+    monkeypatch.setattr(
+        M, "_stat", _FlakyStat({"photo.jpg": [OSError(errno.EFBIG, "too big")]})
+    )
+    with pytest.raises(M.MediaIOError, match="unrecognised filesystem error"):
+        M.safe_is_file(target)
+
+
+def test_retries_do_not_duplicate_a_resolution(tmp_path, monkeypatch, no_sleep):
+    """A retried probe must still count as one candidate — otherwise a flaky
+    mount would look like the same file living under two roots."""
+    root_a, root_b = tmp_path / "a", tmp_path / "b"
+    for root in (root_a, root_b):
+        (root / "sub").mkdir(parents=True)
+    (root_a / "sub" / "photo.jpg").write_bytes(b"pixels")
+    monkeypatch.setattr(M, "_stat", _FlakyStat({"photo.jpg": [_eio(), _eio()]}))
+    journal = []
+    resolution = M._resolve_one("sub/photo.jpg", [root_a, root_b], journal=journal)
+    assert resolution.resolved == str(root_a / "sub" / "photo.jpg")
+    assert resolution.ambiguous is False
+    assert len(resolution.candidates) == 1
+    assert len(journal) == 2
+
+
+def test_normalization_survives_a_flaky_mount_and_records_the_retries(
+    dataset, monkeypatch, no_sleep
+):
+    schema = M.inspect_manifest(dataset["payload"])
+    first_image = dataset["payload"]["data"][0]["image"].split("/")[-1]
+    monkeypatch.setattr(M, "_stat", _FlakyStat({first_image: [_eio(), _eio()]}))
+    normalized = M.normalize_manifest(
+        dataset["payload"],
+        schema,
+        media_roots=[dataset["root"]],
+        source_checksum="sha256:test",
+        min_complete_groups=8,
+    )
+    assert normalized.audit["n_missing_image_files"] == 0
+    assert normalized.audit["n_transient_io_retries"] == 2
+    assert normalized.audit["transient_io_examples"][0]["errno"] == errno.EIO
+
+
+def test_audit_turns_a_persistent_drive_failure_into_an_actionable_error(
+    dataset, monkeypatch, no_sleep
+):
+    schema = M.inspect_manifest(dataset["payload"])
+    monkeypatch.setattr(M, "_stat", _FlakyStat({".jpg": [_eio() for _ in range(50)]}))
+    roots = M.resolve_media_roots(media_roots=[dataset["root"]])
+    with pytest.raises(M.MediaIOError) as excinfo:
+        M.audit_media_roots(dataset["payload"], schema, roots, n_samples=2)
+    message = str(excinfo.value)
+    assert "the image media probe failed while auditing" in message
+    assert "force_remount=True" in message
+    assert "attempts:        4" in message
+
+
+def test_audit_reports_retries_that_recovered(dataset, monkeypatch, no_sleep):
+    schema = M.inspect_manifest(dataset["payload"])
+    first_image = dataset["payload"]["data"][0]["image"].split("/")[-1]
+    monkeypatch.setattr(M, "_stat", _FlakyStat({first_image: [_eio()]}))
+    roots = M.resolve_media_roots(media_roots=[dataset["root"]])
+    report = M.audit_media_roots(dataset["payload"], schema, roots, n_samples=2)
+    assert report["ok"]
+    assert report["transient_io_retries"] == 1
+    assert report["transient_io_examples"][0]["errno_name"] == "EIO"
 
 
 def test_concept_coverage_counts_images_not_captions(dataset):

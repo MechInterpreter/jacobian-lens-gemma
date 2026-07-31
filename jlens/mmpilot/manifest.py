@@ -22,10 +22,13 @@ Anything else fails loudly with the observed keys printed.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
 import re
+import stat as stat_module
+import time
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -57,6 +60,178 @@ class MediaRootError(SynchronizationError):
     A subclass of :class:`SynchronizationError` because it is one specific,
     common cause of that failure and callers already handle the base class.
     """
+
+
+class MediaIOError(RuntimeError):
+    """The filesystem failed on a media path that is not known to be absent.
+
+    Deliberately *not* a :class:`SynchronizationError`: a mount that stopped
+    answering is an environment problem, not evidence about the dataset. It
+    must never be recorded as a missing file, because that would quietly shrink
+    the pilot's subset and change what the experiment measured.
+    """
+
+
+#: Errnos treated as "the mount hiccuped, ask again". ``EIO`` is what a Colab
+#: Drive mount raises when its FUSE layer times out mid-session; ``ESTALE`` is
+#: the classic network-filesystem handle expiry. None of these mean absent.
+TRANSIENT_ERRNOS = frozenset(
+    {
+        errno.EIO,
+        errno.ESTALE,
+        errno.EAGAIN,
+        errno.EBUSY,
+        errno.EINTR,
+        errno.ETIMEDOUT,
+        errno.ENETDOWN,
+        errno.ENETUNREACH,
+    }
+)
+
+#: Errnos that mean the path genuinely is not there.
+ABSENT_ERRNOS = frozenset({errno.ENOENT, errno.ENOTDIR, errno.ENAMETOOLONG})
+
+DEFAULT_PROBE_ATTEMPTS = 4
+DEFAULT_PROBE_DELAY = 0.05
+MAX_PROBE_DELAY = 2.0
+
+
+def _stat(path: Path) -> os.stat_result:
+    """Indirection so tests can inject filesystem failures deterministically."""
+    return os.stat(path)
+
+
+def _sleep(seconds: float) -> None:
+    """Indirection so tests can assert the backoff without waiting for it."""
+    time.sleep(seconds)
+
+
+def probe_path(
+    path: Path,
+    *,
+    root: Path | str | None = None,
+    attempts: int = DEFAULT_PROBE_ATTEMPTS,
+    initial_delay: float = DEFAULT_PROBE_DELAY,
+    journal: list | None = None,
+) -> os.stat_result | None:
+    """``os.stat`` with bounded retries, or ``None`` when the path is absent.
+
+    Google Drive mounts in Colab intermittently fail a ``stat`` with
+    ``OSError: [Errno 5] Input/output error`` on a path that exists and reads
+    fine a moment later. Treating that as "file missing" would silently drop
+    real samples, so transient errnos are retried with exponential backoff and
+    anything still failing becomes a :class:`MediaIOError`.
+
+    Args:
+        attempts: Total tries, including the first. Default 4 — roughly
+            0.35 s of waiting in the worst case, which covers the observed
+            hiccups without stalling an audit over thousands of paths.
+        journal: If given, one dict is appended per *retried* failure, so the
+            audit can report how flaky the mount was.
+
+    Returns:
+        The ``stat_result`` for an existing path, or ``None`` if it is absent.
+
+    Raises:
+        MediaIOError: On a permission error (never retried — waiting cannot
+            fix it), on an unrecognised ``OSError`` (refusing to guess that it
+            means absent), or when the retries for a transient errno run out.
+    """
+    observed: list[dict] = []
+    delay = initial_delay
+    for attempt in range(1, max(1, attempts) + 1):
+        try:
+            return _stat(path)
+        except FileNotFoundError:
+            return None
+        except NotADirectoryError:
+            return None
+        except PermissionError as exc:
+            raise MediaIOError(
+                _io_message(
+                    path,
+                    root,
+                    attempts=attempt,
+                    observed=[{"errno": exc.errno, "error": str(exc)}],
+                    reason="permission denied",
+                    advice=(
+                        "This is not a missing file. Check the file's permissions, "
+                        "and that Drive is mounted with access to this folder."
+                    ),
+                )
+            ) from exc
+        except OSError as exc:
+            if exc.errno in ABSENT_ERRNOS:
+                return None
+            entry = {
+                "attempt": attempt,
+                "path": str(path),
+                "root": str(root) if root else None,
+                "errno": exc.errno,
+                "errno_name": errno.errorcode.get(exc.errno, "unknown"),
+                "error": str(exc),
+            }
+            observed.append(entry)
+            if exc.errno not in TRANSIENT_ERRNOS:
+                raise MediaIOError(
+                    _io_message(
+                        path,
+                        root,
+                        attempts=attempt,
+                        observed=observed,
+                        reason=f"unrecognised filesystem error {entry['errno_name']}",
+                        advice=(
+                            "Refusing to record this path as missing on the strength "
+                            "of an error that is not known to mean absent."
+                        ),
+                    )
+                ) from exc
+            if attempt >= attempts:
+                raise MediaIOError(
+                    _io_message(
+                        path,
+                        root,
+                        attempts=attempt,
+                        observed=observed,
+                        reason=f"transient {entry['errno_name']} did not clear",
+                        advice=(
+                            "Remount Google Drive and re-run: in Colab, "
+                            "drive.flush_and_unmount() then drive.mount('/content/drive', "
+                            "force_remount=True). The run directory resumes, so "
+                            "completed work is not repeated."
+                        ),
+                    )
+                ) from exc
+            if journal is not None:
+                journal.append(entry)
+            _sleep(min(delay, MAX_PROBE_DELAY))
+            delay = min(delay * 2, MAX_PROBE_DELAY)
+    return None  # pragma: no cover - loop either returns or raises
+
+
+def _io_message(path, root, *, attempts: int, observed: Sequence[Mapping], reason: str,
+                advice: str) -> str:
+    seen = sorted({str(entry.get("errno_name") or entry.get("errno")) for entry in observed})
+    return (
+        f"filesystem probe failed for {path}\n"
+        f"  configured root: {root or '<none>'}\n"
+        f"  attempts:        {attempts}\n"
+        f"  errno observed:  {', '.join(seen) or 'unknown'}\n"
+        f"  reason:          {reason}\n"
+        f"{advice}"
+    )
+
+
+def safe_is_file(path: Path, **kwargs) -> bool:
+    """Whether ``path`` is a regular file, retrying transient mount failures."""
+    result = probe_path(path, **kwargs)
+    return result is not None and stat_module.S_ISREG(result.st_mode)
+
+
+def safe_is_dir(path: Path, **kwargs) -> bool:
+    """Whether ``path`` is a directory, retrying transient mount failures."""
+    result = probe_path(path, **kwargs)
+    return result is not None and stat_module.S_ISDIR(result.st_mode)
 
 
 # ------------------------------------------------------------------ schema
@@ -353,21 +528,33 @@ class MediaResolution:
     ambiguous: bool = False
 
 
-def _unique_existing(probes: Sequence[Path]) -> list[Path]:
-    """Distinct existing files, preserving root priority order."""
+def _unique_existing(
+    probes: Sequence[tuple[Path, Path | None]], journal: list | None
+) -> list[tuple[Path, os.stat_result]]:
+    """Distinct existing files with their stat results, in root priority order.
+
+    De-duplication happens on the normalized absolute path *before* any retry
+    bookkeeping is consulted, so a path that needed three attempts still counts
+    exactly once — a retry must never turn one file into two candidates and
+    trip the ambiguity check.
+    """
     seen: set[str] = set()
-    out: list[Path] = []
-    for probe in probes:
-        if not probe.is_file():
-            continue
+    out: list[tuple[Path, os.stat_result]] = []
+    for probe, root in probes:
         key = os.path.normcase(os.path.abspath(str(probe)))
-        if key not in seen:
-            seen.add(key)
-            out.append(probe)
+        if key in seen:
+            continue
+        result = probe_path(probe, root=root, journal=journal)
+        if result is None or not stat_module.S_ISREG(result.st_mode):
+            continue
+        seen.add(key)
+        out.append((probe, result))
     return out
 
 
-def _resolve_one(relative: str, roots: Sequence[Path]) -> MediaResolution:
+def _resolve_one(
+    relative: str, roots: Sequence[Path], *, journal: list | None = None
+) -> MediaResolution:
     """Resolve one relative media path against ``roots``, in priority order.
 
     Exact ``root / relative`` joins are tried first across *every* root, then
@@ -381,7 +568,7 @@ def _resolve_one(relative: str, roots: Sequence[Path]) -> MediaResolution:
     """
     candidate = Path(relative)
     if candidate.is_absolute():
-        exists = candidate.is_file()
+        exists = safe_is_file(candidate, journal=journal)
         return MediaResolution(
             relative=relative,
             resolved=str(candidate) if exists else None,
@@ -390,25 +577,29 @@ def _resolve_one(relative: str, roots: Sequence[Path]) -> MediaResolution:
             candidates=(str(candidate),) if exists else (),
         )
 
-    matches = _unique_existing([root / candidate for root in roots])
+    matches = _unique_existing([(root / candidate, root) for root in roots], journal)
     mode = "exact"
     if not matches:
-        matches = _unique_existing([root / candidate.name for root in roots])
+        matches = _unique_existing(
+            [(root / candidate.name, root) for root in roots], journal
+        )
         mode = "basename" if matches else None
     if not matches:
         return MediaResolution(relative, None, None, None)
 
-    if len(matches) > 1 and len({probe.stat().st_size for probe in matches}) > 1:
+    # Sizes come from the stat results the probe already fetched, so ambiguity
+    # detection costs no extra filesystem round trips on a flaky mount.
+    if len({result.st_size for _, result in matches}) > 1:
         return MediaResolution(
             relative=relative,
             resolved=None,
             root=None,
             mode=mode,
-            candidates=tuple(str(probe) for probe in matches),
+            candidates=tuple(str(probe) for probe, _ in matches),
             ambiguous=True,
         )
 
-    winner = matches[0]
+    winner = matches[0][0]
     owning_root = next(
         (
             str(root)
@@ -424,7 +615,7 @@ def _resolve_one(relative: str, roots: Sequence[Path]) -> MediaResolution:
         resolved=str(winner),
         root=owning_root,
         mode=mode,
-        candidates=tuple(str(probe) for probe in matches),
+        candidates=tuple(str(probe) for probe, _ in matches),
     )
 
 
@@ -465,7 +656,11 @@ def resolve_media_roots(
     out: dict[str, list[Path]] = {}
     for role, configured in per_role.items():
         paths = [Path(root) for root in configured]
-        usable = [path for path in paths if path.is_dir()] if require_existing else paths
+        usable = (
+            [path for path in paths if safe_is_dir(path, root=path)]
+            if require_existing
+            else paths
+        )
         if not usable:
             raise MediaRootError(
                 f"no existing directory among the {role} roots "
@@ -501,6 +696,9 @@ def audit_media_roots(
     Raises:
         MediaRootError: If a role resolves nothing, if any sampled path is
             ambiguous, or if the image and audio roots appear to be swapped.
+        MediaIOError: If the mount kept failing on a path that is not known to
+            be absent — reported with the path, root, retry count and errno
+            rather than as a bare pathlib traceback.
     """
     _, records = (
         _find_records(payload)
@@ -519,12 +717,20 @@ def audit_media_roots(
     problems: list[str] = []
     winners: dict[str, str | None] = {}
 
+    journal: list[dict] = []
     for role, field_name in _role_fields(schema).items():
         resolutions: list[MediaResolution] = []
         for row in rows[:n_samples]:
             relative = str(row.get(field_name, "") or "")
-            if relative:
-                resolutions.append(_resolve_one(relative, roots[role]))
+            if not relative:
+                continue
+            try:
+                resolutions.append(_resolve_one(relative, roots[role], journal=journal))
+            except MediaIOError as exc:
+                raise MediaIOError(
+                    f"the {role} media probe failed while auditing "
+                    f"{relative!r}.\n{exc}"
+                ) from exc
         counts: dict[str, int] = {}
         for resolution in resolutions:
             if resolution.root:
@@ -585,6 +791,8 @@ def audit_media_roots(
             )
 
     report["winning_root"] = winners
+    report["transient_io_retries"] = len(journal)
+    report["transient_io_examples"] = journal[:5]
     report["ok"] = not problems
     report["problems"] = problems
     if problems:
@@ -662,14 +870,23 @@ def normalize_manifest(
     missing_audio: list[str] = []
     ambiguous: list[dict] = []
     roots_used: dict[str, dict[str, int]] = {"image": {}, "audio": {}}
+    io_journal: list[dict] = []
     seen: dict[str, int] = {}
     duplicates: list[str] = []
     for index, row in enumerate(rows):
         raw_image = str(row.get(schema.image_field, "") or "")
         raw_audio = str(row.get(schema.audio_field, "") or "")
         caption = str(row.get(schema.caption_field, "") or "").strip()
-        image = _resolve_one(raw_image, roots["image"]) if raw_image else None
-        audio = _resolve_one(raw_audio, roots["audio"]) if raw_audio else None
+        image = (
+            _resolve_one(raw_image, roots["image"], journal=io_journal)
+            if raw_image
+            else None
+        )
+        audio = (
+            _resolve_one(raw_audio, roots["audio"], journal=io_journal)
+            if raw_audio
+            else None
+        )
         image_path = image.resolved if image else None
         audio_path = audio.resolved if audio else None
         for role, resolution in (("image", image), ("audio", audio)):
@@ -749,6 +966,8 @@ def normalize_manifest(
         "resolved_by_root": roots_used,
         "n_ambiguous_media": len(ambiguous),
         "ambiguous_media_examples": ambiguous[:max_missing_examples],
+        "n_transient_io_retries": len(io_journal),
+        "transient_io_examples": io_journal[:max_missing_examples],
     }
 
     if ambiguous:
