@@ -156,10 +156,43 @@ an accept/reject reason.
 Synchronized sources must expose deterministic image, caption, and audio fields.
 The converter rejects conflicting audio-to-caption joins and missing explicit
 identifiers; filename-derived identifiers are allowed only when a known metadata
-ID set validates exactly one match. Official COCO category annotations are used
-when locally available. Otherwise captions are normalized to lowercase word
-tokens with conservative plural handling and whole-word boundaries; substring
-matches are forbidden. Each group records its annotation source.
+ID set validates exactly one match.
+
+## What counts as a positive
+
+A valid synchronized positive requires **both** kinds of evidence:
+
+1. **visual** - a COCO object annotation for the concept on the group's image;
+2. **caption** - the concept, or an approved synonym from the explicit lexicon
+   in `jlens/mmpilot/evidence.py`, present in the written caption as a whole
+   word or phrase.
+
+The first real run used the annotation alone and never read the caption. COCO
+images routinely contain an object the caption does not mention, so groups were
+selected as `cat` positives whose captions never said "cat"; the image arm
+answered correctly and the text arm was scored wrong for answering honestly.
+That is the asymmetry the behavioral gate reported (image 8/8, text 3-6/8), and
+a group like it is not a valid test of transfer, because the two modalities are
+not carrying the same claim.
+
+Matching is normalized whole-word regex against the lexicon - `cat` does not
+match `cattle`, `bus` does not match `business`. No embeddings, no learned
+classifier, no language model, no fuzzy similarity, no external service. Every
+match records the normalized caption and the matched span. SpokenCOCO recordings
+are spoken readings of the written captions, so caption evidence describes the
+recording's linguistic content; **no audio is transcribed**, and none of this is
+evidence that the model can hear.
+
+Matched negatives are stricter still: a negative must carry *neither* kind of
+evidence for *any* screened concept, so a visual-only picture of a cat is
+excluded from the negatives as well as from the positives.
+
+The CPU-only audit (notebook sections 4-6, `jlens/mmpilot/evidence.py`) writes
+`synchronized_evidence_audit.json`, `synchronized_evidence_manifest.json`,
+`concept_ranking.json` and `split_provenance.json` into the run directory,
+atomically, each carrying the lexicon hash, the configuration fingerprint and
+the source checksums, and each refusing reuse under a different configuration.
+It needs no GPU and no HuggingFace token.
 
 The expanded manifest is atomically written under the persistent run directory
 and reused only when the original checksum, every discovered-source checksum,
@@ -168,8 +201,10 @@ and conversion hash match. The final path is printed as `original` or
 distinct image/groups each, four source-training positives, two held-out
 positives, and six negatives. Source train/validation splits are preferred when
 they satisfy those counts; otherwise stable IDs and the saved seed produce a
-4/2 image-disjoint split. If two concepts do not qualify, section 7 raises
-`DATASET NO-GO` before model execution and reports exact shortfalls. It does not
+4/2 image-disjoint split. Up to four concepts are screened and at least two must
+qualify; if fewer do, section 6 raises `DATASET NO-GO` before model execution
+and reports exact shortfalls, including whether the binding constraint was
+missing written-caption evidence on otherwise annotated images. It does not
 lower `GROUPS_PER_CONCEPT=6`.
 
 `TINY_SMOKE=False` by default. Setting it explicitly uses two concepts and two
@@ -245,8 +280,17 @@ artifact it writes carries `mode: "mock"` and `scientific_evidence: false`.
 Evaluated in code (`jlens/mmpilot/report.py`) so the recommendation cannot drift
 with how the numbers are read.
 
+Each criterion is `PASS`, `FAIL`, or `NOT_EVALUATED`. The third state exists
+because a boolean cannot distinguish "measured and bad" from "never
+measured": the first real run stopped at the behavioral gate, and the report
+nonetheless declared the lens reconstruction inadequate — a verdict on a
+measurement that never happened. A skipped stage is now reported as skipped,
+with the precondition that stopped it named, and the recommendation's
+rationale never blames it.
+
 - **GO** — ≥2 concepts pass the behavioral gate for both text and image; the
-  lens reconstructs adequately; cross-modal J-space retrieval beats the shuffled
+  lens clears the matched-random reconstruction control; cross-modal J-space
+  retrieval beats the shuffled
   control on both text→image and image→text; at least one off-diagonal
   text-image cell has the expected sign in ≥75% of its samples; that effect is
   ≥1.5× the random and unrelated-concept controls; activation norms stay in
@@ -256,7 +300,54 @@ with how the numbers are read.
   next experiment: hold the winning concept and layer fixed and run only that
   cell with more held-out targets and a denser alpha sweep.
 - **NO-GO** — capability fails, no compatible lens exists, reconstruction is
-  poor, or cross-modal structure is indistinguishable from shuffled labels.
+  indistinguishable from matched random directions, or cross-modal structure is
+  indistinguishable from shuffled labels.
+
+## The lens criterion is above-random, not absolute
+
+There is **no absolute reconstruction threshold**. An earlier version of this
+rubric required the frozen lens to explain 50% of a held-out activation's
+variance. That number has no basis. Anthropic's J-space work reports that the
+top-k J-space component of a concept vector carries a **median of roughly 6-7%**
+of its variance, and that at median occupancy the variance explained in excess
+of a same-size random-direction control never exceeds about 10%. The finding is
+that this *small* component carries disproportionate causal and reportable
+content - under a 50% gate the published result itself would read as a failed
+lens.
+
+Absolute explained fraction is therefore a descriptive statistic. The criterion
+(`jlens/mmpilot/reconstruction.py`) is: for held-out **text** activations at
+each evaluated layer, decompose against the frozen dictionary, then against
+deterministic random dictionaries matched in candidate-pool size, sparsity `k`,
+atom norms, hidden width, dtype, device and pursuit settings. The lens passes
+when the median excess over the control is positive and clears the control's
+upper quantile at the primary layer or reproducibly at one of the two selected
+layers, with finite, checksum-valid, non-degenerate pursuit output.
+
+Two controls are computed. The **support-matched** one - exactly `k` random
+atoms, norm-matched one for one - is reported for scale and **cannot gate
+anything**: any dictionary with a selection pool larger than `k` beats it,
+including pure noise. The **pool-matched** one gives the random directions the
+same candidate pool and the same `k` as the lens, so the comparison isolates
+atom direction, and it does fail for an unaligned dictionary. Its pool is capped
+at 16384 candidates so several dense random dictionaries fit next to the model;
+where the cap binds, the control searches fewer candidates than the lens and
+understates random performance. That bias favours the lens and is disclosed in
+every record as `pool_selection_bias_factor`.
+
+A short `k` schedule (1, 2, 4, 8, 16, 25) also yields an **occupancy estimate**:
+the largest `k` at which the lens's marginal reconstruction gain still exceeds
+the control's bound on the same marginal. It is inspired by the published
+occupancy measure and is explicitly **not** a replication of it - short
+schedule, a handful of activations, two layers, capped control pool. The `k`
+curve itself is exact: the pursuit is greedy and records
+`residual_norm_history`, so the prefix of a `k_max` run equals a run configured
+at that `k`.
+
+Absolute reconstruction, excess over random, occupancy and causal usefulness are
+four separate readings. None implies another; in particular a small-variance
+J-space component may still move behaviour, which is what the intervention
+criteria test.
 
 The raw-residual difference direction is measured and reported but is **not**
 allowed to veto specificity: it answers "did the decomposition earn its keep",

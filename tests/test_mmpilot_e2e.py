@@ -250,7 +250,13 @@ def test_final_prompt_effect_does_not_claim_pre_language_convergence():
     assert not criteria["effect_precedes_output_convergence"]["passed"]
 
 
-def test_code_statistics_exposes_text_only_reconstruction_gate_value():
+def test_code_statistics_exposes_held_out_text_reconstruction_descriptively():
+    """Absolute explained fraction is a descriptive statistic, not a gate.
+
+    A held-out text median of 0.1 is entirely normal for a sparse workspace —
+    the published J-space result reports a median around 6-7% — so it must not
+    on its own decide anything.
+    """
     stats = code_statistics([
         {"modality": "text", "split": "test", "explained_fraction": 0.1, "n_active": 2, "convergence_status": "ok"},
         {"modality": "image", "split": "test", "explained_fraction": 0.9, "n_active": 2, "convergence_status": "ok"},
@@ -258,4 +264,33 @@ def test_code_statistics_exposes_text_only_reconstruction_gate_value():
     assert stats["text_median_explained_fraction"] == pytest.approx(0.1)
     assert stats["heldout_text_median_explained_fraction"] == pytest.approx(0.1)
     criteria = evaluate_criteria(**{**_criterion_inputs(), "code_stats": stats})
-    assert not criteria["lens_reconstruction"]["passed"]
+    entry = criteria["lens_sanity_above_random"]
+    assert entry["evidence"]["absolute_heldout_text_median_explained_fraction"] == (
+        pytest.approx(0.1)
+    )
+    # No matched-random control was supplied, so the lens is NOT judged at all.
+    assert entry["status"] == "NOT_EVALUATED"
+
+
+def test_the_rubric_carries_no_absolute_reconstruction_threshold():
+    from jlens.mmpilot.report import DEFAULT_THRESHOLDS
+
+    assert "min_median_explained_fraction" not in DEFAULT_THRESHOLDS
+    assert DEFAULT_THRESHOLDS["min_median_excess_explained_fraction"] == 0.0
+
+
+def test_the_mock_run_compares_the_lens_against_matched_random_controls(run):
+    result, _ = run
+    control = result["reconstruction_control"]
+    assert control["n_records"] > 0
+    assert control["evaluated_on"] == "held-out text activations only"
+    for entry in control["by_layer"].values():
+        assert entry["n_samples"] > 0
+        assert entry["all_finite"] and entry["all_nondegenerate"]
+        assert "median_excess_explained_fraction" in entry
+        assert "median_estimated_occupancy" in entry
+    assert result["summary"]["criteria"]["lens_sanity_above_random"]["status"] in (
+        "PASS",
+        "FAIL",
+    )
+    assert result["outcomes"]["reconstruction_control"].computed > 0

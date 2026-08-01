@@ -146,6 +146,7 @@ def build_mock_dataset(
     speakers: Sequence[str] = ("spk-a", "spk-b", "spk-c"),
     layout: str = "flat",
     manifest_records: int | None = None,
+    visual_only_images: int = 0,
 ) -> dict:
     """Write a synthetic SpokenCOCO-shaped dataset and manifest.
 
@@ -162,7 +163,15 @@ def build_mock_dataset(
       modalities are only resolvable from *different* roots, which is what
       broke the single-root assumption.
 
-    Returns ``{"root", "manifest_path", "world", "image_root", "audio_root"}``.
+    ``visual_only_images`` adds images per concept that carry the COCO object
+    annotation while their captions never name the concept — the SpokenCOCO
+    pattern that broke the first real run. Their *evidence* still contains the
+    concept (the picture really does show it), so a labelling rule that reads
+    only the annotation will happily select them and then mark the text arm
+    wrong. They must be rejected as synchronized positives.
+
+    Returns ``{"root", "manifest_path", "world", "image_root", "audio_root",
+    "object_annotations", "visual_only_image_ids"}``.
     """
     if layout not in ("flat", "sibling"):
         raise ValueError(f"unknown layout {layout!r}")
@@ -172,8 +181,17 @@ def build_mock_dataset(
     audio_root = root / "SpokenCOCO" if layout == "sibling" else root
 
     records: list[dict] = []
+    #: Ground-truth visual labels: what is in the picture, caption or not.
+    object_annotations: dict[str, list[str]] = {}
+    visual_only_image_ids: list[str] = []
 
-    def add_image(image_id: str, concepts_present: Sequence[str], index: int) -> None:
+    def add_image(
+        image_id: str,
+        concepts_present: Sequence[str],
+        index: int,
+        *,
+        name_in_caption: bool = True,
+    ) -> None:
         if layout == "sibling":
             image_rel = f"train2014/COCO_train2014_{image_id}.jpg"
         else:
@@ -186,9 +204,17 @@ def build_mock_dataset(
                 nuisance_key=f"{image_id}|image",
             ),
         )
+        object_annotations[image_id] = sorted(concepts_present)
+        if concepts_present and not name_in_caption:
+            visual_only_image_ids.append(image_id)
         entries = []
         for caption_index in range(captions_per_image):
-            subject = " and a ".join(concepts_present) if concepts_present else "table"
+            if not name_in_caption:
+                # The picture contains the concept; the sentence does not name
+                # it. This is the group that must never become a positive.
+                subject = "small creature"
+            else:
+                subject = " and a ".join(concepts_present) if concepts_present else "table"
             caption = (
                 f"a photo number {caption_index} showing a {subject} "
                 f"near a window in scene {index}"
@@ -220,6 +246,9 @@ def build_mock_dataset(
         for _ in range(images_per_concept):
             add_image(f"img{index:04d}", [concept], index)
             index += 1
+        for _ in range(visual_only_images):
+            add_image(f"img{index:04d}", [concept], index, name_in_caption=False)
+            index += 1
     for _ in range(negative_images):
         add_image(f"img{index:04d}", [], index)
         index += 1
@@ -233,6 +262,34 @@ def build_mock_dataset(
     manifest_path.write_text(
         json.dumps({"split": "pilot", "data": records}, indent=2), encoding="utf-8"
     )
+    # COCO object annotations describe the *picture*, so they are written from
+    # the world's ground truth and never from the caption text. That is what
+    # makes a visual-only group possible at all.
+    category_names = sorted(world.concepts)
+    category_ids = {name: index + 1 for index, name in enumerate(category_names)}
+    instances_path = image_root / "annotations" / "instances_train2014.json"
+    instances_path.parent.mkdir(parents=True, exist_ok=True)
+    instances = [
+        {"image_id": image_id, "category_id": category_ids[name], "id": position + 1}
+        for position, (image_id, name) in enumerate(
+            (image_id, name)
+            for image_id in sorted(object_annotations)
+            for name in object_annotations[image_id]
+        )
+    ]
+    instances_path.write_text(
+        json.dumps(
+            {
+                "categories": [
+                    {"id": category_ids[name], "name": name} for name in category_names
+                ],
+                "annotations": instances,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
     annotation_path = None
     if layout == "sibling":
         (root / "cstf_dataset_marker.json").write_text(
@@ -263,22 +320,13 @@ def build_mock_dataset(
             ),
             encoding="utf-8",
         )
-        category_names = sorted(MOCK_CONCEPTS)
-        category_ids = {name: index + 1 for index, name in enumerate(category_names)}
-        object_annotations = []
-        for record in full_records:
-            words = record["captions"][0]["text"].lower().split()
-            for name in category_names:
-                if name in words:
-                    object_annotations.append({"image_id": record["image_id"], "category_id": category_ids[name], "id": len(object_annotations) + 1})
-        (coco_annotations / "instances_train2014.json").write_text(
-            json.dumps({"categories": [{"id": category_ids[name], "name": name} for name in category_names], "annotations": object_annotations}, indent=2),
-            encoding="utf-8",
-        )
     return {
         "root": str(root),
         "manifest_path": str(manifest_path),
         "annotation_path": str(annotation_path) if annotation_path else None,
+        "instances_path": str(instances_path),
+        "object_annotations": object_annotations,
+        "visual_only_image_ids": sorted(visual_only_image_ids),
         "world": world,
         "layout": layout,
         "image_root": str(image_root),
@@ -286,6 +334,30 @@ def build_mock_dataset(
         "n_records_in_manifest": len(records),
         "n_records_total": len(full_records),
     }
+
+
+def attach_object_annotations(groups: Sequence[Mapping], built: Mapping) -> list[dict]:
+    """Copies of ``groups`` carrying the mock world's ground-truth COCO labels.
+
+    The real pipeline gets these from ``instances_*.json`` via
+    :func:`jlens.mmpilot.expansion.attach_concept_annotations`. Tests that work
+    straight from a normalized manifest use this instead of re-parsing the file.
+    """
+    labels = built["object_annotations"]
+    out = []
+    for group in groups:
+        found = sorted(labels.get(str(group["image_id"]), []))
+        out.append(
+            {
+                **dict(group),
+                "concept_annotations": found,
+                "annotation_source": "coco_object_annotation" if found else "none",
+                "synchronized_group_id": group.get(
+                    "synchronized_group_id", group["group_id"]
+                ),
+            }
+        )
+    return out
 
 
 # ----------------------------------------------------------------- the model
@@ -520,6 +592,8 @@ def run_mock_pilot(
 
     import torch as _torch
 
+    from jlens.mmpilot import evidence as evidence_module
+    from jlens.mmpilot import expansion as expansion_module
     from jlens.mmpilot import manifest as manifest_module
     from jlens.mmpilot import pipeline as pipeline_module
     from jlens.mmpilot.jspace import validate_lens
@@ -539,8 +613,57 @@ def run_mock_pilot(
         source_checksum=manifest_module.manifest_checksum(manifest_path),
         min_complete_groups=8,
     )
+    # Visual evidence: read the COCO object annotations off disk, exactly as
+    # the real path does. Without them nothing is a valid positive.
+    instances_path = dataset_root / "annotations" / "instances_train2014.json"
+    annotation_sources = expansion_module.discover_metadata_sources(
+        [instances_path.parent], max_files=8, max_depth=1
+    )
+    groups = [dict(group) for group in normalized.groups]
+    expansion_module.attach_concept_annotations(
+        groups,
+        [s for s in annotation_sources if s.source_kind == "coco_object_annotation"],
+    )
+
+    # The CPU evidence audit, run in MOCK too so the notebook's audit stage and
+    # this path can never drift apart.
+    evidence_config = evidence_module.config_for_concepts(MOCK_CONCEPTS)
+    audit = evidence_module.audit_groups(
+        groups,
+        config=evidence_config,
+        source_checksums=evidence_module.source_checksums(
+            [manifest_path, instances_path]
+        ),
+    )
+    run_dir.mkdir(parents=True, exist_ok=True)
+    conversion = {"converter": "jlens.mmpilot.mock.run_mock_pilot", "mode": "mock"}
+    evidence_module.persist_evidence_audit(
+        run_dir / "synchronized_evidence_audit.json", audit, conversion=conversion
+    )
+    evidence_module.persist_synchronized_manifest(
+        run_dir / "synchronized_evidence_manifest.json",
+        groups,
+        audit,
+        original_checksum=normalized.source_checksum,
+        conversion=conversion,
+    )
+    ranking = expansion_module.rank_concepts(
+        groups, MOCK_CONCEPTS, groups_per_concept=6, evidence_config=evidence_config
+    )
+    evidence_module.persist_concept_ranking(
+        run_dir / "concept_ranking.json",
+        ranking,
+        audit,
+        requirements=expansion_module.ConceptRequirements().to_dict(),
+        conversion=conversion,
+    )
+
     subset = manifest_module.build_subset(
-        normalized.groups, MOCK_CONCEPTS, groups_per_concept=6, negatives_per_concept=6
+        groups,
+        MOCK_CONCEPTS,
+        groups_per_concept=6,
+        negatives_per_concept=6,
+        evidence_config=evidence_config,
     )
     leakage = manifest_module.check_split_leakage(subset)
     if not leakage["ok"]:
@@ -629,6 +752,14 @@ def run_mock_pilot(
         config,
         lens_checksum=MOCK_LENS_CHECKSUM,
     )
+    control_outcome, reconstruction_control = pipeline_module.stage_reconstruction_control(
+        store,
+        activation_outcome.records,
+        dictionaries,
+        config,
+        lens_checksum=MOCK_LENS_CHECKSUM,
+        primary_layer=config.layers[-1],
+    )
     representational = pipeline_module.stage_representational(
         store,
         activation_outcome.records,
@@ -669,6 +800,7 @@ def run_mock_pilot(
         representational=representational,
         interventions=interventions,
         invariance=invariance,
+        reconstruction_control=reconstruction_control,
         blocked_modalities=blocked,
         manifest_audit=normalized.audit,
     )
@@ -677,6 +809,10 @@ def run_mock_pilot(
         "store": store,
         "config": config,
         "normalized": normalized,
+        "groups": groups,
+        "evidence_audit": audit,
+        "evidence_config": evidence_config,
+        "ranking": ranking,
         "subset": subset,
         "leakage": leakage,
         "available_modalities": available,
@@ -685,6 +821,7 @@ def run_mock_pilot(
         "capability": capability,
         "lens_validation": lens_validation,
         "representational": representational,
+        "reconstruction_control": reconstruction_control,
         "interventions": interventions,
         "directions": directions,
         "markdown": markdown,
@@ -693,6 +830,7 @@ def run_mock_pilot(
             "capability": capability_outcome,
             "activation": activation_outcome,
             "jspace": code_outcome,
+            "reconstruction_control": control_outcome,
             "direction": direction_outcome,
             "intervention": causal_outcome,
         },

@@ -8,7 +8,16 @@ is *not* importable when the first cell runs. That is the whole point: the
 notebook's section-0 bootstrap has to make the package importable itself, which
 is what regressed when section 1 imported ``jlens`` before anything installed it.
 
-Usage: ``python tests/_mmpilot_notebook_runner.py <notebook.ipynb>``.
+Usage::
+
+    python tests/_mmpilot_notebook_runner.py <notebook.ipynb> [NAME=True ...]
+
+Each ``NAME=True`` argument rewrites a committed ``NAME = False`` switch in the
+notebook source before execution — the same edit a user makes by hand, made
+visibly rather than through a back door the notebook itself would have to
+honour. Without it the committed defaults run, which is how the CPU-only path
+is tested.
+
 Prints one JSON object on stdout; exits non-zero on the first failing cell.
 
 The leading underscore keeps pytest from collecting this file as a test module.
@@ -16,6 +25,7 @@ The leading underscore keeps pytest from collecting this file as a test module.
 
 import json
 import os
+import re
 import sys
 import traceback
 from pathlib import Path
@@ -23,6 +33,7 @@ from pathlib import Path
 
 def main() -> int:
     notebook_path = Path(sys.argv[1])
+    overrides = dict(argument.split("=", 1) for argument in sys.argv[2:])
     payload = json.loads(notebook_path.read_text(encoding="utf-8"))
     code_cells = [cell for cell in payload["cells"] if cell["cell_type"] == "code"]
 
@@ -33,6 +44,13 @@ def main() -> int:
     namespace: dict = {"__name__": "__notebook__"}
     for index, cell in enumerate(code_cells):
         source = "".join(cell["source"])
+        for name, value in overrides.items():
+            source = re.sub(
+                rf"^{re.escape(name)} = False$",
+                f"{name} = {value}",
+                source,
+                flags=re.MULTILINE,
+            )
         try:
             exec(compile(source, f"<cell {index}>", "exec"), namespace)  # noqa: S102
         except Exception as exc:  # noqa: BLE001 - reported, not swallowed
@@ -50,8 +68,9 @@ def main() -> int:
 
     import jlens
 
-    summary = namespace["SUMMARY"]
-    status = namespace["STATUS"]
+    summary = namespace.get("SUMMARY")
+    status = namespace.get("STATUS")
+    audit = namespace["EVIDENCE_AUDIT"]
     print(
         json.dumps(
             {
@@ -62,15 +81,25 @@ def main() -> int:
                 "repo_path": str(namespace["REPO_PATH"]),
                 "checked_out_branch": namespace["CHECKED_OUT_BRANCH"],
                 "commit": namespace["COMMIT"],
+                "overrides": overrides,
                 "run_real_pilot": namespace["RUN_REAL_PILOT"],
+                "run_model_stages": namespace["RUN_MODEL_STAGES"],
                 "model_is_none": namespace["MODEL"] is None,
-                "recommendation": summary["recommendation"],
-                "scientific_evidence": summary["scientific_evidence"],
+                "selected_concepts": sorted(namespace["SELECTED_NAMES"]),
+                "n_valid_positives": len(audit.valid_records()),
+                "n_rejected": len(audit.rejected_records()),
+                "rejection_counts": audit.rejection_counts(),
+                "lexicon_hash": namespace["EVIDENCE_CONFIG"].lexicon_hash,
+                "run_dir": str(namespace["RUN_DIR"]),
                 "leakage_ok": namespace["LEAKAGE"]["ok"],
-                "invariance_passed": namespace["INVARIANCE"]["passed"],
-                "resume_status": status["status"],
-                "n_interventions": status["completed_units"]["intervention"],
-                "run_dir": status["run_dir"],
+                "recommendation": (summary or {}).get("recommendation"),
+                "scientific_evidence": (summary or {}).get("scientific_evidence"),
+                "not_evaluated": sorted((summary or {}).get("not_evaluated", {})),
+                "invariance_passed": (namespace["INVARIANCE"] or {}).get("passed"),
+                "resume_status": (status or {}).get("status"),
+                "n_interventions": (status or {}).get("completed_units", {}).get(
+                    "intervention"
+                ),
             }
         )
     )
