@@ -62,6 +62,27 @@ MOCK_CONCEPTS: dict[str, tuple[str, ...]] = {
     "pizza": ("pizza", "pizzas"),
 }
 
+#: Categories the mock's ``instances_*.json`` declares but that no image is a
+#: usable positive for. Real COCO declares 80 and most are infeasible on any
+#: given local subset; discovery has to find them and the ranking has to reject
+#: them for stated reasons rather than never having considered them.
+#:
+#: Chosen to exercise every branch of the lexical policy in
+#: :mod:`jlens.mmpilot.concepts`: an excluded colour term (``orange``), an
+#: alias-only category (``remote``), an ambiguous one (``train``), a phrase
+#: category that collides with a concept (``hot dog`` vs ``dog``), and the
+#: ubiquitous one.
+DEFAULT_EXTRA_CATEGORIES: tuple[str, ...] = (
+    "hot dog",
+    "orange",
+    "person",
+    "remote",
+    "train",
+)
+
+#: The category COCO annotates on most images. Not a usable concept.
+UBIQUITOUS_CATEGORY = "person"
+
 
 def _seeded_vector(key: str, d_model: int) -> torch.Tensor:
     """A deterministic unit vector for ``key`` (stable across machines)."""
@@ -147,6 +168,7 @@ def build_mock_dataset(
     layout: str = "flat",
     manifest_records: int | None = None,
     visual_only_images: int = 0,
+    extra_categories: Sequence[str] | None = None,
 ) -> dict:
     """Write a synthetic SpokenCOCO-shaped dataset and manifest.
 
@@ -170,8 +192,13 @@ def build_mock_dataset(
     only the annotation will happily select them and then mark the text arm
     wrong. They must be rejected as synchronized positives.
 
+    ``extra_categories`` are declared in the written ``instances_*.json``
+    without being world concepts, so the discovered candidate universe is wider
+    than the set of concepts that can actually work — which is the situation on
+    real COCO. Defaults to :data:`DEFAULT_EXTRA_CATEGORIES`.
+
     Returns ``{"root", "manifest_path", "world", "image_root", "audio_root",
-    "object_annotations", "visual_only_image_ids"}``.
+    "object_annotations", "visual_only_image_ids", "declared_categories"}``.
     """
     if layout not in ("flat", "sibling"):
         raise ValueError(f"unknown layout {layout!r}")
@@ -265,8 +292,24 @@ def build_mock_dataset(
     # COCO object annotations describe the *picture*, so they are written from
     # the world's ground truth and never from the caption text. That is what
     # makes a visual-only group possible at all.
-    category_names = sorted(world.concepts)
+    #
+    # The file declares MORE categories than the world's concepts, exactly as
+    # real COCO does: 80 categories are defined and only a few of them will
+    # turn out to be feasible here. Discovery has to read the universe off this
+    # file rather than assume the concepts it happens to find groups for.
+    if extra_categories is None:
+        extra_categories = DEFAULT_EXTRA_CATEGORIES
+    category_names = sorted({*world.concepts, *extra_categories})
     category_ids = {name: index + 1 for index, name in enumerate(category_names)}
+    # `person` is annotated on most images, as in COCO. It is not a usable
+    # concept — it discriminates nothing — and it is what the co-occurrence
+    # statistic and the exclusion policy exist to handle.
+    if UBIQUITOUS_CATEGORY in category_names:
+        for position, image_id in enumerate(sorted(object_annotations)):
+            if position % 4:
+                object_annotations[image_id] = sorted(
+                    {*object_annotations[image_id], UBIQUITOUS_CATEGORY}
+                )
     instances_path = image_root / "annotations" / "instances_train2014.json"
     instances_path.parent.mkdir(parents=True, exist_ok=True)
     instances = [
@@ -281,7 +324,12 @@ def build_mock_dataset(
         json.dumps(
             {
                 "categories": [
-                    {"id": category_ids[name], "name": name} for name in category_names
+                    {
+                        "id": category_ids[name],
+                        "name": name,
+                        "supercategory": "mock",
+                    }
+                    for name in category_names
                 ],
                 "annotations": instances,
             },
@@ -325,6 +373,7 @@ def build_mock_dataset(
         "manifest_path": str(manifest_path),
         "annotation_path": str(annotation_path) if annotation_path else None,
         "instances_path": str(instances_path),
+        "declared_categories": category_names,
         "object_annotations": object_annotations,
         "visual_only_image_ids": sorted(visual_only_image_ids),
         "world": world,
@@ -592,6 +641,7 @@ def run_mock_pilot(
 
     import torch as _torch
 
+    from jlens.mmpilot import concepts as concepts_module
     from jlens.mmpilot import evidence as evidence_module
     from jlens.mmpilot import expansion as expansion_module
     from jlens.mmpilot import manifest as manifest_module
@@ -625,9 +675,17 @@ def run_mock_pilot(
         [s for s in annotation_sources if s.source_kind == "coco_object_annotation"],
     )
 
+    # The candidate universe comes from the annotation file, not from
+    # MOCK_CONCEPTS: the mock exercises the same discovery the real path uses,
+    # so the two cannot drift apart.
+    universe = concepts_module.discover_category_universe(
+        [s for s in annotation_sources if s.source_kind == "coco_object_annotation"]
+    )
+    candidate_concepts = universe.lexicon()
+
     # The CPU evidence audit, run in MOCK too so the notebook's audit stage and
     # this path can never drift apart.
-    evidence_config = evidence_module.config_for_concepts(MOCK_CONCEPTS)
+    evidence_config = evidence_module.config_from_specs(universe.specs)
     audit = evidence_module.audit_groups(
         groups,
         config=evidence_config,
@@ -648,7 +706,10 @@ def run_mock_pilot(
         conversion=conversion,
     )
     ranking = expansion_module.rank_concepts(
-        groups, MOCK_CONCEPTS, groups_per_concept=6, evidence_config=evidence_config
+        groups,
+        candidate_concepts,
+        groups_per_concept=6,
+        evidence_config=evidence_config,
     )
     evidence_module.persist_concept_ranking(
         run_dir / "concept_ranking.json",
@@ -657,10 +718,21 @@ def run_mock_pilot(
         requirements=expansion_module.ConceptRequirements().to_dict(),
         conversion=conversion,
     )
+    # Every feasible concept, not the pilot's top two: this path exists to
+    # exercise the pipeline, and a richer world gives retrieval and the
+    # intervention controls something to fail at. The *selection* is still the
+    # ranking's, so discovery and ranking are exercised rather than bypassed.
+    selected_names = expansion_module.select_concepts(
+        ranking,
+        n_concepts=2,
+        max_concepts=len(ranking),
+        total_synchronized_records=len(groups),
+    )
+    selected_concepts = {name: candidate_concepts[name] for name in selected_names}
 
     subset = manifest_module.build_subset(
         groups,
-        MOCK_CONCEPTS,
+        selected_concepts,
         groups_per_concept=6,
         negatives_per_concept=6,
         evidence_config=evidence_config,
@@ -675,7 +747,7 @@ def run_mock_pilot(
         mode="mock",
         layers=MOCK_LAYERS,
         causal_layers=(MOCK_LAYERS[-1],),
-        concepts=tuple(sorted(MOCK_CONCEPTS)),
+        concepts=tuple(sorted(selected_concepts)),
         pursuit_k=8,
         pursuit_correlation_chunk_size=None,
         direction_top_k=4,

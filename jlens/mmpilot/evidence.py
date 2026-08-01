@@ -57,17 +57,21 @@ class IncompatibleEvidenceStateError(RuntimeError):
 
 # --------------------------------------------------------------- the lexicon
 
-#: Canonical concept -> the written terms that count as expressing it.
+#: **Not the pilot's candidate universe.** A six-entry fallback kept so callers
+#: that build an :class:`EvidenceConfig` without supplying concepts still get a
+#: working lexicon, and so the older tests keep a fixed reference point.
 #:
-#: Deliberately small and boring. Every entry is the concept word itself, its
-#: plural, or a synonym a careful reader would accept without argument
-#: (a *kitten* is a cat; a *puppy* is a dog). Nothing here is a guess about
-#: what a caption "probably means".
+#: The pilot discovers its candidates from the local COCO ``instances_*.json``
+#: files — see :mod:`jlens.mmpilot.concepts`. Screening a handful of concepts
+#: picked before anyone looked at the data decided, in advance, the question the
+#: audit exists to ask.
 #:
 #: Known limitation, stated rather than hidden: whole-word matching has no
 #: part-of-speech sense, so "train for a marathon" matches ``train``. That is
 #: why :func:`format_examples` prints matched captions with their spans before
-#: any model pass — the lexicon is meant to be *checked*, not trusted.
+#: any model pass — the lexicon is meant to be *checked*, not trusted, and why
+#: :mod:`jlens.mmpilot.concepts` carries an explicit ambiguity status per
+#: category.
 CONCEPT_LEXICON: dict[str, tuple[str, ...]] = {
     "bus": ("bus", "buses", "busses"),
     "cat": ("cat", "cats", "kitten", "kittens", "kitty", "kitties"),
@@ -128,13 +132,39 @@ def find_term(normalized_caption: str, term: str) -> tuple[int, int] | None:
     """First whole-word match span of ``term``, or ``None``.
 
     Substring hits never count: ``cat`` does not match ``cattle`` and ``bus``
-    does not match ``business``.
+    does not match ``business``. Multi-word terms are matched as whole phrases,
+    so ``remote control`` fires on the phrase and never on ``remote`` alone.
     """
     pattern = _term_pattern(term)
     if pattern is None:
         return None
     match = pattern.search(normalized_caption)
     return (match.start(), match.end()) if match else None
+
+
+def find_term_spans(normalized_caption: str, term: str) -> list[tuple[int, int]]:
+    """Every whole-word / whole-phrase match span of ``term``."""
+    pattern = _term_pattern(term)
+    if pattern is None:
+        return []
+    return [(m.start(), m.end()) for m in pattern.finditer(normalized_caption)]
+
+
+def excluded_spans(
+    normalized_caption: str, exclusions: Sequence[str]
+) -> list[tuple[int, int, str]]:
+    """Spans covered by an exclusion phrase, with the phrase that covered them.
+
+    An exclusion is how one category's term is kept out of another category's
+    phrase without weakening either: ``dog`` excludes ``hot dog``, so "two hot
+    dogs on a bun" carries no ``dog`` evidence, while a caption that also says
+    "a dog begging for one" still does.
+    """
+    out: list[tuple[int, int, str]] = []
+    for phrase in exclusions:
+        for start, end in find_term_spans(normalized_caption, phrase):
+            out.append((start, end, phrase))
+    return sorted(out)
 
 
 # ---------------------------------------------------------------- the config
@@ -147,6 +177,13 @@ class EvidenceConfig:
     Args:
         lexicon: Concept -> approved written terms.
         coco_categories: Concept -> official COCO object category names.
+        exclusions: Concept -> phrases that void a term match falling inside
+            them. ``{"dog": ("hot dog",)}`` keeps "two hot dogs" from counting
+            as a ``dog`` mention without weakening the term ``dog`` itself.
+        ambiguity: Concept -> its lexical ambiguity status, carried so the
+            ranking can prefer unambiguous concepts and so a run's artifacts
+            record which concepts were flagged. See
+            :mod:`jlens.mmpilot.concepts`.
         require_visual_evidence: A positive must carry a COCO annotation.
         require_caption_evidence: A positive must carry a caption term match.
 
@@ -161,16 +198,24 @@ class EvidenceConfig:
     coco_categories: Mapping[str, tuple[str, ...]] = field(
         default_factory=lambda: {k: tuple(v) for k, v in CONCEPT_COCO_CATEGORIES.items()}
     )
+    exclusions: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    ambiguity: Mapping[str, str] = field(default_factory=dict)
     require_visual_evidence: bool = True
     require_caption_evidence: bool = True
     normalization: str = "nfkc_casefold_alnum_whole_word"
-    matching: str = "explicit_lexicon_whole_word_regex"
+    matching: str = "explicit_lexicon_whole_word_or_phrase_regex_with_exclusions"
 
     def terms_for(self, concept: str) -> tuple[str, ...]:
         return tuple(self.lexicon.get(concept, (concept,)))
 
     def categories_for(self, concept: str) -> tuple[str, ...]:
         return tuple(self.coco_categories.get(concept, (concept,)))
+
+    def exclusions_for(self, concept: str) -> tuple[str, ...]:
+        return tuple(self.exclusions.get(concept, ()))
+
+    def ambiguity_of(self, concept: str) -> str:
+        return str(self.ambiguity.get(concept, "clean"))
 
     @property
     def concepts(self) -> tuple[str, ...]:
@@ -183,6 +228,8 @@ class EvidenceConfig:
             "coco_categories": {
                 k: list(v) for k, v in sorted(self.coco_categories.items())
             },
+            "exclusions": {k: list(v) for k, v in sorted(self.exclusions.items())},
+            "ambiguity": dict(sorted(self.ambiguity.items())),
             "require_visual_evidence": self.require_visual_evidence,
             "require_caption_evidence": self.require_caption_evidence,
             "normalization": self.normalization,
@@ -193,13 +240,14 @@ class EvidenceConfig:
 
     @property
     def lexicon_hash(self) -> str:
-        """Hash of the lexicon and categories alone (not the flags)."""
+        """Hash of the lexicon, categories and exclusions (not the flags)."""
         return payload_checksum(
             {
                 "lexicon": {k: list(v) for k, v in sorted(self.lexicon.items())},
                 "coco_categories": {
                     k: list(v) for k, v in sorted(self.coco_categories.items())
                 },
+                "exclusions": {k: list(v) for k, v in sorted(self.exclusions.items())},
             }
         )
 
@@ -234,6 +282,44 @@ def config_for_concepts(
         for name in concepts
     }
     return EvidenceConfig(lexicon=lexicon, coco_categories=categories, **flags)
+
+
+def config_from_specs(specs: Mapping[str, object], **flags) -> EvidenceConfig:
+    """Build a config straight from :class:`~jlens.mmpilot.concepts.LexicalSpec`.
+
+    This is the path the pilot uses: the concepts, their approved terms, their
+    exclusion phrases and their ambiguity statuses all come from the discovered
+    COCO category universe rather than from a list written by hand. Categories
+    marked ineligible (``excluded``) never enter the config.
+
+    Args:
+        specs: ``{category: LexicalSpec}``. Anything with ``.terms``,
+            ``.exclusions``, ``.ambiguity`` and ``.eligible`` works.
+    """
+    usable = {
+        str(name): spec
+        for name, spec in specs.items()
+        if getattr(spec, "eligible", True) and tuple(getattr(spec, "terms", ()))
+    }
+    if not usable:
+        raise ValueError(
+            "no eligible category carries an approved written term; the "
+            "caption half of the evidence rule cannot be evaluated"
+        )
+    return EvidenceConfig(
+        lexicon={name: tuple(spec.terms) for name, spec in sorted(usable.items())},
+        coco_categories={name: (name,) for name in sorted(usable)},
+        exclusions={
+            name: tuple(spec.exclusions)
+            for name, spec in sorted(usable.items())
+            if tuple(getattr(spec, "exclusions", ()))
+        },
+        ambiguity={
+            name: str(getattr(spec, "ambiguity", "clean"))
+            for name, spec in sorted(usable.items())
+        },
+        **flags,
+    )
 
 
 def has_any_evidence(group: Mapping, concept: str, config: EvidenceConfig) -> bool:
@@ -276,12 +362,33 @@ def visual_evidence(group: Mapping, concept: str, config: EvidenceConfig) -> dic
 
 
 def caption_evidence(group: Mapping, concept: str, config: EvidenceConfig) -> dict:
-    """Whole-word lexicon evidence for ``concept`` in this group's caption."""
+    """Whole-word / whole-phrase lexicon evidence in this group's caption.
+
+    A match is *voided* when its span falls entirely inside an exclusion phrase
+    for the concept. That is how ``dog`` and ``hot dog`` coexist: "two hot dogs
+    on a plate" carries no ``dog`` evidence, while "a dog next to two hot dogs"
+    still does, because the second ``dog`` span lies outside the phrase.
+    """
     caption = str(group.get("caption", "") or "")
     normalized = normalize_caption(caption)
+    exclusions = config.exclusions_for(concept)
+    blocked = excluded_spans(normalized, exclusions)
+    voided: list[dict] = []
     for term in config.terms_for(concept):
-        span = find_term(normalized, term)
-        if span is not None:
+        for span in find_term_spans(normalized, term):
+            covering = next(
+                (
+                    phrase
+                    for start, end, phrase in blocked
+                    if start <= span[0] and span[1] <= end
+                ),
+                None,
+            )
+            if covering is not None:
+                voided.append(
+                    {"term": term, "span": list(span), "excluded_by": covering}
+                )
+                continue
             return {
                 "present": True,
                 "matched_term": term,
@@ -289,6 +396,9 @@ def caption_evidence(group: Mapping, concept: str, config: EvidenceConfig) -> di
                 "matched_text": normalized[span[0] : span[1]],
                 "normalized_caption": normalized,
                 "terms_considered": list(config.terms_for(concept)),
+                "exclusions_applied": list(exclusions),
+                "voided_matches": voided,
+                "ambiguity": config.ambiguity_of(concept),
                 "source": "caption_lexicon_whole_word",
             }
     return {
@@ -298,6 +408,9 @@ def caption_evidence(group: Mapping, concept: str, config: EvidenceConfig) -> di
         "matched_text": None,
         "normalized_caption": normalized,
         "terms_considered": list(config.terms_for(concept)),
+        "exclusions_applied": list(exclusions),
+        "voided_matches": voided,
+        "ambiguity": config.ambiguity_of(concept),
         "source": "caption_lexicon_whole_word",
     }
 
@@ -376,6 +489,7 @@ def group_evidence(group: Mapping, concept: str, config: EvidenceConfig) -> dict
         },
         "is_valid_synchronized_positive": valid,
         "rejection_reason": None if valid else reason,
+        "lexical_ambiguity": config.ambiguity_of(concept),
         "evidence_rule": "visual_annotation_AND_caption_lexicon",
         "lexicon_hash": config.lexicon_hash,
         "config_fingerprint": config.fingerprint,
@@ -829,8 +943,11 @@ __all__ = [
     "audit_groups",
     "caption_evidence",
     "config_for_concepts",
+    "config_from_specs",
     "default_config",
+    "excluded_spans",
     "find_term",
+    "find_term_spans",
     "format_examples",
     "format_rejection_counts",
     "group_evidence",
