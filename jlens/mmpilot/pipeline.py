@@ -46,6 +46,11 @@ from jlens.mmpilot.jspace import (
     jspace_code,
     representational_report,
 )
+from jlens.mmpilot.reconstruction import (
+    ReconstructionControlConfig,
+    reconstruction_control_record,
+    summarize_reconstruction_controls,
+)
 from jlens.mmpilot.report import code_statistics, gonogo_report
 from jlens.mmpilot.store import UnitStore, safe_key
 from jlens.pursuit import PursuitSettings
@@ -334,6 +339,81 @@ def stage_codes(
         outcome.computed += 1
         outcome.records.append(code)
     return outcome
+
+
+# --------------------------------------------------- stage 6b: random control
+
+
+def stage_reconstruction_control(
+    store: UnitStore,
+    activations: Sequence[Mapping],
+    dictionaries: Mapping[int, object],
+    config: PilotConfig,
+    *,
+    lens_checksum: str,
+    control_config: ReconstructionControlConfig | None = None,
+    primary_layer: int | None = None,
+) -> tuple[StageOutcome, dict]:
+    """Compare the frozen lens against matched random directions.
+
+    Held-out **text** activations only: the lens was calibrated on text, so
+    text is where "does this basis beat noise" is a fair question, and keeping
+    the diagnostic small is deliberate.
+
+    This replaces the pilot's old absolute reconstruction gate. Explaining a
+    small share of an activation is expected of a sparse workspace — the
+    published J-space result puts the median around 6-7% — so the criterion is
+    excess over a matched control, not an absolute level.
+    """
+    control_config = control_config or ReconstructionControlConfig()
+    settings = config.pursuit_settings()
+    outcome = StageOutcome()
+    per_layer: dict[int, int] = {}
+    candidates = sorted(
+        (
+            record
+            for record in activations
+            if record["modality"] == "text"
+            and record["split"] == "test"
+            and int(record["layer"]) in dictionaries
+        ),
+        key=lambda record: (int(record["layer"]), record["sample_id"]),
+    )
+    for record in candidates:
+        layer = int(record["layer"])
+        seen = per_layer.get(layer, 0)
+        if seen >= control_config.max_samples_per_layer:
+            continue
+        per_layer[layer] = seen + 1
+        key = safe_key(record["sample_id"], f"L{layer}", "control")
+        cached = store.load("reconstruction_control", key)
+        if cached is not None:
+            outcome.reused += 1
+            outcome.records.append(cached)
+            continue
+        computed = reconstruction_control_record(
+            activation_tensor(record),
+            dictionaries[layer],
+            settings,
+            config=control_config,
+            sample_id=record["sample_id"],
+            layer=layer,
+            modality=record["modality"],
+            split=record["split"],
+            activation_checksum=record["activation_checksum"],
+            lens_checksum=lens_checksum,
+        )
+        store.save("reconstruction_control", key, computed)
+        outcome.computed += 1
+        outcome.records.append(computed)
+
+    summary = summarize_reconstruction_controls(
+        outcome.records,
+        config=control_config,
+        primary_layer=primary_layer if primary_layer is not None else config.layers[-1],
+    )
+    store.save("metric", "reconstruction_control", summary)
+    return outcome, summary
 
 
 # ------------------------------------------------------------------ stage 7
@@ -639,6 +719,7 @@ def stage_report(
     interventions: Mapping,
     invariance: Mapping | None,
     blocked_modalities: Sequence[str],
+    reconstruction_control: Mapping | None = None,
     manifest_audit: Mapping | None = None,
 ) -> tuple[str, dict]:
     """Write ``report.md`` and ``summary.json`` into the run directory."""
@@ -652,6 +733,7 @@ def stage_report(
         representational=representational,
         interventions=interventions,
         invariance=invariance,
+        reconstruction_control=reconstruction_control,
         blocked_modalities=blocked_modalities,
         manifest_audit=manifest_audit,
     )
@@ -676,6 +758,7 @@ __all__ = [
     "stage_capability",
     "stage_causal",
     "stage_codes",
+    "stage_reconstruction_control",
     "stage_directions",
     "stage_report",
     "stage_representational",

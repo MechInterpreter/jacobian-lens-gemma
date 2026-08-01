@@ -37,6 +37,7 @@ STAGES = (
     "capability",
     "activation",
     "jspace",
+    "reconstruction_control",
     "direction",
     "intervention",
     "metric",
