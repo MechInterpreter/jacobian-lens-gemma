@@ -33,6 +33,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from jlens.mmpilot.concepts import AMBIGUITY_SCORE as _AMBIGUITY_SCORE
 from jlens.mmpilot.evidence import (
     EvidenceConfig,
     caption_evidence,
@@ -722,6 +723,156 @@ def _group_matches(
     return False, record["rejection_reason"]
 
 
+#: Weights of the ranking score's components. Fixed constants, documented in
+#: :func:`concept_score`, not tuned against any result. They sum to
+#: :data:`MAX_CONCEPT_SCORE`.
+SCORE_WEIGHTS: dict[str, float] = {
+    "images": 3.0,
+    "groups": 2.0,
+    "split": 1.5,
+    "negatives": 1.0,
+    "speakers": 1.0,
+    "precision": 2.0,
+    "ambiguity": 1.5,
+    "independence": 1.0,
+}
+MAX_CONCEPT_SCORE = sum(SCORE_WEIGHTS.values())
+
+#: Saturation points. Beyond these, more of the same buys nothing — the pilot
+#: needs *enough* independent images, not the most frequent category.
+IMAGE_SATURATION = 12
+GROUP_SATURATION = 12
+NEGATIVE_SATURATION = 24
+SPEAKER_SATURATION = 3
+HEADROOM_SATURATION = 4
+
+#: How much each lexical-ambiguity status is trusted. Mirrors
+#: :data:`jlens.mmpilot.concepts.AMBIGUITY_SCORE`, duplicated as a fallback so
+#: a config carrying a status this module has not seen still scores something
+#: conservative rather than raising.
+AMBIGUITY_SCORE = dict(_AMBIGUITY_SCORE)
+
+
+def _saturating(value: float, cap: float) -> float:
+    return min(max(float(value), 0.0) / float(cap), 1.0) if cap else 0.0
+
+
+def concept_score(row: Mapping) -> dict:
+    """The deterministic ranking score for one coverage row, and its parts.
+
+    Feasible concepts are ordered by this score, **not** by raw frequency. The
+    most frequent COCO category is ``person``, which is annotated on most images
+    and therefore discriminates nothing; ranking by count alone would put it
+    first. Each component is a saturating ratio in ``[0, 1]``, multiplied by a
+    fixed weight:
+
+    ``images`` (3.0)
+        Distinct images that are a valid positive for this concept **alone**,
+        saturating at :data:`IMAGE_SATURATION`. Independent images are what the
+        statistics actually need, so this is the heaviest term.
+    ``groups`` (2.0)
+        Synchronized caption-confirmed groups the split will really select,
+        saturating at :data:`GROUP_SATURATION`.
+    ``split`` (1.5)
+        Headroom above the train and held-out minimums, half each — a concept
+        that clears them with room to spare survives a lost media file.
+    ``negatives`` (1.0)
+        Clean matched negatives available, saturating at
+        :data:`NEGATIVE_SATURATION`.
+    ``speakers`` (1.0)
+        Distinct speakers among the concept's groups, saturating at
+        :data:`SPEAKER_SATURATION`. Speaker metadata is often absent, in which
+        case every concept scores zero here and the term drops out.
+    ``precision`` (2.0)
+        Share of this concept's caption mentions that the COCO annotation also
+        backs. A term that fires on captions whose images do not contain the
+        object is imprecise, and this is the only precision signal available
+        without labelling anything by hand.
+    ``ambiguity`` (1.5)
+        From the lexical specification: ``clean`` 1.0 down to ``ambiguous``
+        0.4. See :mod:`jlens.mmpilot.concepts`.
+    ``independence`` (1.0)
+        ``1 - max co-occurrence fraction``: how much this concept depends on
+        one other category being in the same pictures. A concept whose images
+        always also contain ``person`` cannot be isolated from it.
+
+    Every input is an integer count or an exactly-representable ratio, and the
+    result is rounded to six decimals, so the ordering is reproducible across
+    machines.
+    """
+    parts = {
+        "images": _saturating(row.get("n_distinct_images", 0), IMAGE_SATURATION),
+        "groups": _saturating(row.get("n_groups_selected", 0), GROUP_SATURATION),
+        "split": 0.5
+        * (
+            _saturating(row.get("train_headroom", 0), HEADROOM_SATURATION)
+            + _saturating(row.get("test_headroom", 0), HEADROOM_SATURATION)
+        ),
+        "negatives": _saturating(row.get("n_negative_groups", 0), NEGATIVE_SATURATION),
+        "speakers": _saturating(row.get("n_speakers", 0), SPEAKER_SATURATION),
+        "precision": min(max(float(row.get("lexical_precision", 0.0)), 0.0), 1.0),
+        "ambiguity": AMBIGUITY_SCORE.get(row.get("lexical_ambiguity", "clean"), 0.4),
+        "independence": 1.0
+        - min(max(float(row.get("max_cooccurrence_fraction", 0.0)), 0.0), 1.0),
+    }
+    total = sum(SCORE_WEIGHTS[name] * value for name, value in parts.items())
+    return {
+        "score": round(total, 6),
+        "components": {name: round(value, 6) for name, value in sorted(parts.items())},
+        "weights": dict(sorted(SCORE_WEIGHTS.items())),
+        "max_score": MAX_CONCEPT_SCORE,
+    }
+
+
+def cooccurrence_statistics(
+    image_ids: Sequence[str],
+    by_image: Mapping[str, Sequence[Mapping]],
+    concept: str,
+    *,
+    top_n: int = 5,
+) -> dict:
+    """Which other COCO categories share this concept's images, and how often.
+
+    Read off the object annotations already attached to each group. A concept
+    whose every image also carries one ubiquitous category (``person``, in
+    COCO) cannot be separated from it by a contrast over those images, so the
+    ranking penalises it.
+    """
+    counts: dict[str, int] = {}
+    total = 0
+    for image_id in image_ids:
+        groups = by_image.get(image_id) or []
+        labels = {
+            str(label).casefold()
+            for group in groups
+            for label in (group.get("concept_annotations") or [])
+        }
+        labels.discard(concept.casefold())
+        if not groups:
+            continue
+        total += 1
+        for label in labels:
+            counts[label] = counts.get(label, 0) + 1
+    if not total:
+        return {
+            "n_images": 0,
+            "top": [],
+            "max_fraction": 0.0,
+            "dominant_category": None,
+        }
+    ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    top = [
+        {"category": name, "n_images": count, "fraction": round(count / total, 6)}
+        for name, count in ranked[:top_n]
+    ]
+    return {
+        "n_images": total,
+        "top": top,
+        "max_fraction": top[0]["fraction"] if top else 0.0,
+        "dominant_category": top[0]["category"] if top else None,
+    }
+
+
 def rank_concepts(
     groups: Sequence[Mapping],
     concepts: Mapping[str, Sequence[str]],
@@ -741,9 +892,16 @@ def rank_concepts(
     ``n_caption_evidence_groups``) so a concept short on written evidence is
     visible as such rather than as a bare shortfall.
 
-    Ordering is feasibility first, then distinct images, then synchronized
-    groups, then speakers, then name — deterministic, and biased toward the
-    quantity that actually limits this pilot (independent images).
+    Ordering is **feasibility first**, then the deterministic
+    :func:`concept_score`, then distinct images, groups and name as tiebreaks.
+    Ranking by raw frequency would put COCO's most common category first
+    regardless of whether it can discriminate anything; the score weighs
+    coverage against speaker diversity, split headroom, clean negatives,
+    lexical precision, ambiguity and co-occurrence independence instead.
+
+    The scientific minimums in ``requirements`` are applied *before* the score
+    and are never relaxed by it: a high-scoring concept that misses a threshold
+    is still infeasible.
 
     Each row carries ``unmet``: the named requirements it failed, so a
     DATASET NO-GO can say exactly what was short.
@@ -842,65 +1000,103 @@ def rank_concepts(
             evidence_gap = "caption evidence without any COCO object annotation"
         else:
             evidence_gap = ""
-        rows.append(
-            {
-                "concept": concept,
-                "n_distinct_images": len(pure),
-                "n_groups": len(concept_groups),
-                "n_speakers": len(speakers),
-                "n_annotated_images": len(annotated_images),
-                "n_caption_evidence_groups": len(caption_groups),
-                "n_valid_synchronized_groups": len(valid_groups),
-                "annotation_source": "coco_object_annotation_and_caption_lexicon",
-                "evidence_rule": "visual_annotation_AND_caption_lexicon",
-                "evidence_lexicon_hash": config.lexicon_hash,
-                "eligible_train_positives": plan["n_train_positives"],
-                "eligible_held_out_positives": plan["n_test_positives"],
-                "matched_negatives": n_negative_groups,
-                "split_feasible": not any(item.startswith(("distinct_images", "synchronized_groups", "train_positives", "test_positives")) for item in unmet),
-                "n_negative_groups": n_negative_groups,
-                "n_negative_images": len(negative_images),
-                **plan,
-                "feasible": not unmet,
-                "unmet": unmet,
-                "evidence_gap": evidence_gap,
-                "rejection_reason": "; ".join([*unmet, evidence_gap] if evidence_gap else unmet),
-            }
+        # Lexical precision: of the groups whose caption fires this concept's
+        # terms, how many does the COCO annotation actually back? A term that
+        # matches captions of images without the object is imprecise, and this
+        # is the only precision signal available without hand labelling.
+        lexical_precision = (
+            round(len(valid_groups) / len(caption_groups), 6) if caption_groups else 0.0
         )
+        cooccurrence = cooccurrence_statistics(pure, by_image, concept)
+        row = {
+            "concept": concept,
+            "n_distinct_images": len(pure),
+            "n_groups": len(concept_groups),
+            "n_speakers": len(speakers),
+            "n_annotated_images": len(annotated_images),
+            "n_caption_evidence_groups": len(caption_groups),
+            "n_valid_synchronized_groups": len(valid_groups),
+            "annotation_source": "coco_object_annotation_and_caption_lexicon",
+            "evidence_rule": "visual_annotation_AND_caption_lexicon",
+            "evidence_lexicon_hash": config.lexicon_hash,
+            "lexical_ambiguity": config.ambiguity_of(concept),
+            "lexical_terms": list(config.terms_for(concept)),
+            "lexical_exclusions": list(config.exclusions_for(concept)),
+            "lexical_precision": lexical_precision,
+            "eligible_train_positives": plan["n_train_positives"],
+            "eligible_held_out_positives": plan["n_test_positives"],
+            "matched_negatives": n_negative_groups,
+            "train_headroom": plan["n_train_positives"] - requirements.min_train_positives,
+            "test_headroom": plan["n_test_positives"] - requirements.min_test_positives,
+            "split_feasible": not any(item.startswith(("distinct_images", "synchronized_groups", "train_positives", "test_positives")) for item in unmet),
+            "n_negative_groups": n_negative_groups,
+            "n_negative_images": len(negative_images),
+            "cooccurrence": cooccurrence,
+            "max_cooccurrence_fraction": cooccurrence["max_fraction"],
+            "dominant_cooccurring_category": cooccurrence["dominant_category"],
+            **plan,
+            "feasible": not unmet,
+            "unmet": unmet,
+            "evidence_gap": evidence_gap,
+            "rejection_reason": "; ".join([*unmet, evidence_gap] if evidence_gap else unmet),
+        }
+        row["ranking"] = concept_score(row)
+        row["score"] = row["ranking"]["score"]
+        rows.append(row)
+    # Feasibility first — the scientific minimums are a gate, not a term in the
+    # score — then the documented score, then coverage, then the name, so the
+    # order is total and reproducible.
     rows.sort(
         key=lambda row: (
             not row["feasible"],
+            -row["score"],
             -row["n_distinct_images"],
-            -row["n_groups"],
-            -row["n_speakers"],
+            -row["n_groups_selected"],
             row["concept"],
         )
     )
+    for position, row in enumerate(rows, start=1):
+        row["rank"] = position
     return rows
 
 
-def format_ranking_table(rows: Sequence[Mapping]) -> str:
-    """A fixed-width ranked table, printed before any concept is selected.
+def format_ranking_table(rows: Sequence[Mapping], *, limit: int | None = None) -> str:
+    """The complete ranked coverage table, printed before any concept is chosen.
 
-    ``annot`` and ``capt`` are the two halves of the evidence rule: annotated
-    images, and groups whose written caption carries the concept. ``images``
-    and ``groups`` count only what satisfies **both**.
+    Columns: ``images`` and ``groups`` count only what satisfies **both** halves
+    of the evidence rule, while ``annot`` and ``capt`` show the two halves
+    separately, so ``annot >> images`` is visible as "the pictures exist but the
+    captions do not name them". ``prec`` is lexical precision, ``coocc`` the
+    largest single co-occurring-category fraction, ``amb`` the lexical ambiguity
+    status, and ``score`` the deterministic ranking score from
+    :func:`concept_score`.
+
+    Rejected concepts are included with their reasons — that is the point of
+    printing the whole table rather than the survivors.
     """
     header = (
-        f"{'concept':12s} {'images':>6s} {'groups':>6s} {'annot':>6s} {'capt':>5s} "
-        f"{'spk':>4s} {'train+':>6s} {'test+':>5s} {'neg':>4s} {'split':>5s} {'ok':>2s} rejection"
+        f"{'#':>3s} {'concept':16s} {'score':>6s} {'images':>6s} {'groups':>6s} "
+        f"{'annot':>6s} {'capt':>5s} {'spk':>4s} {'train+':>6s} {'test+':>5s} "
+        f"{'neg':>4s} {'prec':>5s} {'coocc':>6s} {'amb':<20s} {'split':>5s} {'ok':>2s} rejection"
     )
     lines = [header, "-" * len(header)]
-    for row in rows:
+    shown = rows if limit is None else rows[:limit]
+    for row in shown:
         lines.append(
-            f"{row['concept']:12s} {row['n_distinct_images']:6d} "
+            f"{row.get('rank', 0):3d} {row['concept'][:16]:16s} "
+            f"{row.get('score', 0.0):6.3f} {row['n_distinct_images']:6d} "
             f"{row['n_groups_selected']:6d} {row.get('n_annotated_images', 0):6d} "
             f"{row.get('n_caption_evidence_groups', 0):5d} {row['n_speakers']:4d} "
             f"{row['n_train_positives']:6d} {row['n_test_positives']:5d} "
-            f"{row['n_negative_groups']:4d} "
-            f"{'yes' if row['split_feasible'] else 'no':>5s} {'ok' if row['feasible'] else 'NO':>2s} "
+            f"{row['n_negative_groups']:4d} {row.get('lexical_precision', 0.0):5.2f} "
+            f"{row.get('max_cooccurrence_fraction', 0.0):6.2f} "
+            f"{row.get('lexical_ambiguity', 'clean')[:20]:<20s} "
+            f"{'yes' if row['split_feasible'] else 'no':>5s} "
+            f"{'ok' if row['feasible'] else 'NO':>2s} "
             f"{row.get('rejection_reason') or '; '.join(row['unmet'])}"
         )
+    if limit is not None and len(rows) > limit:
+        lines.append(f"... and {len(rows) - limit} more rows (all infeasible)")
     return "\n".join(lines)
 
 
@@ -915,11 +1111,16 @@ def select_concepts(
 ) -> list[str]:
     """Feasible concepts, or a DATASET NO-GO.
 
+    ``rows`` must already be ordered by :func:`rank_concepts`, so "the feasible
+    ones, in order" is the documented deterministic ranking and not an accident
+    of dictionary iteration.
+
     Args:
         n_concepts: The **minimum** number of feasible concepts required. Fewer
             than this is a DATASET NO-GO.
         max_concepts: How many to return when more are feasible. Defaults to
-            ``n_concepts``. The pilot screens up to four and requires two.
+            ``n_concepts``. The pilot screens every discovered COCO category and
+            takes the top two feasible ones.
 
     Raises:
         DatasetCoverageError: If fewer than ``n_concepts`` concepts clear the
@@ -938,7 +1139,7 @@ def select_concepts(
             f"Coverage cause: {coverage_cause}\n"
             "Smallest additional coverage required is shown by each '<' shortfall in the table; at minimum two concepts must each reach 6 images/groups, 4 train positives and 2 held-out positives, with 6 negatives.\n\n"
 
-            f"{format_ranking_table(rows)}\n\n"
+            f"{format_ranking_table(rows, limit=25)}\n\n"
             f"Requirements applied: {requirements.to_dict()}\n\n"
             "A positive requires BOTH the COCO object annotation AND the "
             "concept (or an approved synonym) in the written caption. Where "
