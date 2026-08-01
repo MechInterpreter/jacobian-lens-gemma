@@ -18,6 +18,10 @@ visibly rather than through a back door the notebook itself would have to
 honour. Without it the committed defaults run, which is how the CPU-only path
 is tested.
 
+Two environment variables redirect the notebook's Drive-shaped paths at a
+temporary directory, so the derived-data cache can be exercised end to end
+without a Drive mount: ``MMPILOT_CACHE_ROOT`` and ``MMPILOT_CACHE_STAGING``.
+
 Prints one JSON object on stdout; exits non-zero on the first failing cell.
 
 The leading underscore keeps pytest from collecting this file as a test module.
@@ -70,7 +74,9 @@ def main() -> int:
 
     summary = namespace.get("SUMMARY")
     status = namespace.get("STATUS")
-    audit = namespace["EVIDENCE_AUDIT"]
+    stats = namespace["AUDIT_STATS"]
+    universe = namespace["UNIVERSE"]
+    ranking = namespace["RANKING"]
     print(
         json.dumps(
             {
@@ -86,10 +92,24 @@ def main() -> int:
                 "run_model_stages": namespace["RUN_MODEL_STAGES"],
                 "model_is_none": namespace["MODEL"] is None,
                 "selected_concepts": sorted(namespace["SELECTED_NAMES"]),
-                "n_valid_positives": len(audit.valid_records()),
-                "n_rejected": len(audit.rejected_records()),
-                "rejection_counts": audit.rejection_counts(),
+                "n_valid_positives": stats["n_valid_synchronized_positives"],
+                "n_rejected": stats["n_rejected"],
+                "rejection_counts": namespace["REJECTION_COUNTS"]["total"],
                 "lexicon_hash": namespace["EVIDENCE_CONFIG"].lexicon_hash,
+                # Discovery: what the candidate universe actually was.
+                "discovered_categories": list(universe.categories),
+                "eligible_categories": list(universe.eligible),
+                "excluded_categories": list(universe.excluded),
+                "universe_hash": universe.universe_hash,
+                "lexical_hash": universe.lexical_hash,
+                "ranked_concepts": [row["concept"] for row in ranking],
+                "n_feasible": sum(1 for row in ranking if row["feasible"]),
+                # Cache behaviour.
+                "cache_state": namespace["CACHE_STATE"],
+                "cache_hit": namespace["CACHE_HIT"],
+                "cache_dir": str(namespace["DERIVED_CACHE"].directory),
+                "cache_fingerprint": namespace["CACHE_FINGERPRINT"].digest,
+                "cache_published": namespace["CACHE_PUBLISH"].get("published"),
                 "run_dir": str(namespace["RUN_DIR"]),
                 "leakage_ok": namespace["LEAKAGE"]["ok"],
                 "recommendation": (summary or {}).get("recommendation"),

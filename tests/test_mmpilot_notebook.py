@@ -208,17 +208,29 @@ def test_the_cpu_audit_precedes_authentication_and_model_loading(notebook):
     index = {
         "expansion": next(i for i, c in enumerate(cells) if "build_expanded_manifest" in c),
         "audit": next(i for i, c in enumerate(cells) if "audit_groups(" in c),
+        "discovery": next(
+            i for i, c in enumerate(cells) if "discover_category_universe" in c
+        ),
         "ranking": next(
             i
             for i, c in enumerate(cells)
-            if "concept ranking (valid synchronized positives only)" in c
+            if "RANKED CONCEPT COVERAGE (complete, including rejections)" in c
         ),
         "subset": next(i for i, c in enumerate(cells) if "select_concepts" in c),
         "auth": next(i for i, c in enumerate(cells) if "getpass.getpass" in c),
         "model": next(i for i, c in enumerate(cells) if "load_gemma4" in c),
         "capability": next(i for i, c in enumerate(cells) if "stage_capability" in c),
     }
-    order = ["expansion", "audit", "ranking", "subset", "auth", "model", "capability"]
+    order = [
+        "discovery",
+        "expansion",
+        "audit",
+        "ranking",
+        "subset",
+        "auth",
+        "model",
+        "capability",
+    ]
     positions = [index[name] for name in order]
     assert positions == sorted(positions), index
     # Nothing before the model cell may import a backend or a model loader.
@@ -237,12 +249,70 @@ def test_the_audit_states_the_evidence_rule_and_never_transcribes(notebook):
         assert forbidden not in _code_source(notebook).lower(), forbidden
 
 
-def test_thresholds_are_screened_at_four_and_required_at_two(notebook):
+def test_the_top_two_feasible_concepts_are_selected_and_two_are_required(notebook):
+    """Every discovered category is screened; the top two feasible are taken."""
     source = _code_source(notebook)
-    assert re.search(r"^N_CONCEPTS_TO_SCREEN = 4$", source, re.MULTILINE)
+    assert re.search(r"^N_CONCEPTS_TO_SELECT = 2$", source, re.MULTILINE)
     assert re.search(r"^MIN_CONCEPTS_REQUIRED = 2$", source, re.MULTILINE)
-    assert "max_concepts=2 if TINY_SMOKE else N_CONCEPTS_TO_SCREEN" in source
+    assert "max_concepts=2 if TINY_SMOKE else N_CONCEPTS_TO_SELECT" in source
     assert "n_concepts=2 if TINY_SMOKE else MIN_CONCEPTS_REQUIRED" in source
+    assert re.search(r"^GROUPS_PER_CONCEPT = 6$", source, re.MULTILINE)
+
+
+def test_the_six_concept_seed_list_is_gone(notebook):
+    """The candidate universe is discovered, not the old handpicked six."""
+    source = _code_source(notebook)
+    assert "CONCEPT_LEXICON" not in source, "the seed lexicon must not be imported"
+    assert "discover_category_universe" in source
+    assert "config_from_specs" in source
+    assert "UNIVERSE.lexicon()" in source
+    # No literal candidate mapping survives anywhere in the notebook.
+    for seed in ("horse", "pizza"):
+        assert f'"{seed}":' not in source, seed
+    prose = " ".join(_source(notebook).split()).lower()
+    assert "instances_train*.json" in prose or "instances_*.json" in prose
+    assert "discovered, not assumed" in prose or "discovered here, not listed" in prose
+
+
+def test_the_scientific_minimums_are_stated_and_not_lowered(notebook):
+    prose = " ".join(_source(notebook).split()).lower()
+    assert "never lowered automatically" in prose
+    assert "dataset no-go" in prose
+    for minimum in ("6 distinct images", "4 source-training positives", "2 held-out positives"):
+        assert minimum in prose, minimum
+
+
+def test_the_derived_cache_is_fingerprinted_and_published_safely(notebook):
+    source = _code_source(notebook)
+    for expected in (
+        "DERIVED_CACHE_ROOT",
+        "cstf_spokencoco_derived/jlens_mmpilot_v1",
+        "build_fingerprint",
+        "DerivedCache(",
+        "DERIVED_CACHE.describe()",
+        "DERIVED_CACHE.state()",
+        "DERIVED_CACHE.load()",
+        "DERIVED_CACHE.publish(",
+        "probe_media",
+        "subset_to_relative",
+        "subset_to_absolute",
+        "STATE_INCOMPATIBLE",
+    ):
+        assert expected in source, expected
+    for artifact in (
+        "metadata.json",
+        "concept_coverage.json",
+        "concept_evidence_index.jsonl.gz",
+        "rejected_evidence_counts.json",
+        "selected_concepts.json",
+        "pilot_subset.json",
+        "split_provenance.json",
+    ):
+        assert artifact in source, artifact
+    # An incompatible fingerprint stops the run rather than being reused.
+    assert "Refusing to reuse them" in source
+    prose = " ".join(_source(notebook).split())
+    assert "_SUCCESS.json` is written last" in prose or "_SUCCESS.json is written last" in prose
 
 
 def test_derived_evidence_artifacts_are_written_to_the_run_directory(notebook):
@@ -404,18 +474,24 @@ def test_the_test_environment_really_is_clean(tmp_path):
     assert "No module named 'jlens'" in probe.stderr
 
 
-def _run_notebook(tmp_path, *overrides):
+def _run_notebook(tmp_path, *overrides, env=None, run_dir=None, expect_ok=True):
     workdir = tmp_path / "elsewhere"
     workdir.mkdir(exist_ok=True)
+    environment = {**_clean_environment(tmp_path), **(env or {})}
+    if run_dir is not None:
+        environment["MMPILOT_RUN_DIR"] = str(run_dir)
     result = subprocess.run(
         [sys.executable, str(RUNNER), str(NOTEBOOK_PATH), *overrides],
         cwd=workdir,
-        env=_clean_environment(tmp_path),
+        env=environment,
         capture_output=True,
         text=True,
         timeout=900,
     )
-    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr[-3000:]}"
+    if expect_ok:
+        assert result.returncode == 0, (
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr[-3000:]}"
+        )
     return json.loads(result.stdout.strip().splitlines()[-1]), result.stdout
 
 
@@ -511,22 +587,157 @@ def test_full_mock_execution_from_a_clean_environment(tmp_path):
 def test_runtime_expansion_precedes_selection_and_model_scoring(notebook):
     source = _code_source(notebook)
     discovery = source.index("discover_metadata_sources")
-    ranking = source.index("concept ranking (valid synchronized positives only)")
+    ranking = source.index("RANKED CONCEPT COVERAGE (complete, including rejections)")
     capability = source.index("stage_capability")
     assert discovery < ranking < capability
     for expected in (
-        "BASELINE_COVERAGE_SUFFICIENT",
         "max_files=40",
         "max_depth=3",
         "coco_object_annotation",
         "persist_expanded_manifest",
-        "FINAL_MANIFEST_KIND",
-        "expanded_derived",
         "GROUPS_PER_CONCEPT = 6",
-        "N_CONCEPTS_TO_SCREEN = 4",
+        "N_CONCEPTS_TO_SELECT = 2",
         "TINY_SMOKE = False",
     ):
         assert expected in source, expected
+
+
+def test_the_cpu_path_discovers_its_concepts_rather_than_assuming_six(tmp_path):
+    """The candidate universe comes off the local instances file. The mock
+    declares more categories than its world has concepts, exactly as COCO does,
+    so a run that merely rediscovered the seeds would show up here."""
+    report, stdout = _run_notebook(tmp_path)
+
+    discovered = set(report["discovered_categories"])
+    assert {"hot dog", "orange", "person", "remote", "train"} <= discovered
+    assert len(discovered) > len(report["selected_concepts"])
+    # The excluded categories were considered and rejected, not never seen.
+    assert set(report["excluded_categories"]) == {"orange", "person"}
+    assert set(report["eligible_categories"]) == discovered - {"orange", "person"}
+    # Every discovered eligible category was ranked, not just the survivors.
+    assert set(report["ranked_concepts"]) == set(report["eligible_categories"])
+    assert report["n_feasible"] >= 2
+    assert report["universe_hash"].startswith("sha256:")
+    assert report["lexical_hash"].startswith("sha256:")
+
+    assert "CANDIDATE CONCEPT UNIVERSE (discovered, not assumed)" in stdout
+    assert "RANKED CONCEPT COVERAGE (complete, including rejections)" in stdout
+    # Rejections are printed with their reasons.
+    assert "instances_train2014.json" in stdout
+    assert "excluded categories and why" in stdout
+
+
+def test_the_cpu_path_misses_then_hits_the_derived_cache(tmp_path):
+    """The whole point of the cache: the second session does not rescan."""
+    cache_env = {
+        "MMPILOT_CACHE_ROOT": str(tmp_path / "drive_cache"),
+        "MMPILOT_CACHE_STAGING": str(tmp_path / "staging"),
+    }
+    first, first_out = _run_notebook(
+        tmp_path, env=cache_env, run_dir=tmp_path / "run_a"
+    )
+    assert first["cache_state"] == "miss"
+    assert first["cache_hit"] is False
+    assert first["cache_published"] is True
+    assert "cache MISS" in first_out
+
+    published = Path(first["cache_dir"])
+    assert (published / "_SUCCESS.json").is_file()
+    for artifact in (
+        "metadata.json",
+        "concept_coverage.json",
+        "concept_evidence_index.jsonl.gz",
+        "rejected_evidence_counts.json",
+        "selected_concepts.json",
+        "pilot_subset.json",
+        "split_provenance.json",
+    ):
+        assert (published / artifact).is_file(), artifact
+
+    second, second_out = _run_notebook(
+        tmp_path, env=cache_env, run_dir=tmp_path / "run_b"
+    )
+    assert second["cache_state"] == "hit"
+    assert second["cache_hit"] is True
+    assert second["cache_fingerprint"] == first["cache_fingerprint"]
+    assert second["cache_dir"] == first["cache_dir"]
+    assert "cache HIT" in second_out
+    assert "media probes" in second_out
+
+    # The hit produced the same scientific answer without re-deriving it.
+    assert second["selected_concepts"] == first["selected_concepts"]
+    assert second["n_valid_positives"] == first["n_valid_positives"]
+    assert second["rejection_counts"] == first["rejection_counts"]
+    assert second["ranked_concepts"] == first["ranked_concepts"]
+    # And it skipped the expensive stages: no re-derived manifest this time.
+    assert not (tmp_path / "run_b" / "expanded_manifest.json").exists()
+    assert (tmp_path / "run_a" / "expanded_manifest.json").is_file()
+
+
+def test_a_published_cache_stores_no_absolute_paths_and_keeps_sources_intact(tmp_path):
+    cache_env = {
+        "MMPILOT_CACHE_ROOT": str(tmp_path / "drive_cache"),
+        "MMPILOT_CACHE_STAGING": str(tmp_path / "staging"),
+    }
+    instances = (
+        tmp_path / "scratch" / "data" / "coco" / "annotations" / "instances_train2014.json"
+    )
+    report, _ = _run_notebook(tmp_path, env=cache_env, run_dir=tmp_path / "run_a")
+    before = instances.read_bytes()
+    published = Path(report["cache_dir"])
+
+    subset = json.loads((published / "pilot_subset.json").read_text(encoding="utf-8"))
+    assert subset["paths_are_relative"] is True
+    blob = (published / "pilot_subset.json").read_text(encoding="utf-8")
+    assert str(tmp_path) not in blob
+    assert "MyDrive" not in blob
+    rows = [row for rows in subset["splits"].values() for row in rows]
+    assert rows and all("image_path" not in row for row in rows)
+    assert all(row["image_relpath"] for row in rows)
+
+    success = json.loads((published / "_SUCCESS.json").read_text(encoding="utf-8"))
+    assert success["source_metadata_mutated"] is False
+    assert success["credentials_stored"] is False
+    assert str(tmp_path) not in json.dumps(success["fingerprint"])
+
+    # The source annotation file the universe was read from is byte-identical.
+    _run_notebook(tmp_path, env=cache_env, run_dir=tmp_path / "run_b")
+    assert instances.read_bytes() == before
+
+
+def test_an_incompatible_published_cache_stops_the_run(tmp_path):
+    """Compatibility is never inferred from a directory name."""
+    cache_env = {
+        "MMPILOT_CACHE_ROOT": str(tmp_path / "drive_cache"),
+        "MMPILOT_CACHE_STAGING": str(tmp_path / "staging"),
+    }
+    report, _ = _run_notebook(tmp_path, env=cache_env, run_dir=tmp_path / "run_a")
+    success_path = Path(report["cache_dir"]) / "_SUCCESS.json"
+    stored = json.loads(success_path.read_text(encoding="utf-8"))
+    stored["fingerprint_digest"] = "sha256:not-the-one-this-session-computes"
+    success_path.write_text(json.dumps(stored), encoding="utf-8")
+
+    failure, _ = _run_notebook(
+        tmp_path, env=cache_env, run_dir=tmp_path / "run_c", expect_ok=False
+    )
+    assert failure["ok"] is False
+    assert "Refusing to reuse them" in failure["traceback"]
+
+
+def test_an_incomplete_published_cache_is_rebuilt_not_half_read(tmp_path):
+    cache_env = {
+        "MMPILOT_CACHE_ROOT": str(tmp_path / "drive_cache"),
+        "MMPILOT_CACHE_STAGING": str(tmp_path / "staging"),
+    }
+    report, _ = _run_notebook(tmp_path, env=cache_env, run_dir=tmp_path / "run_a")
+    (Path(report["cache_dir"]) / "_SUCCESS.json").unlink()
+
+    rebuilt, stdout = _run_notebook(tmp_path, env=cache_env, run_dir=tmp_path / "run_d")
+    assert rebuilt["cache_state"] == "incomplete"
+    assert rebuilt["cache_hit"] is False
+    assert "no valid success marker" in stdout
+    assert rebuilt["selected_concepts"] == report["selected_concepts"]
+    assert (Path(report["cache_dir"]) / "_SUCCESS.json").is_file()
 
 
 def test_notebook_does_not_download_or_mutate_original_manifest(notebook):

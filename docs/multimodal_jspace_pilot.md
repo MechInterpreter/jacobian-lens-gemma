@@ -24,9 +24,23 @@ checks out, and hard-resets to origin, so a reconnected runtime picks up where
 it left off. A private repo needs a `GITHUB_TOKEN` Colab secret; it is passed
 per invocation as a header override and never written into `.git/config`.
 
-Then run sections 1–16 in order. `RUN_REAL_PILOT` is `False`, so the first pass
-exercises every cell against the synthetic world in about a minute. Set it to
-`True`, restart, and run all to do the real thing.
+Then run sections 1–17 in order. `RUN_REAL_PILOT` is `False`, so the first pass
+exercises every cell against the synthetic world in about a minute.
+
+The workflow is **CPU-first**. Sections 2–6 mount Drive, inspect the source
+paths and metadata, discover the candidate concepts from the local COCO
+annotations, compute the derived-data fingerprint, load a compatible cache or
+build and publish one, and print the ranked coverage table and the selection.
+With `RUN_MODEL_STAGES = False` — the committed default — the notebook stops
+there. None of it needs an L4, and no model is loaded.
+
+Only when the audit reports at least `MIN_CONCEPTS_REQUIRED` feasible concepts,
+and the printed captions really do state their concepts, is it worth switching
+to an L4 and setting `RUN_REAL_PILOT = True` and `RUN_MODEL_STAGES = True` by
+hand. Nothing flips either of them for you.
+
+The first real CPU pass publishes the derived cache; later sessions with the
+same sources hit it and skip straight to the split.
 
 ### Media roots
 
@@ -146,7 +160,7 @@ measure the dataset's pairing, not the model.
 ## Local metadata expansion and coverage gate
 
 The committed 48-record manifest remains immutable. After Drive is mounted,
-section 6 performs a bounded breadth-first search (depth 3, at most 40 candidate
+section 4 performs a bounded breadth-first search (depth 3, at most 40 candidate
 files, at most 512 MiB per file) under the configured SpokenCOCO and COCO roots.
 It considers JSON, JSONL, CSV, and TSV metadata only; it does not recursively
 stat media trees and never downloads anything. Every candidate is printed with
@@ -157,6 +171,131 @@ Synchronized sources must expose deterministic image, caption, and audio fields.
 The converter rejects conflicting audio-to-caption joins and missing explicit
 identifiers; filename-derived identifiers are allowed only when a known metadata
 ID set validates exactly one match.
+
+## The candidate concepts are discovered, not chosen
+
+The pilot used to screen six concepts written down by hand - bus, cat, dog,
+horse, pizza, train. That is arbitrary relative to the dataset: it is not
+derived from the data, cannot be checked against it, and decides in advance the
+question the audit exists to ask.
+
+SpokenCOCO has no concept ontology of its own; it inherits its visual semantics
+from MS COCO, whose `instances_train*.json` / `instances_val*.json` files define
+the object categories the images are actually annotated with. Section 4 reads
+those files on the machine the notebook is running on, records their paths and
+checksums, and treats **every** category in them as a candidate
+(`jlens/mmpilot/concepts.py`). `captions_*.json` is deliberately not matched: it
+carries no categories, and using it would substitute caption text for the visual
+half of the evidence rule.
+
+Each discovered category gets an explicit **lexical specification**: the accepted
+written forms, the forms considered and rejected, the reason in both cases, an
+ambiguity status, and any phrases that void a match. Plurals inflect the head
+word only (`wine glass` -> `wine glasses`), with an irregular table for the cases
+regular rules get wrong; there is no `-fe -> -ves` rule, because it is right for
+`knife` and wrong for `giraffe` and nothing in the spelling distinguishes them.
+
+The ambiguity policy has five statuses, and the ranking reads them:
+
+| status | meaning | examples |
+| --- | --- | --- |
+| `clean` | no non-object sense common in captions | `zebra`, `pizza` |
+| `resolved_by_exclusion` | a real collision, removed exactly by a phrase exclusion | `dog` excludes `hot dog`; `car` excludes `train car` |
+| `alias_only` | the bare name is unusable; only an unambiguous phrase counts | `remote` -> `remote control`; `tie` -> `necktie`; `mouse` -> `computer mouse` |
+| `ambiguous` | a non-object sense cannot be excised, so the category is flagged and penalised | `train` (the verb), `bear` (beyond `teddy bear`), `bicycle` (`bike` is also a motorbike) |
+| `excluded` | no defensible form, or useless as a contrast | `orange` (the colour dominates), `person` (annotated on most images, so it discriminates nothing and empties the negative pool) |
+
+A category absent from the curated table is still a candidate - it gets its name
+plus a safe plural and is marked `derivation="default_morphology"`, so an
+unreviewed category is visible as such rather than mistaken for a reviewed one.
+
+## Feasibility, then a deterministic ranking
+
+Every discovered category is measured against what the split will really yield:
+distinct annotated images, synchronized image-caption-audio groups,
+caption-confirmed positive groups, distinct speakers, feasible source-training
+and held-out positives, available matched negatives, split feasibility,
+category co-occurrence statistics, lexical ambiguity status, and a rejection
+reason when infeasible.
+
+The scientific minimums are a **gate applied first** and are never relaxed by
+the score: 6 distinct images, 6 synchronized caption-confirmed groups, 4
+source-training positives, 2 held-out positives, 6 matched negatives, and an
+image- and synchronized-group-disjoint split. Fewer than two feasible concepts
+is a DATASET NO-GO with the complete ranked table attached.
+
+Among feasible concepts the order is a documented deterministic score
+(`jlens.mmpilot.expansion.concept_score`), **not** raw frequency - ranking by
+count alone would put COCO's most common category first regardless of whether it
+can discriminate anything. Each component is a saturating ratio in `[0, 1]`
+times a fixed weight, summed and rounded to six decimals:
+
+| component | weight | what it rewards |
+| --- | --- | --- |
+| `images` | 3.0 | distinct valid-positive images, saturating at 12 |
+| `groups` | 2.0 | synchronized groups the split will select, saturating at 12 |
+| `split` | 1.5 | headroom above the train and held-out minimums |
+| `negatives` | 1.0 | clean matched negatives, saturating at 24 |
+| `speakers` | 1.0 | distinct speakers, saturating at 3 |
+| `precision` | 2.0 | share of caption mentions the annotation also backs |
+| `ambiguity` | 1.5 | the lexical status above (`clean` 1.0 down to `ambiguous` 0.4) |
+| `independence` | 1.0 | `1 - max co-occurrence fraction` |
+
+Ties break on distinct images, then selected groups, then the name, so the
+ordering is total and reproducible across machines. The complete table -
+rejected concepts and reasons included - is printed before anything is selected,
+and the top two feasible concepts are taken with `GROUPS_PER_CONCEPT=6`.
+
+The selected concepts are **shared** between source-training and target-test
+examples. The split is image-disjoint and synchronized-group-disjoint, and
+deliberately not concept-disjoint: transfer is measured on the same concept seen
+through a different channel.
+
+## The persistent derived-data cache
+
+The CPU audit is expensive and deterministic in its inputs, so its results are
+published into Drive under a directory named for a fingerprint of those inputs
+(`jlens/mmpilot/cache.py`), by default under
+`/content/drive/MyDrive/datasets/cstf_spokencoco_derived/jlens_mmpilot_v1`.
+
+The fingerprint covers the SpokenCOCO source metadata checksums, the COCO
+instance annotation checksums, the original manifest checksum, the
+evidence-normalization/version identifier, the discovered category universe, the
+lexical specification hash, the visual-plus-caption evidence rule, the
+media-root layout, the scientific thresholds, and the split seed and split
+algorithm version. Change any one and the artifacts land in a different
+directory: there is nothing to invalidate and nothing to overwrite.
+
+A fingerprint directory holds `metadata.json`, `concept_coverage.json`,
+`concept_evidence_index.jsonl.gz`, `rejected_evidence_counts.json`,
+`selected_concepts.json`, `pilot_subset.json`, `split_provenance.json` and
+`_SUCCESS.json`.
+
+The rules that make reuse safe:
+
+- Source manifests and annotation files are read and checksummed, never written.
+- No credentials, and no user-specific absolute Drive path: media is recorded
+  relative to its configured root, so the cache is valid from a differently
+  mounted Drive.
+- Artifacts are built into a local staging directory under `/content` first and
+  copied to a **new** fingerprint directory only once all of them exist.
+- `_SUCCESS.json` is written **last** and carries a checksum and size for every
+  published file.
+- A directory without a valid success marker is *incomplete* - an interrupted
+  publish - and is ignored and rebuilt, never half-read. A checksum mismatch on
+  any file refuses the whole load.
+- A directory whose stored fingerprint disagrees is *incompatible* and is
+  refused loudly. Compatibility is never inferred from a directory name, and a
+  timestamped run directory is never promoted on the strength of its contents
+  looking right.
+- Per-record data is one gzipped JSONL stream rather than thousands of tiny
+  files, because Drive charges per write.
+
+The notebook prints the state verbatim - `cache HIT`, `cache MISS`,
+`cache INCOMPLETE`, `cache INCOMPATIBLE`. On a hit the coverage, selected
+concepts, subset and split load directly and only a few representative
+media-existence probes run; the join, the media validation and the audit are
+skipped entirely.
 
 ## What counts as a positive
 
@@ -329,11 +468,39 @@ atoms, norm-matched one for one - is reported for scale and **cannot gate
 anything**: any dictionary with a selection pool larger than `k` beats it,
 including pure noise. The **pool-matched** one gives the random directions the
 same candidate pool and the same `k` as the lens, so the comparison isolates
-atom direction, and it does fail for an unaligned dictionary. Its pool is capped
-at 16384 candidates so several dense random dictionaries fit next to the model;
-where the cap binds, the control searches fewer candidates than the lens and
-understates random performance. That bias favours the lens and is disclosed in
-every record as `pool_selection_bias_factor`.
+atom direction, and it does fail for an unaligned dictionary.
+
+### A capped control pool cannot produce a PASS
+
+The pool-matched control was previously capped at 16384 candidate atoms while
+the lens searched its full dictionary - roughly 262k atoms for Gemma. That is
+not a matched comparison. The greedy maximum correlation with a target grows
+with the number of candidates searched, so a control restricted to a sixteenth
+of the lens's pool *understates* what random directions can do, in the direction
+that flatters the lens. Disclosing the bias in each record was not enough: the
+summary still read that comparison as evidence and could turn a 16x
+search-space advantage into a scientific PASS.
+
+The default is now an **equal-opportunity** comparison: `max_control_pool_atoms`
+defaults to `None`, meaning the control pool has exactly as many candidate atoms
+as the lens dictionary. Atoms are generated in chunks of 16384 directly in the
+lens's dtype and device, so a full-size control never needs a transient float32
+copy of itself and peak memory is one control dictionary the same size as the
+lens - affordable on one L4 with Gemma E4B resident, and freed before the next
+draw is built.
+
+Where an equal pool genuinely is not affordable, the cap may still be set. When
+it binds, the record's `criterion_status` becomes
+`not_evaluated_pool_mismatch`, the layer is excluded from
+`layers_above_random`, and the report renders the criterion **NOT EVALUATED** -
+neither a pass nor a failure, because the comparison was never made. Setting
+`require_pool_match=False` is the explicit, fingerprinted way to accept a
+mismatched comparison; it yields `conditional_pool_mismatch` and still never
+reads as a clean pass. An optional `pool_ladder` runs the same comparison at
+increasing pool sizes and reports whether the lens's margin survives more search
+freedom; that is informative, and it does not upgrade the verdict.
+
+There is still no absolute explained-variance threshold anywhere.
 
 A short `k` schedule (1, 2, 4, 8, 16, 25) also yields an **occupancy estimate**:
 the largest `k` at which the lens's marginal reconstruction gain still exceeds
