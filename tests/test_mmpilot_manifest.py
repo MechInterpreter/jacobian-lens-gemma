@@ -592,6 +592,46 @@ def test_subset_selection_is_deterministic(dataset):
     ]
 
 
+def test_subset_materializes_only_individually_valid_positive_groups():
+    groups = []
+    for image_index in range(2):
+        common = {
+            "image_id": f"cat-image-{image_index}",
+            "image_path": f"cat-{image_index}.jpg",
+            "speaker": f"speaker-{image_index}",
+            "concept_annotations": ["cat"],
+            "annotation_source": "coco_object_annotation",
+        }
+        groups.extend(
+            [
+                {
+                    **common,
+                    "group_id": f"a-invalid-{image_index}",
+                    "caption": "an animal resting quietly",
+                    "audio_path": f"invalid-{image_index}.wav",
+                },
+                {
+                    **common,
+                    "group_id": f"z-valid-{image_index}",
+                    "caption": "a cat resting quietly",
+                    "audio_path": f"valid-{image_index}.wav",
+                },
+            ]
+        )
+
+    subset = M.build_subset(
+        groups,
+        {"cat": ["cat", "cats"]},
+        groups_per_concept=2,
+        negatives_per_concept=0,
+        max_groups_per_image=2,
+    )
+    positives = subset["splits"]["train"] + subset["splits"]["test"]
+    assert len(positives) == 2
+    assert all(group["group_id"].startswith("z-valid") for group in positives)
+    assert all(group["evidence"]["is_valid_synchronized_positive"] for group in positives)
+
+
 def test_captions_naming_two_selected_concepts_are_dropped(dataset):
     groups = [
         {

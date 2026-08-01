@@ -45,6 +45,7 @@ from jlens.mmpilot.evidence import (
 
 IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
 AUDIO_SUFFIXES = (".wav", ".flac", ".mp3", ".ogg", ".m4a")
+SUBSET_SELECTION_VERSION = "valid-positive-groups-only-v1"
 
 _ROLE_NAME_HINTS: dict[str, tuple[str, ...]] = {
     "image": ("image", "img", "photo", "picture", "jpg", "jpeg", "frame"),
@@ -1191,9 +1192,19 @@ def build_subset(
     def rows(image_ids: Sequence[str], concept: str | None, split: str) -> list[dict]:
         out = []
         for image_id in image_ids:
-            chosen = sorted(by_image[image_id], key=lambda g: g["group_id"])[
-                :max_groups_per_image
-            ]
+            candidates = sorted(by_image[image_id], key=lambda g: g["group_id"])
+            if concept is not None:
+                candidates = [
+                    group
+                    for group in candidates
+                    if is_valid_positive(group, concept, config)
+                ]
+            chosen = candidates[:max_groups_per_image]
+            if concept is not None and not chosen:
+                raise ValueError(
+                    f"selected positive image {image_id!r} has no individually "
+                    f"valid synchronized group for {concept!r}"
+                )
             for group in chosen:
                 # Every selected row carries the evidence that justified it, so
                 # a reviewer never has to take the label on trust.
@@ -1209,7 +1220,11 @@ def build_subset(
                                 **(group.get("split_provenance") or {}),
                                 "source_split": group.get("source_split"),
                                 "assignment": split,
-                                "assignment_rule": "all groups of one image share a split",
+                                "assignment_rule": (
+                                    "all selected groups of one image share a split; "
+                                    "positive rows individually satisfy visual AND "
+                                    "caption evidence"
+                                ),
                             }})
         return out
 

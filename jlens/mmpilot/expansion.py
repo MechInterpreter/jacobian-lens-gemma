@@ -785,6 +785,7 @@ def _split_plan(
     groups_per_concept: int,
     max_groups_per_image: int,
     seed: str,
+    evidence_config: EvidenceConfig,
 ) -> dict:
     """Mirror :func:`~jlens.mmpilot.manifest.build_subset`'s selection exactly.
 
@@ -797,7 +798,16 @@ def _split_plan(
     train_images, test_images = chosen[:n_train], chosen[n_train:]
 
     def count(images: Sequence[str]) -> int:
-        return sum(len(by_image[image_id][:max_groups_per_image]) for image_id in images)
+        return sum(
+            len(
+                [
+                    group
+                    for group in by_image[image_id]
+                    if is_valid_positive(group, concept, evidence_config)
+                ][:max_groups_per_image]
+            )
+            for image_id in images
+        )
 
     return {
         "n_selected_images": len(chosen),
@@ -1092,6 +1102,7 @@ def rank_concepts(
             groups_per_concept=groups_per_concept,
             max_groups_per_image=max_groups_per_image,
             seed=seed,
+            evidence_config=config,
         )
         unmet = []
         if len(pure) < requirements.min_distinct_images:
