@@ -157,6 +157,84 @@ def test_a_capped_control_pool_is_disclosed_as_a_bias_toward_the_lens():
     assert uncapped["pool_selection_bias_factor"] == 1.0
 
 
+def test_the_default_control_pool_equals_the_lens_pool():
+    """The only matched comparison: the control searches what the lens searches."""
+    assert R.ReconstructionControlConfig().max_control_pool_atoms is None
+    for n_atoms in (128, 512):
+        record = record_for(aligned_dictionary(0.3, n_atoms=n_atoms))
+        assert record["control_pool_size"] == n_atoms
+        assert record["pool_matched_exactly"]
+        assert record["criterion_status"] == R.STATUS_EVALUATED
+        assert record["controls"]["pool_matched"]["n_control_atoms"] == n_atoms
+
+
+def test_a_capped_pool_is_not_evaluated_rather_than_believed():
+    """The Part 5 repair: a control searching a sixteenth of the lens's pool
+    understates random performance, so it cannot be counted as evidence."""
+    capped = R.ReconstructionControlConfig(
+        n_draws=2, k_schedule=(1, 2), max_control_pool_atoms=32
+    )
+    record = record_for(aligned_dictionary(0.9, n_atoms=512), config=capped)
+    # The lens beats this control easily — and that still is not a result.
+    assert record["above_random_bound"]
+    assert record["criterion_status"] == R.STATUS_NOT_EVALUATED
+    assert not record["pool_matched_exactly"]
+    assert "cannot establish" in record["criterion_status_reason"]
+
+    summary = R.summarize_reconstruction_controls([record], config=capped, primary_layer=7)
+    assert summary["by_layer"]["7"]["criterion_status"] == R.STATUS_NOT_EVALUATED
+    assert not summary["by_layer"]["7"]["above_random"]
+    assert summary["layers_above_random"] == []
+    assert summary["layers_not_evaluated"] == [7]
+    assert summary["criterion_evaluable"] is False
+
+
+def test_a_capped_pool_reports_not_evaluated_not_a_failed_lens():
+    """It must not read as a failure either: the comparison was never made."""
+    capped = R.ReconstructionControlConfig(
+        n_draws=2, k_schedule=(1, 2), max_control_pool_atoms=32
+    )
+    records = [record_for(aligned_dictionary(0.9, n_atoms=512), config=capped)]
+    _, criteria = _criteria(records, retained=("cat", "dog"))
+    entry = criteria["lens_sanity_above_random"]
+    assert entry["status"] == NOT_EVALUATED
+    assert "smaller candidate pool" in entry["not_evaluated_reason"]
+    assert "not a finding that it does not" in entry["not_evaluated_reason"]
+
+
+def test_disabling_the_pool_match_is_conditional_never_a_clean_pass():
+    """The escape hatch is explicit, fingerprinted, and still not a PASS."""
+    lenient = R.ReconstructionControlConfig(
+        n_draws=2,
+        k_schedule=(1, 2),
+        max_control_pool_atoms=32,
+        require_pool_match=False,
+    )
+    record = record_for(aligned_dictionary(0.9, n_atoms=512), config=lenient)
+    assert record["criterion_status"] == R.STATUS_CONDITIONAL
+    summary = R.summarize_reconstruction_controls([record], config=lenient, primary_layer=7)
+    assert summary["by_layer"]["7"]["criterion_status"] == R.STATUS_CONDITIONAL
+    assert not summary["by_layer"]["7"]["above_random"]
+    assert summary["criterion_evaluable"] is False
+    # And the setting changes the fingerprint, so a run cannot be quietly
+    # relabelled after the fact.
+    assert lenient.fingerprint != R.ReconstructionControlConfig(
+        n_draws=2, k_schedule=(1, 2), max_control_pool_atoms=32
+    ).fingerprint
+
+
+def test_the_pool_ladder_reports_stability_without_gating_on_it():
+    ladder = R.ReconstructionControlConfig(
+        n_draws=2, k_schedule=(1, 2), max_control_pool_atoms=32, pool_ladder=(16, 64)
+    )
+    record = record_for(aligned_dictionary(0.9, n_atoms=512), config=ladder)
+    sizes = [rung["n_control_atoms"] for rung in record["pool_ladder"]]
+    assert sizes == [16, 64]
+    assert all("jlens_excess" in rung for rung in record["pool_ladder"])
+    # Stability is informative; it does not turn a mismatched pool into a pass.
+    assert record["criterion_status"] == R.STATUS_NOT_EVALUATED
+
+
 def test_draws_and_results_are_deterministic():
     first = record_for(aligned_dictionary(0.3))
     second = record_for(aligned_dictionary(0.3))
@@ -435,7 +513,8 @@ def test_a_skipped_run_reports_not_evaluated_rather_than_a_failed_lens():
 def test_the_report_states_the_control_limitation():
     records = [record_for(aligned_dictionary(0.3), sample_id="s0")]
     markdown, _ = _report(records)
-    assert "not the selection pool" in markdown
+    assert "candidate pool size" in markdown
+    assert "capped pool reports **NOT EVALUATED**" in markdown
     assert "necessary condition, not a strong one" in markdown
     assert "no absolute reconstruction threshold" in markdown.lower()
 

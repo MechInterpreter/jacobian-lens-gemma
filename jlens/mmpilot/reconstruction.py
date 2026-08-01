@@ -46,18 +46,37 @@ dtype and device, under the same pursuit settings, in two matchings:
     atom *directions*. This is what the sanity criterion reads, and it can
     fail — a dictionary of unaligned directions does fail it.
 
-Where the pool matching is approximate
---------------------------------------
+A capped control pool cannot produce a PASS
+-------------------------------------------
 
-A full Gemma dictionary is ~262k atoms; materialising several dense random
-copies of that per activation is not affordable next to the model, so the
-control pool is capped at :attr:`ReconstructionControlConfig.max_control_pool_atoms`.
-When the cap binds, the control searches a *smaller* pool than the lens does
-and therefore understates what random directions could achieve. That bias
-favours the lens, it is disclosed in every record as
-``pool_selection_bias_factor`` (the ``sqrt(log N_lens / log N_control)`` scaling
-of the greedy maximum correlation among isotropic directions), and it means a
-PASS should be read as "clearly above noise", not as a precise effect size.
+The pool-matched control used to be capped at 16384 candidate atoms while the
+lens searched its full dictionary — roughly 262k atoms for Gemma. That is not a
+matched comparison. The greedy maximum correlation with a target grows with the
+number of candidates searched, so a control restricted to a sixteenth of the
+lens's pool *understates* what random directions can do, in the direction that
+flatters the lens. Disclosing the bias in the record was not enough: the summary
+still read that comparison as evidence and could turn it into a scientific PASS.
+
+So the default is now an **equal-opportunity** comparison: the control pool has
+exactly as many candidate atoms as the lens dictionary
+(``max_control_pool_atoms=None``). Atoms are generated in chunks directly in the
+lens's dtype and device, so peak memory is one control dictionary the same size
+as the lens — on an L4 with Gemma E4B resident that is affordable, and each draw
+is freed before the next is built.
+
+Where an equal pool genuinely is not affordable, ``max_control_pool_atoms`` may
+still be set. When the cap binds, the record's ``criterion_status`` becomes
+``not_evaluated_pool_mismatch`` and
+:func:`summarize_reconstruction_controls` refuses to mark the layer above
+random. The answer is then *unknown*, which is different both from a pass and
+from a failure, and it is reported as such rather than resolved in the lens's
+favour. Setting ``require_pool_match=False`` is the explicit, fingerprinted way
+to accept a mismatched comparison, and it downgrades the result to
+``conditional_pool_mismatch`` — never a clean PASS.
+
+There is still no absolute explained-variance threshold anywhere. The published
+J-space result puts the top-k component at a median around 6-7% of a concept
+vector's variance, so an absolute bar would reject a working lens.
 
 Occupancy
 ---------
@@ -94,6 +113,15 @@ SCHEMA_VERSION = "jlens.mmpilot.reconstruction_control.v1"
 #: is a pilot diagnostic, not a hyperparameter sweep.
 DEFAULT_K_SCHEDULE = (1, 2, 4, 8, 16, 25)
 
+#: How many random atoms to materialise at a time. Bounds peak memory while a
+#: pool the size of a full Gemma dictionary is being built.
+CONTROL_CHUNK_ATOMS = 16384
+
+#: The criterion's verdict on one record.
+STATUS_EVALUATED = "evaluated"
+STATUS_NOT_EVALUATED = "not_evaluated_pool_mismatch"
+STATUS_CONDITIONAL = "conditional_pool_mismatch"
+
 
 class ControlConfigurationError(RuntimeError):
     """The control cannot be run faithfully under these settings."""
@@ -115,8 +143,21 @@ class ReconstructionControlConfig:
         min_median_excess: The median excess over the random median must
             exceed this. Zero means "strictly better than random".
         max_control_pool_atoms: Cap on the pool-matched control's candidate
-            count, so several dense random dictionaries fit next to the model.
-            When it binds, the control is conservative and says so.
+            count. ``None`` — the default — means "exactly as many candidates
+            as the lens dictionary", which is the only matched comparison.
+            Setting a cap below the lens pool makes the comparison
+            search-space-mismatched in the lens's favour.
+        require_pool_match: When True (the default) a record whose control pool
+            is smaller than the lens pool is marked
+            :data:`STATUS_NOT_EVALUATED` and cannot contribute to a PASS.
+            Setting it False is the explicit way to accept a mismatched
+            comparison; the result is then labelled
+            :data:`STATUS_CONDITIONAL` and still never reads as a clean pass.
+        pool_ladder: Optional additional control-pool sizes to run alongside
+            the primary one. Running the same comparison at increasing pool
+            sizes shows whether the lens's margin is stable as the control gets
+            more search freedom, which is the residual evidence available when
+            an equal pool is genuinely unaffordable.
     """
 
     n_draws: int = 5
@@ -125,15 +166,18 @@ class ReconstructionControlConfig:
     k_schedule: tuple[int, ...] = DEFAULT_K_SCHEDULE
     max_samples_per_layer: int = 8
     min_median_excess: float = 0.0
-    max_control_pool_atoms: int = 16384
+    max_control_pool_atoms: int | None = None
+    require_pool_match: bool = True
+    pool_ladder: tuple[int, ...] = ()
 
     def to_dict(self) -> dict:
         payload = asdict(self)
         payload["k_schedule"] = list(self.k_schedule)
+        payload["pool_ladder"] = list(self.pool_ladder)
         payload["schema_version"] = SCHEMA_VERSION
         payload["criterion_control"] = "pool_matched"
         payload["control_matching"] = [
-            "candidate_pool_size (capped)",
+            "candidate_pool_size (equal to the lens dictionary by default)",
             "sparsity k",
             "atom_l2_norms (resampled from the atoms the lens used)",
             "hidden_dimension",
@@ -147,12 +191,19 @@ class ReconstructionControlConfig:
             "with a larger selection pool, including pure noise, so it cannot "
             "gate anything; it is reported for scale"
         )
+        payload["capped_pool_cannot_pass"] = (
+            "a control searching fewer candidates than the lens understates "
+            "random performance, because the greedy maximum correlation grows "
+            "with the number of candidates searched. Such a comparison is "
+            "marked NOT EVALUATED and cannot produce a scientific PASS on its "
+            "own"
+        )
         payload["interpretation"] = (
             "the criterion is the pool-matched control, which gives random "
-            "directions the same selection freedom as the lens. Where the pool "
-            "cap binds, the control searches fewer candidates than the lens and "
-            "so understates random performance — a bias favouring the lens, "
-            "reported per record as pool_selection_bias_factor"
+            "directions the same candidate pool, the same k, the same atom "
+            "norms and the same pursuit as the lens, so the only difference "
+            "left is which directions the atoms point in. If the pool cannot be "
+            "matched, the criterion reports NOT EVALUATED rather than a result"
         )
         return payload
 
@@ -198,6 +249,11 @@ def matched_random_dictionary(
     control atom still carries a norm the J-lens itself used.
 
     Either way the control differs from the J-lens in *direction* only.
+
+    Atoms are generated in chunks of :data:`CONTROL_CHUNK_ATOMS` and converted
+    to ``dtype`` as they go, so a pool the size of a full Gemma dictionary never
+    needs a transient float32 copy of itself. That is what makes the equal-pool
+    default affordable next to a resident model.
     """
     if not len(reference_norms):
         raise ControlConfigurationError("a matched control needs at least one atom")
@@ -207,8 +263,6 @@ def matched_random_dictionary(
             f"a pool of {count} cannot carry a support of {len(reference_norms)}"
         )
     generator = _generator(layer, *seed_parts, count)
-    raw = torch.randn(count, d_model, generator=generator, dtype=torch.float32)
-    norms = raw.norm(dim=-1, keepdim=True).clamp_min(torch.finfo(torch.float32).tiny)
     reference = torch.tensor([float(norm) for norm in reference_norms], dtype=torch.float32)
     if count == len(reference_norms):
         scale = reference
@@ -219,9 +273,18 @@ def matched_random_dictionary(
         )
         scale = reference[picks]
         matching = "resampled from the norms of the atoms the j-lens selected"
-    atoms = (raw / norms) * scale.unsqueeze(-1)
+
+    atoms = torch.empty(count, d_model, device=device, dtype=dtype)
+    tiny = torch.finfo(torch.float32).tiny
+    for start in range(0, count, CONTROL_CHUNK_ATOMS):
+        stop = min(start + CONTROL_CHUNK_ATOMS, count)
+        raw = torch.randn(stop - start, d_model, generator=generator, dtype=torch.float32)
+        raw /= raw.norm(dim=-1, keepdim=True).clamp_min(tiny)
+        raw *= scale[start:stop].unsqueeze(-1)
+        atoms[start:stop] = raw.to(device=device, dtype=dtype)
+        del raw
     return JSpaceDictionary(
-        atoms.to(device=device, dtype=dtype),
+        atoms,
         layer=layer,
         provenance={
             "kind": "matched_random_control",
@@ -231,6 +294,7 @@ def matched_random_dictionary(
             "d_model": d_model,
             "dtype": str(dtype),
             "device": str(device),
+            "generated_in_chunks_of": CONTROL_CHUNK_ATOMS,
         },
     )
 
@@ -383,8 +447,14 @@ def reconstruction_control_record(
     jlens_explained = float(jlens.explained_fraction[0])
 
     reference_norms = [float(dictionary.atom_norms[int(atom)]) for atom in support]
-    control_pool = min(dictionary.n_atoms, config.max_control_pool_atoms)
-    control_pool = max(control_pool, len(support))
+    # None means "match the lens exactly" — the only comparison in which the
+    # control enjoys the same selection freedom the lens does.
+    requested_pool = (
+        dictionary.n_atoms
+        if config.max_control_pool_atoms is None
+        else min(dictionary.n_atoms, int(config.max_control_pool_atoms))
+    )
+    control_pool = max(requested_pool, len(support))
 
     def run_control(kind: str, n_atoms: int, k: int) -> dict:
         control_settings = PursuitSettings(
@@ -438,12 +508,36 @@ def reconstruction_control_record(
             "draws": draws,
         }
 
-    # The gate. Same candidate pool (capped), same k: the only thing left that
-    # differs from the lens is which directions the atoms point in.
+    # The gate. Same candidate pool, same k: the only thing left that differs
+    # from the lens is which directions the atoms point in.
     pool_matched = run_control("pool_matched", control_pool, settings.k)
     # Reported for scale, never gated on — a k-atom control is beaten by any
     # dictionary with a larger selection pool, noise included.
     support_matched = run_control("support_matched", max(1, len(support)), len(support))
+
+    # An optional ladder of smaller pools. It cannot rescue a mismatched
+    # comparison, but it shows whether the lens's margin shrinks as the control
+    # is given more search freedom — the residual evidence available when an
+    # equal pool is unaffordable.
+    ladder = [
+        {
+            "n_control_atoms": size,
+            **{
+                key: run_control("pool_ladder", size, settings.k)[key]
+                for key in (
+                    "median_explained_fraction",
+                    "upper_bound_explained_fraction",
+                )
+            },
+        }
+        for size in sorted({
+            max(len(support), min(int(rung), dictionary.n_atoms))
+            for rung in config.pool_ladder
+        })
+    ]
+    for rung in ladder:
+        rung["jlens_excess"] = jlens_explained - rung["median_explained_fraction"]
+    ladder_stable = bool(ladder) and all(rung["jlens_excess"] > 0.0 for rung in ladder)
 
     random_values = pool_matched["explained_fractions"]
     random_median = pool_matched["median_explained_fraction"]
@@ -456,6 +550,28 @@ def reconstruction_control_record(
     )
     n_active = sum(1 for c in coefficients if c > 0)
     pool_capped = control_pool < dictionary.n_atoms
+    if not pool_capped:
+        criterion_status = STATUS_EVALUATED
+        status_reason = (
+            "the control searched exactly as many candidate atoms as the lens"
+        )
+    elif config.require_pool_match:
+        criterion_status = STATUS_NOT_EVALUATED
+        status_reason = (
+            f"the control searched {control_pool} candidate atoms against the "
+            f"lens's {dictionary.n_atoms}. A smaller search pool understates "
+            "random performance, so this comparison favours the lens and "
+            "cannot establish that the lens beats random directions. Set "
+            "max_control_pool_atoms=None to match the pool."
+        )
+    else:
+        criterion_status = STATUS_CONDITIONAL
+        status_reason = (
+            f"require_pool_match was explicitly disabled with a control pool of "
+            f"{control_pool} against the lens's {dictionary.n_atoms}; the "
+            "comparison is search-space-mismatched in the lens's favour and is "
+            "reported as conditional, never as a clean pass."
+        )
     return {
         "schema": SCHEMA_VERSION,
         "sample_id": sample_id,
@@ -489,6 +605,13 @@ def reconstruction_control_record(
         "lens_pool_size": int(dictionary.n_atoms),
         "control_pool_size": int(control_pool),
         "control_pool_capped": bool(pool_capped),
+        "pool_matched_exactly": not pool_capped,
+        # The criterion's verdict on THIS record. A capped pool never says
+        # "evaluated", so it can never be counted as evidence for the lens.
+        "criterion_status": criterion_status,
+        "criterion_status_reason": status_reason,
+        "pool_ladder": ladder,
+        "pool_ladder_stable": ladder_stable,
         "pool_selection_bias_factor": (
             math.sqrt(math.log(dictionary.n_atoms) / math.log(control_pool))
             if pool_capped and control_pool > 1
@@ -546,6 +669,7 @@ def summarize_reconstruction_controls(
 
     layers: dict[str, dict] = {}
     above: list[int] = []
+    not_evaluated: list[int] = []
     for layer in sorted(by_layer):
         rows = by_layer[layer]
         absolute = [float(r["jlens_explained_fraction"]) for r in rows]
@@ -555,16 +679,47 @@ def summarize_reconstruction_controls(
         healthy = all(r["finite"] and r["nondegenerate"] for r in rows)
         median_excess = _median(excess)
         median_over_bound = _median(over_bound)
+        # A layer is only evaluated when every one of its records compared the
+        # lens against a control that searched the same pool. Records default
+        # to "evaluated" so summaries of older artifacts still read, but a
+        # capped pool is explicitly recorded and is refused here.
+        statuses = {str(r.get("criterion_status", STATUS_EVALUATED)) for r in rows}
+        layer_status = (
+            STATUS_EVALUATED
+            if statuses == {STATUS_EVALUATED}
+            else (
+                STATUS_CONDITIONAL
+                if statuses <= {STATUS_EVALUATED, STATUS_CONDITIONAL}
+                else STATUS_NOT_EVALUATED
+            )
+        )
         layer_above = bool(
             healthy
+            and layer_status == STATUS_EVALUATED
             and median_excess > config.min_median_excess
             and median_over_bound > 0.0
         )
         if layer_above:
             above.append(layer)
+        elif layer_status != STATUS_EVALUATED:
+            not_evaluated.append(layer)
         layers[str(layer)] = {
             "layer": layer,
             "n_samples": len(rows),
+            "criterion_status": layer_status,
+            "criterion_status_reason": next(
+                (
+                    str(r.get("criterion_status_reason", ""))
+                    for r in rows
+                    if str(r.get("criterion_status", STATUS_EVALUATED)) != STATUS_EVALUATED
+                ),
+                "",
+            ),
+            "pool_matched_exactly": all(
+                r.get("pool_matched_exactly", not r.get("control_pool_capped", False))
+                for r in rows
+            ),
+            "pool_ladder_stable": all(r.get("pool_ladder_stable", False) for r in rows),
             # Descriptive.
             "median_explained_fraction": _median(absolute),
             "mean_explained_fraction": sum(absolute) / len(absolute) if absolute else 0.0,
@@ -607,6 +762,9 @@ def summarize_reconstruction_controls(
             ),
         }
 
+    evaluable = [
+        entry for entry in layers.values() if entry["criterion_status"] == STATUS_EVALUATED
+    ]
     return {
         "schema": SCHEMA_VERSION,
         "n_records": len(records),
@@ -615,6 +773,27 @@ def summarize_reconstruction_controls(
         "primary_layer": primary_layer,
         "by_layer": layers,
         "layers_above_random": above,
+        "layers_not_evaluated": not_evaluated,
+        # The report reads this: with no evaluable layer the criterion is
+        # unknown, which is neither a pass nor a failure of the lens.
+        "criterion_evaluable": bool(evaluable),
+        "criterion_not_evaluated_reason": (
+            ""
+            if evaluable
+            else next(
+                (
+                    entry["criterion_status_reason"]
+                    for entry in layers.values()
+                    if entry["criterion_status_reason"]
+                ),
+                "",
+            )
+        ),
+        "all_pools_matched_exactly": all(
+            entry["pool_matched_exactly"] for entry in layers.values()
+        )
+        if layers
+        else False,
         "evaluated_on": "held-out text activations only",
         "criterion_control": "pool_matched",
         "reading": (
@@ -626,14 +805,21 @@ def summarize_reconstruction_controls(
             "the same candidate pool and the same k as the lens; the "
             "support-matched numbers are reported for scale and cannot gate "
             "anything, since a k-atom control is beaten by any dictionary with "
-            "a larger selection pool."
+            "a larger selection pool. A control that searched FEWER candidates "
+            "than the lens is not a matched comparison either: it understates "
+            "random performance, so such a layer reports NOT EVALUATED and "
+            "cannot contribute to a pass."
         ),
     }
 
 
 __all__ = [
+    "CONTROL_CHUNK_ATOMS",
     "DEFAULT_K_SCHEDULE",
     "SCHEMA_VERSION",
+    "STATUS_CONDITIONAL",
+    "STATUS_EVALUATED",
+    "STATUS_NOT_EVALUATED",
     "ControlConfigurationError",
     "ReconstructionControlConfig",
     "ReconstructionControlSummary",

@@ -175,6 +175,12 @@ def evaluate_criteria(
             "bar would reject a working lens"
         ),
         "control_limitation": (control.get("config", {}) or {}).get("interpretation"),
+        # A control that searched a smaller candidate pool than the lens is not
+        # a matched comparison; it flatters the lens. These say whether the
+        # criterion could be evaluated at all.
+        "criterion_evaluable": control.get("criterion_evaluable"),
+        "layers_not_evaluated": control.get("layers_not_evaluated", []),
+        "all_pools_matched_exactly": control.get("all_pools_matched_exactly"),
     }
     if not control.get("n_records"):
         criteria["lens_sanity_above_random"] = criterion(
@@ -183,6 +189,22 @@ def evaluate_criteria(
             skipped_because=(
                 "no J-space codes and no matched-random control results: the "
                 f"reconstruction-control stage was skipped because {precondition}. "
+                "Whether the lens beats random directions is unknown — this is "
+                "not a finding that it does not."
+            ),
+        )
+    elif control.get("criterion_evaluable") is False:
+        # Never a PASS and never a FAIL: with a mismatched search space the
+        # comparison says nothing either way about the lens.
+        criteria["lens_sanity_above_random"] = criterion(
+            NOT_EVALUATED,
+            sanity_evidence,
+            skipped_because=(
+                "the matched-random control searched a smaller candidate pool "
+                "than the J-lens, so the comparison was biased in the lens's "
+                "favour and cannot establish that the lens beats random "
+                "directions: "
+                f"{control.get('criterion_not_evaluated_reason') or 'pool mismatch'} "
                 "Whether the lens beats random directions is unknown — this is "
                 "not a finding that it does not."
             ),
@@ -772,10 +794,18 @@ def gonogo_report(
         "variance in its top-k J-space component, so a high absolute bar would "
         "reject a working lens. The criterion is excess over matched random "
         "controls.",
-        "- The random control matches atom count, atom norms, hidden width, "
-        "dtype, device and pursuit settings — but not the selection pool. The "
-        "J-lens picks its atoms from the whole vocabulary, so clearing this "
-        "control is a necessary condition, not a strong one.",
+        "- The gating random control matches the **candidate pool size**, the "
+        "sparsity k, the atom norms, the hidden width, the dtype, the device "
+        "and the pursuit settings. The only thing it does not match is the "
+        "atom directions, which is the one thing the comparison is about. A "
+        "control given a smaller pool than the lens would understate what "
+        "random directions can do, so a capped pool reports **NOT EVALUATED** "
+        "and can never produce a pass. A separate support-matched control is "
+        "reported for scale only: with just k candidate atoms it is beaten by "
+        "any larger dictionary, noise included, so it gates nothing.",
+        "- Clearing the matched control is a necessary condition, not a strong "
+        "one: it says the lens's directions beat unaligned ones, not that its "
+        "coordinates mean anything.",
         "- Absolute reconstruction, excess over random, occupancy and causal "
         "usefulness are four separate readings. None implies another.",
         "- A positive requires **both** the COCO object annotation and the "
