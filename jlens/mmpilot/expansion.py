@@ -59,7 +59,13 @@ from jlens.mmpilot.store import UnitStore, payload_checksum
 SUPPORTED_SUFFIXES = frozenset({".json", ".jsonl", ".csv", ".tsv"})
 DEFAULT_SOURCE_PATTERNS = tuple(f"*{suffix}" for suffix in sorted(SUPPORTED_SUFFIXES))
 DISCOVERY_SCHEMA_VERSION = "jlens.mmpilot.metadata_discovery.v2"
-DERIVATION_SCHEMA_VERSION = "jlens.mmpilot.expanded_manifest.v2"
+DERIVATION_SCHEMA_VERSION = "jlens.mmpilot.expanded_manifest.v3"
+COCO_IMAGE_KEY_VERSION = "split-aware-file-name-v1"
+
+_COCO_SPLIT_RE = re.compile(
+    r"(?P<split>train|val|test)(?P<year>20\d{2})", re.IGNORECASE
+)
+_COCO_ID_RE = re.compile(r"(?:^|_)(?P<id>\d{1,12})(?:\.[^.]+)?$")
 
 
 #: Directories never searched — the run's own outputs must not feed back in.
@@ -74,6 +80,53 @@ MEDIA_TREE_DIR_NAMES = frozenset(
 
 class DatasetCoverageError(RuntimeError):
     """The local dataset cannot support the pilot at its stated thresholds."""
+
+
+def canonical_coco_image_key(
+    image_id: object,
+    *,
+    image_ref: object = "",
+    split: object = "",
+) -> str:
+    """Normalize COCO integer ids and filenames to one split-aware key.
+
+    Official SpokenCOCO metadata usually identifies an image through a name
+    such as ``COCO_train2014_000000419532.jpg`` whereas COCO annotations use
+    integer id ``419532``. Comparing those raw strings gives zero overlap.
+    """
+    references = [str(image_ref or ""), str(image_id or ""), str(split or "")]
+    split_name = ""
+    for reference in references:
+        match = _COCO_SPLIT_RE.search(reference.replace("\\", "/"))
+        if match:
+            split_name = f"{match.group('split').lower()}{match.group('year')}"
+            break
+
+    raw_id = str(image_id or "").strip()
+    id_match = _COCO_ID_RE.search(raw_id)
+    if not id_match:
+        id_match = _COCO_ID_RE.search(Path(str(image_ref or "")).name)
+    normalized_id = str(int(id_match.group("id"))) if id_match else raw_id
+    if not normalized_id:
+        return ""
+    return (
+        f"{split_name}:{normalized_id}"
+        if split_name and id_match
+        else normalized_id
+    )
+
+
+def _annotation_image_key(
+    image_id: object, *, image_ref: object, source_path: object
+) -> str:
+    """Key an annotation without inventing COCO semantics for generic ids."""
+    raw_id = str(image_id or "").strip()
+    split_hint = source_path if image_ref or raw_id.isdigit() else ""
+    return canonical_coco_image_key(
+        image_id,
+        image_ref=image_ref,
+        split=split_hint,
+    )
 
 
 @dataclass(frozen=True)
@@ -464,9 +517,20 @@ def _bounded_sync_payload(
         if not isinstance(record, Mapping):
             continue
         image_id = str(record.get(schema.image_id_field, "")) if schema.image_id_field else ""
+        image_ref = record.get(schema.image_field, "")
+        source_split = (
+            record.get(schema.split_field, "") if schema.split_field else ""
+        )
+        image_key = canonical_coco_image_key(
+            image_id or Path(str(image_ref)).stem,
+            image_ref=image_ref,
+            split=source_split,
+        )
         nested = record.get(schema.nested_key, []) if schema.nested_key else [record]
         captions = [str(item.get(schema.caption_field, "")) for item in nested if isinstance(item, Mapping)]
-        is_candidate = image_id in object_image_ids or any(_normalized_words(caption) & keywords for caption in captions)
+        is_candidate = image_key in object_image_ids or any(
+            _normalized_words(caption) & keywords for caption in captions
+        )
         (positives if is_candidate else negatives).append(record)
     positives.sort(key=lambda record: _stable_rank(str(record), "metadata-positive"))
     negatives.sort(key=lambda record: _stable_rank(str(record), "metadata-negative"))
@@ -494,11 +558,26 @@ def coco_object_labels(annotation_sources: Sequence[MetadataSource]) -> dict[str
         )
         if not _is_coco_objects(payload):
             continue
-        names = {str(item["id"]): str(item["name"]).lower() for item in payload["categories"]}
+        names = {
+            str(item["id"]): str(item["name"]).lower()
+            for item in payload["categories"]
+        }
+        source_split = Path(source.path).stem
+        image_files = {
+            str(item["id"]): str(item.get("file_name", ""))
+            for item in payload.get("images", [])
+            if isinstance(item, Mapping) and "id" in item
+        }
         for annotation in payload["annotations"]:
             name = names.get(str(annotation["category_id"]))
             if name:
-                labels.setdefault(str(annotation["image_id"]), set()).add(name)
+                image_id = annotation["image_id"]
+                key = _annotation_image_key(
+                    image_id,
+                    image_ref=image_files.get(str(image_id), ""),
+                    source_path=source_split,
+                )
+                labels.setdefault(key, set()).add(name)
     return labels
 
 
@@ -512,11 +591,38 @@ def attach_concept_annotations(
     visual evidence and cannot be a valid synchronized positive for anything.
     """
     labels = coco_object_labels(annotation_sources)
+    matched = 0
+    unmatched: list[dict] = []
     for group in groups:
-        found = sorted(labels.get(str(group["image_id"]), set()))
+        key = canonical_coco_image_key(
+            group.get("image_id"),
+            image_ref=group.get("image_path", ""),
+            split=group.get("source_split", ""),
+        )
+        found = sorted(labels.get(key, set()))
         group["concept_annotations"] = found
         group["annotation_source"] = "coco_object_annotation" if found else "none"
+        group["coco_image_key"] = key
         group.setdefault("synchronized_group_id", group["group_id"])
+        if found:
+            matched += 1
+        elif len(unmatched) < 5:
+            unmatched.append(
+                {
+                    "raw_image_id": group.get("image_id"),
+                    "image_path": group.get("image_path"),
+                    "source_split": group.get("source_split"),
+                    "normalized_key": key,
+                }
+            )
+    if annotation_sources and labels and matched == 0:
+        raise DatasetCoverageError(
+            "COCO annotation join failure: instance files were discovered and "
+            "parsed, but zero synchronized groups matched their split-aware "
+            "image keys. This is not a missing-annotation-file error.\n"
+            f"  synchronized key examples: {json.dumps(unmatched, sort_keys=True)}\n"
+            f"  annotation key examples: {json.dumps(sorted(labels)[:5])}"
+        )
 
 
 def build_expanded_manifest(
@@ -558,8 +664,25 @@ def build_expanded_manifest(
         annotation_payload = annotation_source.payload if annotation_source.payload is not None else _load_metadata(Path(annotation_source.path))
         if not _is_coco_objects(annotation_payload):
             continue
-        categories = {str(item["id"]): str(item["name"]).lower() for item in annotation_payload["categories"]}
-        object_image_ids.update(str(item["image_id"]) for item in annotation_payload["annotations"] if categories.get(str(item["category_id"])) in candidate_names)
+        categories = {
+            str(item["id"]): str(item["name"]).lower()
+            for item in annotation_payload["categories"]
+        }
+        image_files = {
+            str(item["id"]): str(item.get("file_name", ""))
+            for item in annotation_payload.get("images", [])
+            if isinstance(item, Mapping) and "id" in item
+        }
+        source_split = Path(annotation_source.path).stem
+        object_image_ids.update(
+            _annotation_image_key(
+                item["image_id"],
+                image_ref=image_files.get(str(item["image_id"]), ""),
+                source_path=source_split,
+            )
+            for item in annotation_payload["annotations"]
+            if categories.get(str(item["category_id"])) in candidate_names
+        )
 
     per_source: list[dict] = []
     for source in sources:

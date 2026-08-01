@@ -257,6 +257,88 @@ def test_official_coco_annotations_override_caption_fallback(sibling_world):
     assert all(group["annotation_source"] == "coco_object_annotation" for group in annotated)
 
 
+@pytest.mark.parametrize(
+    ("image_id", "image_ref", "split", "expected"),
+    [
+        (419532, "", "train2014", "train2014:419532"),
+        ("000000419532", "", "train2014", "train2014:419532"),
+        (
+            "COCO_train2014_000000419532",
+            "train2014/COCO_train2014_000000419532.jpg",
+            "",
+            "train2014:419532",
+        ),
+        ("img0", "", "", "img0"),
+    ],
+)
+def test_canonical_coco_image_key(image_id, image_ref, split, expected):
+    assert (
+        E.canonical_coco_image_key(image_id, image_ref=image_ref, split=split)
+        == expected
+    )
+
+
+def _realistic_annotation_source(tmp_path, split="train2014"):
+    return E.MetadataSource(
+        path=str(tmp_path / f"instances_{split}.json"),
+        size_bytes=1,
+        source_kind="coco_object_annotation",
+        payload={
+            "images": [
+                {
+                    "id": 419532,
+                    "file_name": f"COCO_{split}_000000419532.jpg",
+                }
+            ],
+            "categories": [{"id": 18, "name": "dog"}],
+            "annotations": [{"image_id": 419532, "category_id": 18}],
+        },
+    )
+
+
+def test_annotation_join_matches_spokencoco_filename_to_integer_id(tmp_path):
+    group = {
+        "group_id": "g1",
+        "image_id": "COCO_train2014_000000419532",
+        "image_path": "/media/train2014/COCO_train2014_000000419532.jpg",
+        "source_split": "train",
+        "caption": "a dog",
+    }
+    E.attach_concept_annotations([group], [_realistic_annotation_source(tmp_path)])
+    assert group["coco_image_key"] == "train2014:419532"
+    assert group["concept_annotations"] == ["dog"]
+
+
+def test_annotation_join_does_not_cross_splits(tmp_path):
+    group = {
+        "group_id": "g1",
+        "image_id": "COCO_val2014_000000419532",
+        "image_path": "/media/val2014/COCO_val2014_000000419532.jpg",
+        "source_split": "validation",
+        "caption": "a dog",
+    }
+    with pytest.raises(E.DatasetCoverageError, match="annotation join failure"):
+        E.attach_concept_annotations(
+            [group], [_realistic_annotation_source(tmp_path, "train2014")]
+        )
+
+
+def test_zero_overlap_reports_both_key_spaces(tmp_path):
+    group = {
+        "group_id": "g1",
+        "image_id": "COCO_train2014_000000000001",
+        "image_path": "/media/train2014/COCO_train2014_000000000001.jpg",
+        "source_split": "train",
+        "caption": "empty",
+    }
+    with pytest.raises(E.DatasetCoverageError) as excinfo:
+        E.attach_concept_annotations([group], [_realistic_annotation_source(tmp_path)])
+    message = str(excinfo.value)
+    assert "This is not a missing-annotation-file error" in message
+    assert "train2014:1" in message
+    assert "train2014:419532" in message
+
+
 def test_caption_fallback_has_word_boundaries_not_substrings():
     groups = [{"image_id": "1", "group_id": "g1", "caption": "a caterpillar", "speaker": "s", "concept_annotations": []}]
     rows = E.rank_concepts(groups, {"cat": ["cat"]}, requirements=E.tiny_smoke_requirements(), groups_per_concept=2)
