@@ -23,18 +23,28 @@ from collections.abc import Mapping, Sequence
 
 import torch
 
-from jlens.mmpilot.backend import BuiltInputs, PilotBackend
+from jlens.mmpilot.backend import BuiltInputs, PilotBackend, text_hash
 
 #: Identical for every modality. The evidence is what changes, never the ask.
 DEFAULT_QUESTION = (
     "Question: which one of these is present: {options}? "
     "Answer with exactly one word.\nAnswer:"
 )
+PROMPT_PROTOCOL_VERSION = "gemma-it-chat-balanced-options-v1"
 
 
 def build_question(concepts: Sequence[str], template: str = DEFAULT_QUESTION) -> str:
     """The shared question, with candidates listed in a fixed order."""
     return template.format(options=", ".join(sorted(concepts)))
+
+
+def build_ordered_questions(
+    concepts: Sequence[str], template: str = DEFAULT_QUESTION
+) -> list[str]:
+    """Return canonical and reversed option orders, without duplicates."""
+    ordered = sorted(concepts)
+    orders = (ordered, list(reversed(ordered)))
+    return list(dict.fromkeys(template.format(options=", ".join(order)) for order in orders))
 
 
 def build_prompt(question: str, *, modality: str, caption: str | None = None) -> str:
@@ -188,6 +198,43 @@ def capability_record(
         "candidate_token_ids": {k: list(v) for k, v in candidate_ids.items()},
         "candidate_scores": scores,
         "all_candidates_single_token": all(len(v) == 1 for v in candidate_ids.values()),
+        **verdict,
+    }
+
+
+def balanced_capability_record(records: Sequence[Mapping], *, concept: str) -> dict:
+    """Aggregate both candidate orders and require an order-stable decision."""
+    if not records:
+        raise ValueError("at least one ordered capability record is required")
+    first = records[0]
+    scores: dict[str, dict] = {}
+    for candidate in first["candidate_scores"]:
+        rows = [record["candidate_scores"][candidate] for record in records]
+        scores[candidate] = {
+            "sum_logprob": sum(float(row["sum_logprob"]) for row in rows) / len(rows),
+            "mean_logprob": sum(float(row["mean_logprob"]) for row in rows) / len(rows),
+            "n_tokens": rows[0]["n_tokens"],
+            "token_ids": list(rows[0]["token_ids"]),
+        }
+    verdict = prediction_and_margin(scores, concept)
+    order_predictions = [str(record["prediction"]) for record in records]
+    order_stable = len(set(order_predictions)) == 1
+    verdict["correct"] = bool(verdict["correct"] and order_stable)
+    copied = (
+        "sample_id", "group_id", "concept", "modality", "media_checksum",
+        "modality_token_range", "candidate_token_ids", "all_candidates_single_token",
+    )
+    return {
+        **{key: first[key] for key in copied},
+        "prompt_hash": text_hash(
+            "|".join(str(record["prompt_hash"]) for record in records)
+        ),
+        "prompt_len": first["prompt_len"],
+        "prompt_protocol": PROMPT_PROTOCOL_VERSION,
+        "candidate_scores": scores,
+        "option_order_stable": order_stable,
+        "option_order_predictions": order_predictions,
+        "ordered_results": [dict(record) for record in records],
         **verdict,
     }
 

@@ -20,6 +20,8 @@ from dataclasses import asdict, dataclass, field
 
 from jlens.mmpilot.backend import ModalityUnsupportedError, PilotBackend
 from jlens.mmpilot.capability import (
+    balanced_capability_record,
+    build_ordered_questions,
     build_prompt,
     build_question,
     candidate_token_ids,
@@ -177,7 +179,7 @@ def stage_capability(
     concepts = list(config.concepts) or sorted(
         {g["concept"] for g in subset["splits"]["train"] if g["concept"]}
     )
-    question = build_question(concepts)
+    questions = build_ordered_questions(concepts)
     candidates = candidate_token_ids(backend, concepts)
     groups = [
         group
@@ -200,18 +202,25 @@ def stage_capability(
                 outcome.reused += 1
                 outcome.records.append(cached)
                 continue
+            ordered_records = []
             try:
-                inputs = _build_inputs_for(backend, group, modality, question, media)
+                for question in questions:
+                    inputs = _build_inputs_for(backend, group, modality, question, media)
+                    ordered_records.append(
+                        capability_record(
+                            backend,
+                            inputs,
+                            sample_id=identifier,
+                            concept=group["concept"],
+                            group_id=group["group_id"],
+                            candidate_ids=candidates,
+                        )
+                    )
             except ModalityUnsupportedError:
                 outcome.skipped.append(identifier)
                 continue
-            record = capability_record(
-                backend,
-                inputs,
-                sample_id=identifier,
-                concept=group["concept"],
-                group_id=group["group_id"],
-                candidate_ids=candidates,
+            record = balanced_capability_record(
+                ordered_records, concept=group["concept"]
             )
             record["split"] = group["split"]
             record["image_id"] = group["image_id"]
@@ -222,7 +231,8 @@ def stage_capability(
     summary = capability_summary(
         outcome.records, threshold=config.capability_threshold, modalities=modalities
     )
-    summary["question"] = question
+    summary["question"] = questions[0]
+    summary["questions"] = questions
     summary["candidate_token_ids"] = {k: list(v) for k, v in candidates.items()}
     store.save("metric", "capability_summary", summary)
     return outcome, summary

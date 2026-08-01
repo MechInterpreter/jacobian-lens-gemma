@@ -11,6 +11,7 @@ import torch
 
 from jlens.mmpilot import mock as K
 from jlens.mmpilot.backend import (
+    GemmaPilotBackend,
     InvarianceError,
     ModalityUnsupportedError,
     check_capture_noop,
@@ -20,6 +21,8 @@ from jlens.mmpilot.backend import (
 )
 from jlens.mmpilot.capability import (
     _extend_tensors,
+    balanced_capability_record,
+    build_ordered_questions,
     build_prompt,
     build_question,
     candidate_token_ids,
@@ -154,6 +157,42 @@ def test_prediction_and_margin_are_consistent(backend, question, candidates):
     assert verdict["target_margin"] > 0
 
 
+def test_balanced_questions_reverse_candidate_order():
+    questions = build_ordered_questions(["zebra", "cat"])
+    assert len(questions) == 2
+    assert "cat, zebra" in questions[0]
+    assert "zebra, cat" in questions[1]
+
+
+def test_balanced_capability_requires_option_order_stability():
+    base = {
+        "sample_id": "sample-text",
+        "group_id": "sample",
+        "concept": "zebra",
+        "modality": "text",
+        "media_checksum": None,
+        "modality_token_range": None,
+        "candidate_token_ids": {"cat": [1], "zebra": [2]},
+        "all_candidates_single_token": True,
+        "prompt_len": 10,
+    }
+    rows = [
+        {**base, "prompt_hash": "a", "prediction": "cat", "candidate_scores": {
+            "cat": {"sum_logprob": -1.0, "mean_logprob": -1.0, "n_tokens": 1, "token_ids": [1]},
+            "zebra": {"sum_logprob": -2.0, "mean_logprob": -2.0, "n_tokens": 1, "token_ids": [2]},
+        }},
+        {**base, "prompt_hash": "b", "prediction": "zebra", "candidate_scores": {
+            "cat": {"sum_logprob": -3.0, "mean_logprob": -3.0, "n_tokens": 1, "token_ids": [1]},
+            "zebra": {"sum_logprob": -1.0, "mean_logprob": -1.0, "n_tokens": 1, "token_ids": [2]},
+        }},
+    ]
+    result = balanced_capability_record(rows, concept="zebra")
+    assert result["prediction"] == "zebra"
+    assert result["target_margin"] == pytest.approx(0.5)
+    assert not result["option_order_stable"]
+    assert not result["correct"]
+
+
 def test_capability_summary_requires_every_available_modality():
     records = [
         {"concept": "dog", "modality": "text", "correct": True, "target_margin": 1.0},
@@ -174,6 +213,43 @@ def test_blocked_modality_raises_rather_than_substituting(question):
             modality="spoken_audio",
             audio=torch.zeros(K.MOCK_D_MODEL),
         )
+
+
+def test_gemma_it_prefers_chat_template_over_direct_processor_call():
+    class Processor:
+        tokenizer = None
+
+        def __init__(self):
+            self.direct_calls = 0
+            self.chat_calls = 0
+
+        def __call__(self, **_kwargs):
+            self.direct_calls += 1
+            return {"input_ids": torch.tensor([[9]])}
+
+        def apply_chat_template(self, messages, **kwargs):
+            self.chat_calls += 1
+            assert messages[0]["role"] == "user"
+            assert kwargs["add_generation_prompt"]
+            return {"input_ids": torch.tensor([[1, 2, 3]])}
+
+    processor = Processor()
+    adapter = object.__new__(GemmaPilotBackend)
+    adapter.processor = processor
+    adapter.tokenizer = processor
+    adapter.interface = {
+        "supports_image": False,
+        "supports_audio": False,
+        "has_chat_template": True,
+        "image_token_id": None,
+        "audio_token_id": None,
+    }
+    adapter.device = torch.device("cpu")
+    inputs = adapter.build_inputs(prompt="Question?", modality="text")
+    assert processor.direct_calls == 0
+    assert processor.chat_calls == 1
+    assert inputs.route == {"route": "chat_template", "add_generation_prompt": True}
+    assert inputs.prompt_len == 3
 
 
 # -------------------------------------------------------- invariance checks

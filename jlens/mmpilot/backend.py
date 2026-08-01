@@ -260,12 +260,10 @@ class GemmaPilotBackend:
             kwargs[self.interface["audio_kwarg"]] = audio
             if sampling_rate is not None and "sampling_rate" in self.interface["call_parameters"]:
                 kwargs["sampling_rate"] = sampling_rate
-        try:
+        if not self.interface["has_chat_template"]:
             encoded = self.processor(**kwargs)
             route = {"route": "processor_call", "kwargs": sorted(k for k in kwargs if k != "text")}
-        except Exception as exc:  # noqa: BLE001 — fall back once, then re-raise
-            if not self.interface["has_chat_template"]:
-                raise
+        else:
             content: list[dict] = []
             if image is not None:
                 content.append({"type": "image", "image": image})
@@ -279,7 +277,7 @@ class GemmaPilotBackend:
                 return_dict=True,
                 return_tensors="pt",
             )
-            route = {"route": "chat_template", "direct_call_error": str(exc)[:200]}
+            route = {"route": "chat_template", "add_generation_prompt": True}
 
         tensors = {
             key: (value.to(self.device) if torch.is_tensor(value) else value)
