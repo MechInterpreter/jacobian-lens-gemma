@@ -43,6 +43,14 @@ def sibling_world(tmp_path_factory):
     }
 
 
+def _annotation_sources(sources):
+    """The COCO object-annotation files among the discovered sources.
+
+    Without these no group carries visual evidence, so nothing is a valid
+    synchronized positive — which is the rule, not a bug.
+    """
+    return [source for source in sources if source.source_kind == "coco_object_annotation"]
+
 def test_discover_metadata_finds_fuller_annotation_and_rejects_coco_captions(
     sibling_world,
 ):
@@ -124,6 +132,7 @@ def test_rank_concepts_orders_by_feasibility_then_coverage(sibling_world):
         [source for source in sources if source.usable],
         image_roots=[base / "coco", base / "SpokenCOCO", base],
         audio_roots=[base / "coco", base / "SpokenCOCO", base],
+        annotation_sources=_annotation_sources(sources),
         baseline_groups=sibling_world["baseline"].groups,
     )
     rows = E.rank_concepts(expanded.groups, K.MOCK_CONCEPTS, groups_per_concept=6)
@@ -146,6 +155,7 @@ def test_select_concepts_and_subset_are_image_and_group_disjoint(sibling_world):
         [source for source in sources if source.usable],
         image_roots=[base / "coco", base / "SpokenCOCO", base],
         audio_roots=[base / "coco", base / "SpokenCOCO", base],
+        annotation_sources=_annotation_sources(sources),
         baseline_groups=sibling_world["baseline"].groups,
     )
     rows = E.rank_concepts(expanded.groups, K.MOCK_CONCEPTS, groups_per_concept=6)
@@ -196,6 +206,7 @@ def test_tiny_smoke_requirements_allow_plumbing_subset(sibling_world):
         [source for source in sources if source.usable],
         image_roots=[base / "coco", base / "SpokenCOCO", base],
         audio_roots=[base / "coco", base / "SpokenCOCO", base],
+        annotation_sources=_annotation_sources(sources),
         baseline_groups=sibling_world["baseline"].groups,
     )
     tiny = E.tiny_smoke_requirements()
@@ -288,7 +299,7 @@ def test_original_manifest_path_is_never_written(sibling_world, tmp_path):
 def test_split_uses_four_train_two_test_and_keeps_images_together(sibling_world):
     base = sibling_world["base"]
     sources = E.discover_metadata_sources([base], exclude=[sibling_world["manifest_path"]])
-    expanded = E.build_expanded_manifest([source for source in sources if source.usable], image_roots=[base / "coco", base / "SpokenCOCO", base], audio_roots=[base / "coco", base / "SpokenCOCO", base])
+    expanded = E.build_expanded_manifest([source for source in sources if source.usable], image_roots=[base / "coco", base / "SpokenCOCO", base], audio_roots=[base / "coco", base / "SpokenCOCO", base], annotation_sources=_annotation_sources(sources))
     rows = E.rank_concepts(expanded.groups, K.MOCK_CONCEPTS, groups_per_concept=6)
     chosen = E.select_concepts(rows, n_concepts=2)
     subset = M.build_subset(expanded.groups, {name: K.MOCK_CONCEPTS[name] for name in chosen}, groups_per_concept=6)

@@ -32,6 +32,16 @@ def _normalized(dataset):
     )
 
 
+def _annotated_groups(dataset):
+    """Normalized groups carrying their COCO object annotations.
+
+    Selection needs *both* halves of the evidence rule, so a group without its
+    visual annotation is not a candidate positive for anything.
+    """
+    _, normalized = _normalized(dataset)
+    return K.attach_object_annotations(normalized.groups, dataset["built"])
+
+
 def test_schema_is_discovered_not_assumed(dataset):
     schema = M.inspect_manifest(dataset["payload"])
     assert schema.records_key == "data"
@@ -545,8 +555,7 @@ def test_concept_coverage_counts_images_not_captions(dataset):
 
 
 def test_split_is_image_group_and_sample_disjoint_but_not_concept_disjoint(dataset):
-    _, normalized = _normalized(dataset)
-    subset = M.build_subset(normalized.groups, K.MOCK_CONCEPTS, groups_per_concept=6)
+    subset = M.build_subset(_annotated_groups(dataset), K.MOCK_CONCEPTS, groups_per_concept=6)
     report = M.check_split_leakage(subset)
     assert report["ok"], report
     assert report["image_overlap"] == []
@@ -557,8 +566,7 @@ def test_split_is_image_group_and_sample_disjoint_but_not_concept_disjoint(datas
 
 
 def test_all_groups_of_one_image_stay_in_the_same_split(dataset):
-    _, normalized = _normalized(dataset)
-    subset = M.build_subset(normalized.groups, K.MOCK_CONCEPTS, groups_per_concept=6)
+    subset = M.build_subset(_annotated_groups(dataset), K.MOCK_CONCEPTS, groups_per_concept=6)
     split_of: dict[str, set] = {}
     for split in ("train", "test"):
         for group in subset["splits"][split]:
@@ -567,8 +575,7 @@ def test_all_groups_of_one_image_stay_in_the_same_split(dataset):
 
 
 def test_leakage_check_catches_an_injected_overlap(dataset):
-    _, normalized = _normalized(dataset)
-    subset = M.build_subset(normalized.groups, K.MOCK_CONCEPTS, groups_per_concept=6)
+    subset = M.build_subset(_annotated_groups(dataset), K.MOCK_CONCEPTS, groups_per_concept=6)
     subset["splits"]["test"].append(dict(subset["splits"]["train"][0]))
     report = M.check_split_leakage(subset)
     assert not report["ok"]
@@ -576,9 +583,9 @@ def test_leakage_check_catches_an_injected_overlap(dataset):
 
 
 def test_subset_selection_is_deterministic(dataset):
-    _, normalized = _normalized(dataset)
-    first = M.build_subset(normalized.groups, K.MOCK_CONCEPTS, groups_per_concept=6)
-    second = M.build_subset(normalized.groups, K.MOCK_CONCEPTS, groups_per_concept=6)
+    groups = _annotated_groups(dataset)
+    first = M.build_subset(groups, K.MOCK_CONCEPTS, groups_per_concept=6)
+    second = M.build_subset(groups, K.MOCK_CONCEPTS, groups_per_concept=6)
     assert first["concepts"] == second["concepts"]
     assert [g["group_id"] for g in first["splits"]["test"]] == [
         g["group_id"] for g in second["splits"]["test"]

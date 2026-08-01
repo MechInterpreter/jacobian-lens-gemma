@@ -33,6 +33,15 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from jlens.mmpilot.evidence import (
+    EvidenceConfig,
+    caption_evidence,
+    config_for_concepts,
+    group_evidence,
+    has_any_evidence,
+    is_valid_positive,
+    visual_evidence,
+)
 from jlens.mmpilot.manifest import (
     ManifestSchema,
     ManifestSchemaError,
@@ -469,6 +478,46 @@ def _bounded_sync_payload(
     return derived, len(records), len(chosen)
 
 
+def coco_object_labels(annotation_sources: Sequence[MetadataSource]) -> dict[str, set[str]]:
+    """``{image_id: {category_name, ...}}`` from official COCO instance files.
+
+    This is the *visual* half of the evidence rule. It says what is in the
+    picture, and nothing at all about what the caption says.
+    """
+    labels: dict[str, set[str]] = {}
+    for source in annotation_sources:
+        payload = (
+            source.payload
+            if source.payload is not None
+            else _load_metadata(Path(source.path))
+        )
+        if not _is_coco_objects(payload):
+            continue
+        names = {str(item["id"]): str(item["name"]).lower() for item in payload["categories"]}
+        for annotation in payload["annotations"]:
+            name = names.get(str(annotation["category_id"]))
+            if name:
+                labels.setdefault(str(annotation["image_id"]), set()).add(name)
+    return labels
+
+
+def attach_concept_annotations(
+    groups, annotation_sources: Sequence[MetadataSource]
+) -> None:
+    """Attach COCO object labels to ``groups`` in place.
+
+    ``annotation_source`` records whether an image actually had an object
+    annotation. ``"none"`` is a real state: without it, the group carries no
+    visual evidence and cannot be a valid synchronized positive for anything.
+    """
+    labels = coco_object_labels(annotation_sources)
+    for group in groups:
+        found = sorted(labels.get(str(group["image_id"]), set()))
+        group["concept_annotations"] = found
+        group["annotation_source"] = "coco_object_annotation" if found else "none"
+        group.setdefault("synchronized_group_id", group["group_id"])
+
+
 def build_expanded_manifest(
     sources: Sequence[MetadataSource],
     *,
@@ -590,21 +639,7 @@ def build_expanded_manifest(
             "local metadata file. Sources examined:\n"
             + json.dumps(per_source, indent=2)
         )
-    categories: dict[str, set[str]] = {}
-    for source in annotation_sources:
-        payload = source.payload if source.payload is not None else _load_metadata(Path(source.path))
-        if not _is_coco_objects(payload):
-            continue
-        names = {str(item["id"]): str(item["name"]).lower() for item in payload["categories"]}
-        for annotation in payload["annotations"]:
-            name = names.get(str(annotation["category_id"]))
-            if name:
-                categories.setdefault(str(annotation["image_id"]), set()).add(name)
-    for group in merged.values():
-        labels = sorted(categories.get(str(group["image_id"]), set()))
-        group["concept_annotations"] = labels
-        group["annotation_source"] = "coco_object_annotation" if labels else "caption_normalized"
-        group.setdefault("synchronized_group_id", group["group_id"])
+    attach_concept_annotations(merged.values(), annotation_sources)
 
     groups = [merged[key] for key in sorted(merged)]
     return ExpansionResult(
@@ -668,14 +703,23 @@ def _normalized_words(text: str) -> set[str]:
     return out
 
 
-def _group_matches(group: Mapping, concept: str, keywords: Sequence[str]) -> tuple[bool, str]:
-    official = {str(label).lower() for label in group.get("concept_annotations", [])}
-    if official:
-        return concept.lower() in official or bool(official & {word.lower() for word in keywords}), "coco_object_annotation"
-    words = _normalized_words(str(group.get("caption", "")))
-    exact = {word.lower() for word in keywords}
-    hit = bool(words & exact) or concept.lower() in words
-    return hit, "caption_normalized" if hit else "none"
+def _group_matches(
+    group: Mapping,
+    concept: str,
+    keywords: Sequence[str],
+    config: EvidenceConfig | None = None,
+) -> tuple[bool, str]:
+    """Whether ``group`` is a valid synchronized positive for ``concept``.
+
+    Both kinds of evidence are required. This used to return on the COCO
+    annotation alone, which is what selected images of a cat whose caption
+    never says "cat" — see :mod:`jlens.mmpilot.evidence`.
+    """
+    config = config or config_for_concepts({concept: tuple(keywords)})
+    record = group_evidence(group, concept, config)
+    if record["is_valid_synchronized_positive"]:
+        return True, "coco_object_annotation_and_caption_lexicon"
+    return False, record["rejection_reason"]
 
 
 def rank_concepts(
@@ -686,8 +730,16 @@ def rank_concepts(
     groups_per_concept: int = 6,
     max_groups_per_image: int = 2,
     seed: str = "spokencoco-pilot",
+    evidence_config: EvidenceConfig | None = None,
 ) -> list[dict]:
     """Score every candidate concept against what the split will really yield.
+
+    Counting is done over **valid synchronized positives only**: a group is a
+    positive for a concept when its image carries the COCO object annotation
+    *and* its written caption carries the concept or an approved synonym. Every
+    row also reports the two components separately (``n_annotated_images``,
+    ``n_caption_evidence_groups``) so a concept short on written evidence is
+    visible as such rather than as a bare shortfall.
 
     Ordering is feasibility first, then distinct images, then synchronized
     groups, then speakers, then name — deterministic, and biased toward the
@@ -697,6 +749,7 @@ def rank_concepts(
     DATASET NO-GO can say exactly what was short.
     """
     requirements = requirements or ConceptRequirements()
+    config = evidence_config or config_for_concepts(concepts)
     by_image: dict[str, list[dict]] = {}
     for group in groups:
         by_image.setdefault(group["image_id"], []).append(dict(group))
@@ -704,14 +757,23 @@ def rank_concepts(
         image_groups.sort(key=lambda g: g["group_id"])
 
     matched_concepts: dict[str, set[str]] = {}
+    evidence_concepts: dict[str, set[str]] = {}
     for image_id, image_groups in by_image.items():
         matched_concepts[image_id] = {
             concept
-            for concept, keywords in concepts.items()
-            if any(_group_matches(g, concept, keywords)[0] for g in image_groups)
+            for concept in concepts
+            if any(is_valid_positive(g, concept, config) for g in image_groups)
         }
+        evidence_concepts[image_id] = {
+            concept
+            for concept in concepts
+            if any(has_any_evidence(g, concept, config) for g in image_groups)
+        }
+    # A negative must carry *neither* kind of evidence for *any* concept, so a
+    # visual-only cat picture is excluded from the negatives as well as from
+    # the positives rather than quietly becoming a contrast example.
     negative_images = [
-        image_id for image_id, matched in matched_concepts.items() if not matched
+        image_id for image_id, evidence in evidence_concepts.items() if not evidence
     ]
     n_negative_groups = sum(
         len(by_image[image_id][:max_groups_per_image]) for image_id in negative_images
@@ -719,9 +781,10 @@ def rank_concepts(
 
     rows: list[dict] = []
     for concept in sorted(concepts):
-        # Only images that mention this concept *alone* are usable: an image
-        # naming two candidate concepts is dropped by build_subset, so counting
-        # it here would promise groups the split will not deliver.
+        # Only images that are a valid positive for this concept *alone* are
+        # usable: an image matching two candidate concepts is dropped by
+        # build_subset, so counting it here would promise groups the split will
+        # not deliver.
         pure = [
             image_id
             for image_id, matched in matched_concepts.items()
@@ -729,6 +792,18 @@ def rank_concepts(
         ]
         concept_groups = [g for image_id in pure for g in by_image[image_id]]
         speakers = {g["speaker"] for g in concept_groups if g.get("speaker")}
+        all_groups = [g for image_groups in by_image.values() for g in image_groups]
+        annotated_images = {
+            g["image_id"]
+            for g in all_groups
+            if visual_evidence(g, concept, config)["present"]
+        }
+        caption_groups = [
+            g for g in all_groups if caption_evidence(g, concept, config)["present"]
+        ]
+        valid_groups = [
+            g for g in all_groups if is_valid_positive(g, concept, config)
+        ]
         plan = _split_plan(
             pure,
             by_image,
@@ -754,13 +829,31 @@ def rank_concepts(
             )
         if n_negative_groups < requirements.min_negatives:
             unmet.append(f"negatives {n_negative_groups} < {requirements.min_negatives}")
+        # When a concept is short, say which half of the evidence rule was the
+        # binding constraint. That is the whole diagnosis this repair exists for.
+        if unmet and len(annotated_images) > len(pure) and not caption_groups:
+            evidence_gap = "no written-caption evidence for any annotated image"
+        elif unmet and len(annotated_images) > len(pure):
+            evidence_gap = (
+                f"{len(annotated_images) - len(pure)} annotated image(s) lack "
+                "written-caption evidence"
+            )
+        elif unmet and caption_groups and not annotated_images:
+            evidence_gap = "caption evidence without any COCO object annotation"
+        else:
+            evidence_gap = ""
         rows.append(
             {
                 "concept": concept,
                 "n_distinct_images": len(pure),
                 "n_groups": len(concept_groups),
                 "n_speakers": len(speakers),
-                "annotation_source": "coco_object_annotation" if any(g.get("concept_annotations") for g in concept_groups) else "caption_normalized",
+                "n_annotated_images": len(annotated_images),
+                "n_caption_evidence_groups": len(caption_groups),
+                "n_valid_synchronized_groups": len(valid_groups),
+                "annotation_source": "coco_object_annotation_and_caption_lexicon",
+                "evidence_rule": "visual_annotation_AND_caption_lexicon",
+                "evidence_lexicon_hash": config.lexicon_hash,
                 "eligible_train_positives": plan["n_train_positives"],
                 "eligible_held_out_positives": plan["n_test_positives"],
                 "matched_negatives": n_negative_groups,
@@ -770,6 +863,8 @@ def rank_concepts(
                 **plan,
                 "feasible": not unmet,
                 "unmet": unmet,
+                "evidence_gap": evidence_gap,
+                "rejection_reason": "; ".join([*unmet, evidence_gap] if evidence_gap else unmet),
             }
         )
     rows.sort(
@@ -785,20 +880,26 @@ def rank_concepts(
 
 
 def format_ranking_table(rows: Sequence[Mapping]) -> str:
-    """A fixed-width ranked table, printed before any concept is selected."""
+    """A fixed-width ranked table, printed before any concept is selected.
+
+    ``annot`` and ``capt`` are the two halves of the evidence rule: annotated
+    images, and groups whose written caption carries the concept. ``images``
+    and ``groups`` count only what satisfies **both**.
+    """
     header = (
-        f"{'concept':12s} {'images':>6s} {'groups':>6s} {'spk':>4s} "
-        f"{'train+':>6s} {'test+':>5s} {'neg':>4s} {'source':>22s} {'split':>5s} {'ok':>2s} rejection"
+        f"{'concept':12s} {'images':>6s} {'groups':>6s} {'annot':>6s} {'capt':>5s} "
+        f"{'spk':>4s} {'train+':>6s} {'test+':>5s} {'neg':>4s} {'split':>5s} {'ok':>2s} rejection"
     )
     lines = [header, "-" * len(header)]
     for row in rows:
         lines.append(
             f"{row['concept']:12s} {row['n_distinct_images']:6d} "
-            f"{row['n_groups_selected']:6d} {row['n_speakers']:4d} "
+            f"{row['n_groups_selected']:6d} {row.get('n_annotated_images', 0):6d} "
+            f"{row.get('n_caption_evidence_groups', 0):5d} {row['n_speakers']:4d} "
             f"{row['n_train_positives']:6d} {row['n_test_positives']:5d} "
-            f"{row['n_negative_groups']:4d} {row['annotation_source']:>22s} "
+            f"{row['n_negative_groups']:4d} "
             f"{'yes' if row['split_feasible'] else 'no':>5s} {'ok' if row['feasible'] else 'NO':>2s} "
-            f"{'; '.join(row['unmet'])}"
+            f"{row.get('rejection_reason') or '; '.join(row['unmet'])}"
         )
     return "\n".join(lines)
 
@@ -807,11 +908,18 @@ def select_concepts(
     rows: Sequence[Mapping],
     *,
     n_concepts: int = 2,
+    max_concepts: int | None = None,
     requirements: ConceptRequirements | None = None,
     total_synchronized_records: int | None = None,
     coverage_cause: str = "insufficient valid synchronized records after metadata join and media validation",
 ) -> list[str]:
-    """The top ``n_concepts`` feasible concepts, or a DATASET NO-GO.
+    """Feasible concepts, or a DATASET NO-GO.
+
+    Args:
+        n_concepts: The **minimum** number of feasible concepts required. Fewer
+            than this is a DATASET NO-GO.
+        max_concepts: How many to return when more are feasible. Defaults to
+            ``n_concepts``. The pilot screens up to four and requires two.
 
     Raises:
         DatasetCoverageError: If fewer than ``n_concepts`` concepts clear the
@@ -820,6 +928,7 @@ def select_concepts(
             them here would change what the pilot's GO means without saying so.
     """
     requirements = requirements or ConceptRequirements()
+    limit = n_concepts if max_concepts is None else max(max_concepts, n_concepts)
     feasible = [row["concept"] for row in rows if row["feasible"]]
     if len(feasible) < n_concepts:
         raise DatasetCoverageError(
@@ -831,6 +940,11 @@ def select_concepts(
 
             f"{format_ranking_table(rows)}\n\n"
             f"Requirements applied: {requirements.to_dict()}\n\n"
+            "A positive requires BOTH the COCO object annotation AND the "
+            "concept (or an approved synonym) in the written caption. Where "
+            "'annot' exceeds 'images' in the table, the images exist but their "
+            "captions do not name the concept — those groups carry visual but "
+            "not written evidence and are not valid synchronized positives.\n"
             "The local Drive dataset does not hold enough synchronized "
             "image/caption/audio groups for these concepts. Add more local "
             "SpokenCOCO records (images and their recordings both present on "
@@ -840,4 +954,4 @@ def select_concepts(
             "set TINY_SMOKE=True, whose result is explicitly not scientific "
             "evidence and never feeds the research verdict."
         )
-    return feasible[:n_concepts]
+    return feasible[:limit]

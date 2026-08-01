@@ -33,6 +33,16 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from jlens.mmpilot.evidence import (
+    CONCEPT_LEXICON,
+    EvidenceConfig,
+    config_for_concepts,
+    group_evidence,
+    has_any_evidence,
+    is_valid_positive,
+    negative_evidence,
+)
+
 IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
 AUDIO_SUFFIXES = (".wav", ".flac", ".mp3", ".ogg", ".m4a")
 
@@ -1038,14 +1048,11 @@ def manifest_checksum(path: str | os.PathLike[str]) -> str:
 #: Frequent, concrete, visually grounded COCO concepts and the caption words
 #: that count as a mention. Candidates only — which ones survive is decided by
 #: the manifest audit and then by the behavioral capability gate.
-DEFAULT_CONCEPTS: dict[str, tuple[str, ...]] = {
-    "dog": ("dog", "dogs", "puppy", "puppies"),
-    "cat": ("cat", "cats", "kitten", "kittens"),
-    "pizza": ("pizza", "pizzas"),
-    "bus": ("bus", "buses", "busses"),
-    "train": ("train", "trains"),
-    "horse": ("horse", "horses"),
-}
+#:
+#: One lexicon, defined in :mod:`jlens.mmpilot.evidence` and aliased here. Two
+#: copies would let selection and the audit drift apart, which is precisely the
+#: class of bug this module is being repaired for.
+DEFAULT_CONCEPTS: dict[str, tuple[str, ...]] = dict(CONCEPT_LEXICON)
 
 
 def caption_mentions(caption: str, keywords: Iterable[str]) -> bool:
@@ -1087,12 +1094,23 @@ def build_subset(
     negatives_per_concept: int = 6,
     max_groups_per_image: int = 2,
     seed: str = "spokencoco-pilot",
+    evidence_config: EvidenceConfig | None = None,
 ) -> dict:
     """Deterministically select a small, image-disjoint pilot subset.
 
-    Each image is assigned to at most one concept: an image whose caption
-    mentions two selected concepts is dropped rather than counted twice. Every
-    group belonging to one image lands in the same split, so the split is
+    A positive requires **both** kinds of evidence — the COCO object annotation
+    *and* the concept (or an approved synonym) in the written caption. The
+    earlier rule short-circuited on the annotation and never read the caption,
+    which selected images of a cat whose caption never says "cat" and then
+    marked the text arm wrong for not seeing one. See
+    :mod:`jlens.mmpilot.evidence`.
+
+    Matched negatives are stricter still: an image is only a negative when it
+    carries *neither* kind of evidence for *any* screened concept.
+
+    Each image is assigned to at most one concept: an image that is a valid
+    positive for two selected concepts is dropped rather than counted twice.
+    Every group belonging to one image lands in the same split, so the split is
     image-disjoint, group-disjoint, and sample-disjoint — but *not*
     concept-disjoint, which is the point: the same concept must appear in
     source-train and in distinct target-test examples.
@@ -1108,24 +1126,29 @@ def build_subset(
     if groups_per_concept < 2:
         raise ValueError("groups_per_concept must be >= 2 to allow a train/test split")
 
+    config = evidence_config or config_for_concepts(concepts)
+
     by_image: dict[str, list[dict]] = {}
     for group in groups:
         by_image.setdefault(group["image_id"], []).append(dict(group))
 
+    # Two different questions, deliberately kept apart:
+    #   image_concepts  — what this image is a *valid positive* for.
+    #   image_evidence  — what it carries *any* evidence for, which is what
+    #                     disqualifies it from being a matched negative.
     image_concepts: dict[str, set[str]] = {}
+    image_evidence: dict[str, set[str]] = {}
     for image_id, image_groups in by_image.items():
-        matched = {
+        image_concepts[image_id] = {
             concept
-            for concept, keywords in concepts.items()
-            if any(
-                (concept.lower() in {str(label).lower() for label in g.get("concept_annotations", [])}
-                 if g.get("concept_annotations")
-                 else caption_mentions(g["caption"], keywords))
-                for g in image_groups
-            )
-
+            for concept in concepts
+            if any(is_valid_positive(g, concept, config) for g in image_groups)
         }
-        image_concepts[image_id] = matched
+        image_evidence[image_id] = {
+            concept
+            for concept in concepts
+            if any(has_any_evidence(g, concept, config) for g in image_groups)
+        }
 
     selected: dict[str, dict] = {}
     used_images: set[str] = set()
@@ -1154,8 +1177,8 @@ def build_subset(
         }
 
     negatives = sorted(
-        (image_id for image_id, matched in image_concepts.items()
-         if not matched and image_id not in used_images),
+        (image_id for image_id, evidence in image_evidence.items()
+         if not evidence and image_id not in used_images),
         key=lambda image_id: _stable_rank(image_id, f"{seed}|negative"),
     )[: negatives_per_concept * 2]
     n_train_neg = max(1, len(negatives) // 2)
@@ -1172,8 +1195,22 @@ def build_subset(
                 :max_groups_per_image
             ]
             for group in chosen:
+                # Every selected row carries the evidence that justified it, so
+                # a reviewer never has to take the label on trust.
+                justification = (
+                    group_evidence(group, concept, config)
+                    if concept is not None
+                    else negative_evidence(group, sorted(concepts), config)
+                )
                 out.append({**group, "concept": concept, "split": split,
-                            "is_positive": concept is not None})
+                            "is_positive": concept is not None,
+                            "evidence": justification,
+                            "split_provenance": {
+                                **(group.get("split_provenance") or {}),
+                                "source_split": group.get("source_split"),
+                                "assignment": split,
+                                "assignment_rule": "all groups of one image share a split",
+                            }})
         return out
 
     train: list[dict] = []
@@ -1194,10 +1231,19 @@ def build_subset(
             "negatives_per_concept": negatives_per_concept,
             "max_groups_per_image": max_groups_per_image,
             "selection_rule": (
-                "images whose captions mention exactly one selected concept; "
-                "ordered by sha256(seed|concept|image_id); first half train"
+                "images that are a VALID SYNCHRONIZED POSITIVE for exactly one "
+                "selected concept — COCO object annotation AND an approved "
+                "caption term, both required; ordered by "
+                "sha256(seed|concept|image_id); first half train"
+            ),
+            "negative_rule": (
+                "images carrying neither visual nor caption evidence for any "
+                "screened concept"
             ),
             "concept_keywords": {k: list(v) for k, v in concepts.items()},
+            "evidence_config": config.to_dict(),
+            "evidence_lexicon_hash": config.lexicon_hash,
+            "evidence_config_fingerprint": config.fingerprint,
         },
     }
 
