@@ -186,6 +186,20 @@ def test_published_native_validation_supersedes_posthoc_reconstruction_gate():
     assert entry["evidence"]["native_readout_layers_passing"] == [38]
 
 
+def test_perfect_retrieval_can_beat_high_discrete_shuffled_p95():
+    inputs = complete_run()
+    for pair in inputs["representational"]["pairs"].values():
+        pair["jspace_retrieval"]["n_queries"] = 23
+        pair["jspace_retrieval"]["top1_accuracy"] = 1.0
+        pair["shuffled_control"]["p95_top1_accuracy"] = 22 / 23
+    criteria = evaluate_criteria(**inputs)
+    entry = criteria["representational_structure"]
+    assert entry["status"] == PASS
+    for row in entry["evidence"]["text_image_pairs"]:
+        assert row["beats_shuffled"] is True
+        assert row["accuracy_resolution"] == pytest.approx(1 / 23)
+
+
 def test_a_real_lens_shortfall_is_still_a_fail():
     """The repair must not turn a genuine failure into a shrug.
 

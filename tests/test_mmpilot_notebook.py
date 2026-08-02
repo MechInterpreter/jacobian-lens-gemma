@@ -252,8 +252,8 @@ def test_the_audit_states_the_evidence_rule_and_never_transcribes(notebook):
 def test_the_top_two_feasible_concepts_are_selected_and_two_are_required(notebook):
     """Every discovered category is screened; the top two feasible are taken."""
     source = _code_source(notebook)
-    assert re.search(r"^N_CONCEPTS_TO_SELECT = 2$", source, re.MULTILINE)
-    assert re.search(r"^MIN_CONCEPTS_REQUIRED = 2$", source, re.MULTILINE)
+    assert re.search(r"^N_CONCEPTS_TO_SELECT = 4$", source, re.MULTILINE)
+    assert re.search(r"^MIN_CONCEPTS_REQUIRED = 4$", source, re.MULTILINE)
     assert "max_concepts=2 if TINY_SMOKE else N_CONCEPTS_TO_SELECT" in source
     assert "n_concepts=2 if TINY_SMOKE else MIN_CONCEPTS_REQUIRED" in source
     assert re.search(r"^GROUPS_PER_CONCEPT = 6$", source, re.MULTILINE)
@@ -596,7 +596,7 @@ def test_runtime_expansion_precedes_selection_and_model_scoring(notebook):
         "coco_object_annotation",
         "persist_expanded_manifest",
         "GROUPS_PER_CONCEPT = 6",
-        "N_CONCEPTS_TO_SELECT = 2",
+        "N_CONCEPTS_TO_SELECT = 4",
         "TINY_SMOKE = False",
     ):
         assert expected in source, expected

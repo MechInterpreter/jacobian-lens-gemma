@@ -590,8 +590,12 @@ def stage_causal(
                 base = directions.get((concept, source_modality, layer, "source_concept"))
                 if base is None:
                     continue
+                # Prefer a control concept outside the focal causal set. In a
+                # two-way forced choice, the only alternative is not actually
+                # unrelated: it is the target's direct contrast.
                 unrelated_concept = next(
-                    (other for other in all_concepts if other != concept), None
+                    (other for other in all_concepts if other not in concepts),
+                    next((other for other in all_concepts if other != concept), None),
                 )
                 variants: dict[str, dict] = {"source_concept": base, "zero": base}
                 raw = directions.get(

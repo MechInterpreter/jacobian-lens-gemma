@@ -9,7 +9,7 @@ from jlens.metadata import load_config
 
 ROOT = Path(__file__).resolve().parent.parent
 NOTEBOOK = ROOT / "notebooks" / "gemma_4_e4b_text_jlens_recalibration_colab.ipynb"
-CONFIG = ROOT / "configs" / "gemma_text_recalibration.yaml"
+CONFIG = ROOT / "configs" / "gemma_text_early_layer_recalibration.yaml"
 
 
 def _payload():
@@ -74,7 +74,7 @@ def test_candidate_is_not_published_without_native_readout_controls():
 def test_recalibration_config_is_narrow_and_pinned():
     config = load_config(str(CONFIG))
     assert config["model"]["revision"] == "fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd"
-    assert config["sites"]["source_layers"] == [35, 38]
+    assert config["sites"]["source_layers"] == [20, 26, 32, 38]
     assert config["fitting"]["n_prompts"] == 32
     assert config["recalibration"]["heldout_prompts"] == 8
     assert config["recalibration"]["require_layers_above_random"] == 1
