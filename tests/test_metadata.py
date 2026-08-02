@@ -38,7 +38,12 @@ def test_shipped_configs_validate(path):
 
 
 def test_shipped_configs_found():
-    assert len(CONFIGS) == 3
+    assert {path.name for path in CONFIGS} == {
+        "gemma_text_microsmoke.yaml",
+        "gemma_text_pilot.yaml",
+        "gemma_text_recalibration.yaml",
+        "gemma_text_smoke.yaml",
+    }
 
 
 def test_shipped_prompt_files_are_consistent():

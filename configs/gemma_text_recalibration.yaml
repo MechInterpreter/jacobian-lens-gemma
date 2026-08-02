@@ -1,0 +1,55 @@
+# Narrow text-only recalibration for the multimodal transfer pilot. The lens is
+# fitted on official Gemma-IT chat-formatted WikiText and is never exposed to
+# images, SpokenCOCO captions, or pilot test examples.
+mode: pilot
+
+model:
+  repo_id: google/gemma-4-E4B-it
+  revision: fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd
+  tokenizer_repo_id: null
+  tokenizer_revision: null
+  dtype: bfloat16
+  device_map: cuda
+  allow_model_load: false
+  expect_n_layers: 42
+  expect_d_model: 2560
+  expect_vocab_size: 262144
+
+sites:
+  source_site: block_output
+  target_site: block_output
+  source_layers: [35, 38]
+  target_layer: 41
+
+positions:
+  skip_first: 16
+  source_rule: "all positions t with skip_first <= t < seq_len - 1"
+  target_rule: "cotangents at every valid position; causality zeroes t' < t, so the source gradient is sum over t' >= t"
+
+fitting:
+  prompt_source: wikitext
+  prompts_path: null
+  n_prompts: 32
+  max_seq_len: 128
+  dim_batch: 8
+  seed: 42
+  checkpoint_every: 2
+
+eval:
+  prompts_path: configs/prompts/eval_prompts.json
+  top_k: 10
+  control_seed: 1234
+
+paths:
+  checkpoint: checkpoints/ckpt.pt
+  output_dir: artifacts
+
+recalibration:
+  protocol: gemma-it-chat-text-only-v1
+  heldout_prompts: 8
+  chat_instruction: "Read the following passage and briefly continue it."
+  run_name: text_jlens_recalibration_v1
+  pursuit_k: 25
+  control_draws: 3
+  max_control_samples_per_layer: 8
+  require_layers_above_random: 1
