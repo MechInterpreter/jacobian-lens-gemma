@@ -39,6 +39,7 @@ def test_shipped_configs_validate(path):
 
 def test_shipped_configs_found():
     assert {path.name for path in CONFIGS} == {
+        "gemma_text_early_layer_recalibration.yaml",
         "gemma_text_microsmoke.yaml",
         "gemma_text_pilot.yaml",
         "gemma_text_recalibration.yaml",
