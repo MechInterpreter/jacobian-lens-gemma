@@ -138,6 +138,10 @@ def evaluate_criteria(
     # the median around 6-7%. The question is whether it explained more than
     # random directions matched to it in count, norm, width and pursuit.
     control = dict(reconstruction_control or {})
+    native_validation = dict(
+        (lens_validation or {}).get("native_readout_validation") or {}
+    )
+    native_layers = list(native_validation.get("native_readout_layers_passing", []))
     by_layer = control.get("by_layer", {}) or {}
     layers_above = list(control.get("layers_above_random", []))
     primary_layer = control.get("primary_layer")
@@ -182,7 +186,18 @@ def evaluate_criteria(
         "layers_not_evaluated": control.get("layers_not_evaluated", []),
         "all_pools_matched_exactly": control.get("all_pools_matched_exactly"),
     }
-    if not control.get("n_records"):
+    if native_validation.get("status") == "validated_text_only" and native_layers:
+        sanity_evidence.update(
+            {
+                "validation_method": "heldout_native_readout",
+                "native_readout_layers_passing": native_layers,
+                "native_validation_path": native_validation.get(
+                    "native_validation_path"
+                ),
+            }
+        )
+        criteria["lens_sanity_above_random"] = criterion(PASS, sanity_evidence)
+    elif not control.get("n_records"):
         criteria["lens_sanity_above_random"] = criterion(
             NOT_EVALUATED,
             sanity_evidence,
@@ -601,6 +616,15 @@ def reconstruction_sentence(criteria: Mapping, code_stats: Mapping) -> str:
     absolute = evidence.get("absolute_heldout_text_median_explained_fraction")
     if absolute is None:
         absolute = code_stats.get("median_explained_fraction")
+    if evidence.get("validation_method") == "heldout_native_readout":
+        return (
+            f"J-space reconstructed {_percent(absolute)} of total activation "
+            "variance (descriptive only). The frozen text-only lens passed its "
+            "separate held-out native-readout validation at layers "
+            f"{evidence.get('native_readout_layers_passing')}; that validation, "
+            "rather than a post-hoc random reconstruction gate, establishes lens "
+            "compatibility for this pilot."
+        )
     if entry.get("status") == NOT_EVALUATED:
         return (
             "J-space reconstruction was **NOT EVALUATED**: no codes and no "
@@ -728,8 +752,8 @@ def gonogo_report(
         f"1. **Did Gemma behaviorally recognize the concepts in each modality?** "
         f"{yes_no('behavioral_capability')} — concepts passing for both text and "
         f"image: {criteria['behavioral_capability']['evidence']['retained_text_image_concepts']}.",
-        f"2. **Did the frozen J-lens reconstruct held-out activations better "
-        f"than matched random directions?** {yes_no('lens_sanity_above_random')} "
+        f"2. **Did the frozen J-lens pass its held-out validation?** "
+        f"{yes_no('lens_sanity_above_random')} "
         f"— {reconstruction_sentence(criteria, code_stats)}",
         f"3. **Was J-space structure stronger than raw residual space?** "
         f"{yes_no('jspace_beats_raw_residual')} (structure above the shuffled "

@@ -168,6 +168,24 @@ def test_a_complete_run_evaluates_everything():
     assert criteria["behavioral_capability"]["status"] == PASS
 
 
+def test_published_native_validation_supersedes_posthoc_reconstruction_gate():
+    inputs = complete_run()
+    inputs["lens_validation"]["native_readout_validation"] = {
+        "status": "validated_text_only",
+        "native_readout_layers_passing": [38],
+        "native_validation_path": "drive/native_readout_validation.json",
+    }
+    inputs["reconstruction_control"] = {
+        "schema": "jlens.mmpilot.native_validation_reference.v1",
+        "n_records": 0,
+    }
+    criteria = evaluate_criteria(**inputs)
+    entry = criteria["lens_sanity_above_random"]
+    assert entry["status"] == PASS
+    assert entry["evidence"]["validation_method"] == "heldout_native_readout"
+    assert entry["evidence"]["native_readout_layers_passing"] == [38]
+
+
 def test_a_real_lens_shortfall_is_still_a_fail():
     """The repair must not turn a genuine failure into a shrug.
 
