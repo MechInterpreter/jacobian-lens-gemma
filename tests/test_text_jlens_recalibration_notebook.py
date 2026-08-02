@@ -57,15 +57,18 @@ def test_recalibration_is_text_only_gated_and_resume_safe():
     assert "SpokenCOCO captions" in source
 
 
-def test_candidate_is_not_published_without_the_random_control_gate():
+def test_candidate_is_not_published_without_native_readout_controls():
     source = _source()
     assert "ReconstructionControlConfig" in source
     assert "max_control_pool_atoms=None" in source
     assert "require_pool_match=True" in source
-    assert "layers_above_random" in source
+    assert "native_readout_validation.json" in source
+    assert "permuted" in source and "wrong_layer" in source
+    assert "mean_reciprocal_rank" in source and "mean_top10_overlap" in source
+    assert "layers_passing" in source
     assert "lens.candidate.pt" in source
     assert "lens.validated.pt" in source
-    assert source.index("layers_above_random") < source.index("shutil.copyfile")
+    assert source.index("layers_passing") < source.index("shutil.copyfile")
 
 
 def test_recalibration_config_is_narrow_and_pinned():
