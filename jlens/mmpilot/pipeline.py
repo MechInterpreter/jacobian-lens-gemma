@@ -680,6 +680,11 @@ def stage_causal(
                                         "control_kind": control_kind,
                                         "sample_id": identifier,
                                         "group_id": group["group_id"],
+                                        # The independent statistical unit. Two
+                                        # synchronized groups can carry the same
+                                        # photograph, so a group-level count of
+                                        # image targets over-reports n.
+                                        "image_id": group["image_id"],
                                         "target_is_positive": sign < 0,
                                         "direction_checksum": direction["direction_checksum"],
                                     }

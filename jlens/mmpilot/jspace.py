@@ -16,10 +16,14 @@ decomposed by the repository's validated nonnegative gradient pursuit into
 coordinates carry concept identity across modalities better than the raw
 residual does, and better than shuffled labels.
 
-Retrieval never lets a group retrieve its own synchronized twin: the written
-caption, the recording of that caption, and the image share content by
+Retrieval never lets a query retrieve its own **image**. The written caption,
+the recording of that caption, and the photograph share content by
 construction, so scoring them against each other would measure the dataset's
-pairing rather than the model's representation.
+pairing rather than the model's representation. Excluding only the exact
+synchronized group is not enough: SpokenCOCO ships several captions per COCO
+image and the subset builder keeps more than one of them, so a caption could
+otherwise reach its own photograph through a sibling caption's group. See
+:func:`admissible_targets`.
 """
 
 from __future__ import annotations
@@ -53,8 +57,23 @@ CONVENTIONS = {
 }
 
 
+#: Which admissibility rule the representational numbers were computed under.
+#: Bound into audit fingerprints so results from two different rules can never
+#: be mixed, and printed in every artifact that carries retrieval metrics.
+EXCLUSION_RULE_VERSION = "exclude_same_image_id_supersedes_group.v1"
+
+
 class LensIncompatibleError(RuntimeError):
     """The available lens artifact cannot be used with this model/layers."""
+
+
+class NoEligibleTargetError(RuntimeError):
+    """Image-level exclusion left a modality pair with nothing to retrieve.
+
+    Raised only in strict mode. A retrieval accuracy over zero queries is 0.0,
+    which reads exactly like a measured failure, so a pair that could not be
+    evaluated must stop the caller rather than report a number.
+    """
 
 
 # ----------------------------------------------------------- lens validation
@@ -298,21 +317,85 @@ def support_overlap(a: Mapping[int, float], b: Mapping[int, float]) -> float:
     return float(weighted_jaccard(a, b))
 
 
+def admissible_targets(
+    source: Mapping, targets: Sequence[Mapping]
+) -> tuple[list[Mapping], dict]:
+    """The targets ``source`` may be scored against, and why the rest went.
+
+    Two exclusions, and the image-level one **supersedes** the group-level one:
+
+    1. A target from the query's own synchronized group is the same caption,
+       the same recording, and the same photograph.
+    2. A target from a *different* group that carries the **same image** is the
+       dataset's own pairing arriving by a sibling route. SpokenCOCO ships
+       several captions per COCO image and the subset builder takes more than
+       one of them, so this is the common case, not a corner case. Excluding
+       only the exact group would let a caption retrieve its own photograph
+       through a sibling caption's group.
+
+    Returns ``(admissible, counts)``. The counts separate the two reasons so a
+    report can say how much of the exclusion the image rule actually did.
+    """
+    admissible: list[Mapping] = []
+    same_group = 0
+    same_image_only = 0
+    for target in targets:
+        if target["group_id"] == source["group_id"]:
+            same_group += 1
+        elif str(target["image_id"]) == str(source["image_id"]):
+            same_image_only += 1
+        else:
+            admissible.append(target)
+    return admissible, {
+        "n_candidates": len(targets),
+        "n_excluded_same_group": same_group,
+        "n_excluded_same_image_different_group": same_image_only,
+        "n_eligible": len(admissible),
+    }
+
+
 def _pairs(
     sources: Sequence[Mapping], targets: Sequence[Mapping]
+) -> list[tuple[Mapping, list[Mapping], dict]]:
+    """Every source with its admissible targets and its exclusion counts.
+
+    Sources that keep no eligible target stay in the list with an empty target
+    set, so they can be counted rather than silently disappearing from the
+    denominator.
+    """
+    return [(source, *admissible_targets(source, targets)) for source in sources]
+
+
+def _evaluable(
+    entries: Sequence[tuple[Mapping, list[Mapping], dict]],
 ) -> list[tuple[Mapping, list[Mapping]]]:
-    """Each source with its admissible targets (never its own image/group)."""
-    out = []
-    for source in sources:
-        admissible = [
-            target
-            for target in targets
-            if target["group_id"] != source["group_id"]
-            and target["image_id"] != source["image_id"]
-        ]
-        if admissible:
-            out.append((source, admissible))
-    return out
+    return [(source, admissible) for source, admissible, _ in entries if admissible]
+
+
+def _exclusion_report(entries: Sequence[tuple[Mapping, list[Mapping], dict]]) -> dict:
+    """Exclusion accounting plus the eligible-target count distribution."""
+    eligible = sorted(counts["n_eligible"] for _, _, counts in entries)
+    histogram: dict[str, int] = {}
+    for value in eligible:
+        histogram[str(value)] = histogram.get(str(value), 0) + 1
+    return {
+        "rule_version": EXCLUSION_RULE_VERSION,
+        "n_sources": len(entries),
+        "n_sources_without_eligible_target": sum(1 for value in eligible if value == 0),
+        "n_excluded_same_group": sum(
+            counts["n_excluded_same_group"] for _, _, counts in entries
+        ),
+        "n_excluded_same_image_different_group": sum(
+            counts["n_excluded_same_image_different_group"] for _, _, counts in entries
+        ),
+        "eligible_targets": {
+            "min": eligible[0] if eligible else 0,
+            "median": eligible[len(eligible) // 2] if eligible else 0,
+            "max": eligible[-1] if eligible else 0,
+            "mean": _mean([float(value) for value in eligible]),
+            "histogram": histogram,
+        },
+    }
 
 
 def retrieval_metrics(
@@ -330,7 +413,8 @@ def retrieval_metrics(
     hits = 0
     reciprocal = 0.0
     chance = 0.0
-    evaluated = _pairs(sources, targets)
+    entries = _pairs(sources, targets)
+    evaluated = _evaluable(entries)
     for source, admissible in evaluated:
         def label(item: Mapping) -> str:
             return labels[item["sample_id"]] if labels else item["concept"]
@@ -351,6 +435,7 @@ def retrieval_metrics(
         "top1_accuracy": hits / n if n else 0.0,
         "mrr": reciprocal / n if n else 0.0,
         "chance_top1": chance / n if n else 0.0,
+        "exclusions": _exclusion_report(entries),
     }
 
 
@@ -360,7 +445,8 @@ def separation_metrics(
     """Matched-concept vs mismatched-concept similarity across modalities."""
     matched: list[float] = []
     mismatched: list[float] = []
-    for source, admissible in _pairs(sources, targets):
+    entries = _pairs(sources, targets)
+    for source, admissible in _evaluable(entries):
         for target in admissible:
             value = similarity(source, target)
             (matched if target["concept"] == source["concept"] else mismatched).append(value)
@@ -371,6 +457,7 @@ def separation_metrics(
         "mismatched_mean": _mean(mismatched),
         "gap": _mean(matched) - _mean(mismatched),
         "cohens_d": _cohens_d(matched, mismatched),
+        "exclusions": _exclusion_report(entries),
     }
 
 
@@ -425,6 +512,7 @@ def representational_report(
     modalities: Sequence[str],
     n_permutations: int = 50,
     seed: int = 20260731,
+    strict: bool = False,
 ) -> dict:
     """All ordered modality pairs, in J-space and in raw residual space.
 
@@ -432,6 +520,13 @@ def representational_report(
     ``concept``, ``modality``, ``code`` (``{atom: coefficient}``) and
     ``activation`` (a list of floats). Only positives (a non-null concept)
     take part.
+
+    Args:
+        strict: Raise :class:`NoEligibleTargetError` when a modality pair keeps
+            no query at all after exclusion, instead of reporting the 0.0 that
+            an empty denominator produces. The audit path sets this; the live
+            pipeline leaves it off so a thin cell degrades to a reported zero
+            rather than killing a run mid-flight.
     """
     positives = [s for s in samples if s.get("concept")]
     by_modality = {
@@ -462,10 +557,19 @@ def representational_report(
             if not sources or not targets:
                 continue
             key = f"{source_modality}->{target_modality}"
+            jspace_retrieval = retrieval_metrics(sources, targets, jspace)
+            if strict and not jspace_retrieval["n_queries"]:
+                raise NoEligibleTargetError(
+                    f"{key}: every one of {len(sources)} queries lost all "
+                    f"{len(targets)} candidate targets to the image-level "
+                    "exclusion rule, so this pair cannot be evaluated. Reporting "
+                    "0.0 here would be indistinguishable from a measured failure."
+                )
             pairs[key] = {
                 "n_sources": len(sources),
                 "n_targets": len(targets),
-                "jspace_retrieval": retrieval_metrics(sources, targets, jspace),
+                "exclusions": jspace_retrieval["exclusions"],
+                "jspace_retrieval": jspace_retrieval,
                 "jspace_separation": separation_metrics(sources, targets, jspace),
                 "jspace_support_overlap": separation_metrics(sources, targets, overlap),
                 "raw_residual_retrieval": retrieval_metrics(sources, targets, raw),
@@ -476,8 +580,10 @@ def representational_report(
             }
     return {
         "conventions": dict(CONVENTIONS),
+        "exclusion_rule_version": EXCLUSION_RULE_VERSION,
         "modalities": list(modalities),
         "n_positive_samples": len(positives),
+        "n_distinct_images": len({str(s["image_id"]) for s in positives}),
         "pairs": pairs,
         "note": (
             "Retrieval and clustering are representational evidence only. "

@@ -816,8 +816,17 @@ def gonogo_report(
         "and spoken-linguistic evidence. It says nothing about environmental audio.",
         "- Interventions add and subtract a direction on the residual stream. "
         "That is not erasure and not projection ablation.",
-        "- Retrieval excludes each query's own synchronized group, so a hit is "
-        "not the dataset's own pairing being read back.",
+        "- Retrieval excludes every target sharing the query's **image**, not "
+        "only the query's own synchronized group. SpokenCOCO ships several "
+        "captions per COCO image and the subset keeps more than one, so a "
+        "group-only rule would let a caption reach its own photograph through "
+        "a sibling caption's group. A hit is therefore not the dataset's own "
+        "pairing being read back.",
+        "- Retrieval and separation are image-disjoint, but the causal counts "
+        "in this report are aggregated per synchronized **group**. Where one "
+        "image contributed more than one group those counts are not "
+        "independent observations; the image-level re-aggregation is a "
+        "separate artifact.",
         "- There is **no absolute reconstruction threshold**. The published "
         "J-space result reports a median around 6-7% of a concept vector's "
         "variance in its top-k J-space component, so a high absolute bar would "
