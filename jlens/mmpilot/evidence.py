@@ -55,6 +55,136 @@ class IncompatibleEvidenceStateError(RuntimeError):
     """A stored evidence artifact was produced under a different configuration."""
 
 
+@dataclass
+class EvidenceIndex:
+    """One-pass evidence lookup for large synchronized manifests.
+
+    The full SpokenCOCO manifest has roughly 125k rows.  Re-running every
+    concept's regular expressions for every ranking and subset query turns a
+    small CPU selection step into an hour-long scan.  This index preserves the
+    exact public evidence predicates, but uses annotation and whole-word term
+    inverted indexes to call :func:`group_evidence` only for concepts that can
+    possibly match a row.
+    """
+
+    by_image: dict[str, list[dict]]
+    valid_concepts_by_image: dict[str, set[str]]
+    evidence_concepts_by_image: dict[str, set[str]]
+    valid_group_ids_by_concept: dict[str, set[str]]
+    annotated_images_by_concept: dict[str, set[str]]
+    caption_group_ids_by_concept: dict[str, set[str]]
+
+    def restrict(self, concepts: Sequence[str]) -> EvidenceIndex:
+        """Cheap view whose image-level sets contain only ``concepts``."""
+        names = tuple(sorted(set(concepts)))
+        missing = sorted(set(names) - set(self.valid_group_ids_by_concept))
+        if missing:
+            raise ValueError(f"evidence index does not contain concepts: {missing}")
+        allowed = set(names)
+        return EvidenceIndex(
+            by_image=self.by_image,
+            valid_concepts_by_image={
+                image_id: matched & allowed
+                for image_id, matched in self.valid_concepts_by_image.items()
+            },
+            evidence_concepts_by_image={
+                image_id: matched & allowed
+                for image_id, matched in self.evidence_concepts_by_image.items()
+            },
+            valid_group_ids_by_concept={
+                concept: self.valid_group_ids_by_concept[concept] for concept in names
+            },
+            annotated_images_by_concept={
+                concept: self.annotated_images_by_concept[concept] for concept in names
+            },
+            caption_group_ids_by_concept={
+                concept: self.caption_group_ids_by_concept[concept] for concept in names
+            },
+        )
+
+
+def build_evidence_index(
+    groups: Sequence[Mapping], concepts: Sequence[str], config: EvidenceConfig
+) -> EvidenceIndex:
+    """Index visual/caption evidence in one manifest pass.
+
+    Candidate narrowing is exact for the configured normalization: captions
+    are normalized into alphanumeric words and all term-length n-grams are
+    looked up in an inverted lexicon.  Exclusions and synchronization are then
+    resolved by the ordinary :func:`group_evidence` implementation, so this is
+    an optimization rather than a second evidence rule.
+    """
+    names = tuple(sorted(set(concepts)))
+    category_to_concepts: dict[str, set[str]] = {}
+    term_to_concepts: dict[tuple[str, ...], set[str]] = {}
+    term_lengths: set[int] = set()
+    for concept in names:
+        for category in config.categories_for(concept):
+            category_to_concepts.setdefault(str(category).casefold(), set()).add(concept)
+        for term in config.terms_for(concept):
+            words = tuple(normalize_caption(term).split())
+            if words:
+                term_to_concepts.setdefault(words, set()).add(concept)
+                term_lengths.add(len(words))
+
+    by_image: dict[str, list[dict]] = {}
+    valid_by_image: dict[str, set[str]] = {}
+    evidence_by_image: dict[str, set[str]] = {}
+    valid_groups = {concept: set() for concept in names}
+    annotated_images = {concept: set() for concept in names}
+    caption_groups = {concept: set() for concept in names}
+
+    for source in groups:
+        group = dict(source)
+        image_id = str(group["image_id"])
+        group_id = str(group["group_id"])
+        by_image.setdefault(image_id, []).append(group)
+
+        visual_candidates: set[str] = set()
+        for label in group.get("concept_annotations", []) or []:
+            visual_candidates.update(category_to_concepts.get(str(label).casefold(), ()))
+
+        words = tuple(normalize_caption(group.get("caption", "")).split())
+        caption_candidates: set[str] = set()
+        for width in term_lengths:
+            if width > len(words):
+                continue
+            for start in range(len(words) - width + 1):
+                caption_candidates.update(
+                    term_to_concepts.get(words[start : start + width], ())
+                )
+
+        possible = visual_candidates | caption_candidates
+        for concept in possible:
+            record = group_evidence(group, concept, config)
+            visual = bool(record["visual_evidence"]["present"])
+            caption = bool(record["caption_evidence"]["present"])
+            if visual:
+                annotated_images[concept].add(image_id)
+            if caption:
+                caption_groups[concept].add(group_id)
+            if visual or caption:
+                evidence_by_image.setdefault(image_id, set()).add(concept)
+            if record["is_valid_synchronized_positive"]:
+                valid_by_image.setdefault(image_id, set()).add(concept)
+                valid_groups[concept].add(group_id)
+
+    for image_groups in by_image.values():
+        image_groups.sort(key=lambda group: group["group_id"])
+    for image_id in by_image:
+        valid_by_image.setdefault(image_id, set())
+        evidence_by_image.setdefault(image_id, set())
+
+    return EvidenceIndex(
+        by_image=by_image,
+        valid_concepts_by_image=valid_by_image,
+        evidence_concepts_by_image=evidence_by_image,
+        valid_group_ids_by_concept=valid_groups,
+        annotated_images_by_concept=annotated_images,
+        caption_group_ids_by_concept=caption_groups,
+    )
+
+
 # --------------------------------------------------------------- the lexicon
 
 #: **Not the pilot's candidate universe.** A six-entry fallback kept so callers

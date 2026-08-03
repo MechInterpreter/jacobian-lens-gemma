@@ -597,6 +597,13 @@ from jlens.mmpilot.selection import (
     select_focal_concepts,
     unrelated_control_assignment,
 )
+import time
+
+_selection_t0 = time.perf_counter()
+print(f"indexing {len(PILOT_GROUPS):,} synchronized groups once ...")
+EVIDENCE_INDEX = evidence_module.build_evidence_index(
+    PILOT_GROUPS, tuple(CONCEPT_CANDIDATES), EVIDENCE_CONFIG
+)
 
 ROBUSTNESS_REQUIREMENTS = expansion_module.ConceptRequirements(
     min_distinct_images=N_TRAIN_POSITIVE_IMAGES + N_TEST_POSITIVE_IMAGES,
@@ -613,6 +620,7 @@ RANKING = expansion_module.rank_concepts(
     seed=SPLIT_SEED,
     evidence_config=EVIDENCE_CONFIG,
     profile=PROFILE,
+    evidence_index=EVIDENCE_INDEX,
 )
 print("=" * 72)
 print("RANKED COVERAGE AT THIS STUDY'S CELL SIZES (complete, with rejections)")
@@ -658,6 +666,7 @@ SUBSET = manifest_module.build_subset(
     seed=SPLIT_SEED,
     evidence_config=EVIDENCE_CONFIG,
     profile=PROFILE,
+    evidence_index=EVIDENCE_INDEX,
 )
 LEAKAGE = manifest_module.check_split_leakage(SUBSET)
 if not LEAKAGE["ok"]:
@@ -708,6 +717,7 @@ from jlens.mmpilot.store import payload_checksum
 
 SPLIT_PROVENANCE_CHECKSUM = payload_checksum(SPLIT_PROVENANCE)
 print(f"\\nsplit provenance checksum {SPLIT_PROVENANCE_CHECKSUM}")
+print(f"section 6 completed in {time.perf_counter() - _selection_t0:.1f} seconds")
 '''
 )
 

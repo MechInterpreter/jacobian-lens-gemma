@@ -36,10 +36,10 @@ from pathlib import Path
 from jlens.mmpilot.evidence import (
     CONCEPT_LEXICON,
     EvidenceConfig,
+    EvidenceIndex,
+    build_evidence_index,
     config_for_concepts,
     group_evidence,
-    has_any_evidence,
-    is_valid_positive,
     negative_evidence,
 )
 from jlens.mmpilot.selection import (
@@ -1103,6 +1103,7 @@ def build_subset(
     seed: str = "spokencoco-pilot",
     evidence_config: EvidenceConfig | None = None,
     profile: SubsetProfile | None = None,
+    evidence_index: EvidenceIndex | None = None,
 ) -> dict:
     """Deterministically select a small, image-disjoint pilot subset.
 
@@ -1146,27 +1147,19 @@ def build_subset(
 
     config = evidence_config or config_for_concepts(concepts)
 
-    by_image: dict[str, list[dict]] = {}
-    for group in groups:
-        by_image.setdefault(group["image_id"], []).append(dict(group))
+    index = (
+        evidence_index.restrict(tuple(concepts))
+        if evidence_index is not None
+        else build_evidence_index(groups, tuple(concepts), config)
+    )
+    by_image = index.by_image
 
     # Two different questions, deliberately kept apart:
     #   image_concepts  — what this image is a *valid positive* for.
     #   image_evidence  — what it carries *any* evidence for, which is what
     #                     disqualifies it from being a matched negative.
-    image_concepts: dict[str, set[str]] = {}
-    image_evidence: dict[str, set[str]] = {}
-    for image_id, image_groups in by_image.items():
-        image_concepts[image_id] = {
-            concept
-            for concept in concepts
-            if any(is_valid_positive(g, concept, config) for g in image_groups)
-        }
-        image_evidence[image_id] = {
-            concept
-            for concept in concepts
-            if any(has_any_evidence(g, concept, config) for g in image_groups)
-        }
+    image_concepts = index.valid_concepts_by_image
+    image_evidence = index.evidence_concepts_by_image
 
     selected: dict[str, dict] = {}
     used_images: set[str] = set()
@@ -1258,10 +1251,11 @@ def build_subset(
         for image_id in image_ids:
             candidates = sorted(by_image[image_id], key=lambda g: g["group_id"])
             if concept is not None:
+                valid_group_ids = index.valid_group_ids_by_concept[concept]
                 candidates = [
                     group
                     for group in candidates
-                    if is_valid_positive(group, concept, config)
+                    if group["group_id"] in valid_group_ids
                 ]
             chosen, excluded_siblings, selection_reason = choose_representative_groups(
                 candidates, image_id=image_id, seed=seed, profile=profile

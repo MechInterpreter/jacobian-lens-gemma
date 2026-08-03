@@ -36,12 +36,11 @@ from pathlib import Path
 from jlens.mmpilot.concepts import AMBIGUITY_SCORE as _AMBIGUITY_SCORE
 from jlens.mmpilot.evidence import (
     EvidenceConfig,
-    caption_evidence,
+    EvidenceIndex,
+    build_evidence_index,
     config_for_concepts,
     group_evidence,
-    has_any_evidence,
     is_valid_positive,
-    visual_evidence,
 )
 from jlens.mmpilot.manifest import (
     ManifestSchema,
@@ -788,6 +787,7 @@ def _split_plan(
     seed: str,
     evidence_config: EvidenceConfig,
     profile: SubsetProfile | None = None,
+    valid_group_ids: set[str] | None = None,
 ) -> dict:
     """Mirror :func:`~jlens.mmpilot.manifest.build_subset`'s selection exactly.
 
@@ -839,7 +839,11 @@ def _split_plan(
                 [
                     group
                     for group in by_image[image_id]
-                    if is_valid_positive(group, concept, evidence_config)
+                    if (
+                        group["group_id"] in valid_group_ids
+                        if valid_group_ids is not None
+                        else is_valid_positive(group, concept, evidence_config)
+                    )
                 ][:max_groups_per_image]
             )
             for image_id in images
@@ -1052,6 +1056,7 @@ def rank_concepts(
     seed: str = "spokencoco-pilot",
     evidence_config: EvidenceConfig | None = None,
     profile: SubsetProfile | None = None,
+    evidence_index: EvidenceIndex | None = None,
 ) -> list[dict]:
     """Score every candidate concept against what the split will really yield.
 
@@ -1078,25 +1083,14 @@ def rank_concepts(
     """
     requirements = requirements or ConceptRequirements()
     config = evidence_config or config_for_concepts(concepts)
-    by_image: dict[str, list[dict]] = {}
-    for group in groups:
-        by_image.setdefault(group["image_id"], []).append(dict(group))
-    for image_groups in by_image.values():
-        image_groups.sort(key=lambda g: g["group_id"])
-
-    matched_concepts: dict[str, set[str]] = {}
-    evidence_concepts: dict[str, set[str]] = {}
-    for image_id, image_groups in by_image.items():
-        matched_concepts[image_id] = {
-            concept
-            for concept in concepts
-            if any(is_valid_positive(g, concept, config) for g in image_groups)
-        }
-        evidence_concepts[image_id] = {
-            concept
-            for concept in concepts
-            if any(has_any_evidence(g, concept, config) for g in image_groups)
-        }
+    index = (
+        evidence_index.restrict(tuple(concepts))
+        if evidence_index is not None
+        else build_evidence_index(groups, tuple(concepts), config)
+    )
+    by_image = index.by_image
+    matched_concepts = index.valid_concepts_by_image
+    evidence_concepts = index.evidence_concepts_by_image
     # A negative must carry *neither* kind of evidence for *any* concept, so a
     # visual-only cat picture is excluded from the negatives as well as from
     # the positives rather than quietly becoming a contrast example.
@@ -1120,18 +1114,9 @@ def rank_concepts(
         ]
         concept_groups = [g for image_id in pure for g in by_image[image_id]]
         speakers = {g["speaker"] for g in concept_groups if g.get("speaker")}
-        all_groups = [g for image_groups in by_image.values() for g in image_groups]
-        annotated_images = {
-            g["image_id"]
-            for g in all_groups
-            if visual_evidence(g, concept, config)["present"]
-        }
-        caption_groups = [
-            g for g in all_groups if caption_evidence(g, concept, config)["present"]
-        ]
-        valid_groups = [
-            g for g in all_groups if is_valid_positive(g, concept, config)
-        ]
+        annotated_images = index.annotated_images_by_concept[concept]
+        caption_group_ids = index.caption_group_ids_by_concept[concept]
+        valid_group_ids = index.valid_group_ids_by_concept[concept]
         plan = _split_plan(
             pure,
             by_image,
@@ -1141,6 +1126,7 @@ def rank_concepts(
             seed=seed,
             evidence_config=config,
             profile=profile,
+            valid_group_ids=valid_group_ids,
         )
         unmet = []
         if len(pure) < requirements.min_distinct_images:
@@ -1161,14 +1147,14 @@ def rank_concepts(
             unmet.append(f"negatives {n_negative_groups} < {requirements.min_negatives}")
         # When a concept is short, say which half of the evidence rule was the
         # binding constraint. That is the whole diagnosis this repair exists for.
-        if unmet and len(annotated_images) > len(pure) and not caption_groups:
+        if unmet and len(annotated_images) > len(pure) and not caption_group_ids:
             evidence_gap = "no written-caption evidence for any annotated image"
         elif unmet and len(annotated_images) > len(pure):
             evidence_gap = (
                 f"{len(annotated_images) - len(pure)} annotated image(s) lack "
                 "written-caption evidence"
             )
-        elif unmet and caption_groups and not annotated_images:
+        elif unmet and caption_group_ids and not annotated_images:
             evidence_gap = "caption evidence without any COCO object annotation"
         else:
             evidence_gap = ""
@@ -1177,7 +1163,9 @@ def rank_concepts(
         # matches captions of images without the object is imprecise, and this
         # is the only precision signal available without hand labelling.
         lexical_precision = (
-            round(len(valid_groups) / len(caption_groups), 6) if caption_groups else 0.0
+            round(len(valid_group_ids) / len(caption_group_ids), 6)
+            if caption_group_ids
+            else 0.0
         )
         cooccurrence = cooccurrence_statistics(pure, by_image, concept)
         row = {
@@ -1186,8 +1174,8 @@ def rank_concepts(
             "n_groups": len(concept_groups),
             "n_speakers": len(speakers),
             "n_annotated_images": len(annotated_images),
-            "n_caption_evidence_groups": len(caption_groups),
-            "n_valid_synchronized_groups": len(valid_groups),
+            "n_caption_evidence_groups": len(caption_group_ids),
+            "n_valid_synchronized_groups": len(valid_group_ids),
             "annotation_source": "coco_object_annotation_and_caption_lexicon",
             "evidence_rule": "visual_annotation_AND_caption_lexicon",
             "evidence_lexicon_hash": config.lexicon_hash,
