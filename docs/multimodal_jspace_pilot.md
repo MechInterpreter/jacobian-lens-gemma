@@ -596,3 +596,105 @@ privileged, and a `GO` requires every concept to have passed behaviorally, both
 directions to beat the shuffled control after image exclusion, the source effect
 to exceed both the random and the external unrelated control, and the evidence
 not to rest on a single duplicated photograph.
+
+## The bounded six-concept robustness study
+
+The corrected pilot returned `GO_CONFIRMED_AFTER_IMAGE_DEDUP`. The smallest
+follow-up that result earns is: **does it replicate?** Not a bigger framework —
+six concepts instead of four, eight distinct photographs per cell instead of
+two, three focal concepts instead of two, one layer, two modalities, one frozen
+lens, off-diagonal cells only.
+
+### The photograph is the unit from selection onward
+
+The audit corrected a completed run's arithmetic after the passes had been
+spent. That is the right repair for evidence already collected and the wrong
+place to fix the problem: a run that selects two captions of one photograph has
+bought one observation at twice the price, and no downstream averaging returns
+the observation it never made. So `jlens.mmpilot.selection` moves the rule
+before execution, under an explicitly versioned `SubsetProfile`:
+
+- `PILOT_PROFILE` reproduces the completed four-concept run byte for byte. It
+  has to — that run's artifacts are on disk and must stay resumable and
+  re-derivable.
+- `IMAGE_UNIQUE_PROFILE` takes **one synchronized group per image**, chosen by a
+  seeded stable rank over the content-derived group id. Ranking on the id rather
+  than on position is what makes a re-derived subset the *same* subset: manifest
+  ordering is an accident of how the file was written and must not decide which
+  caption represents a photograph. The sibling captions it excludes are recorded
+  on the row with the reason, never dropped silently.
+
+Source-training positives and matched negatives are drawn from distinct,
+mutually disjoint images; causal targets are deduplicated on `image_id` before
+examples are chosen and held disjoint from the source-training images. A set
+short of the stated count **refuses** rather than shrinking:
+`InsufficientDistinctImagesError` names what was asked for, what was found, and
+how many repeats were discarded. A silently shrunk cell reports an `n` it never
+had.
+
+One latent hazard was closed on the way: `build_subset` took prefixes of the
+source-train and source-val image lists, and an image whose captions span both
+would land on both sides of the split. The new profile draws the test pool from
+what train did not claim, and a disjointness guard now fires under *any* profile
+— it only triggers where a leak would have occurred, which the notebook already
+rejected downstream.
+
+`_split_plan`, which predicts what `build_subset` will yield so the ranking can
+screen feasibility, takes the profile too. Without it the ranking applied the
+pilot's `n-2`/`2` split to a design that splits 8/8 and rejected every candidate
+for a shortfall that did not exist.
+
+### What the fingerprint now binds
+
+The pilot's fingerprint bound the model, lens, layers, manifest and alpha sweep.
+It did not bind which concepts were chosen, in what order, how many distinct
+images each cell got, how one group per photograph was picked, how targets were
+deduplicated, or how the unrelated control was assigned — so two runs could
+differ in all of that and still be treated as the same run.
+`scientific_fingerprint` binds all of it (36 fields), and
+`RunFingerprint.selection_config` carries it. Ordered sequences stay ordered:
+the ranking *order* picks the focal concepts, so a reordering is a different
+experiment even when the set matches.
+
+Backward compatibility is exact rather than approximate. An empty
+`selection_config` is **omitted from the digest**, so every directory written
+before the field existed keeps the digest it was written with. A four-concept
+pilot directory can never be resumed as a six-concept study: candidate scoring
+alone changes from four-way to six-way, and a four-way capability unit is not
+comparable to a six-way one.
+
+### The decision is replication, not the strongest cell
+
+The pilot's rubric took the maximum off-diagonal effect and asked whether it
+beat its controls. With one focal concept that is the only thing available; with
+three it is a way of reporting the luckiest cell. `ROBUSTNESS_GO` requires at
+least **two of three** focal concepts to transfer in **both** directions, each
+against its own matched random and external unrelated controls, with the
+expected sign on at least 75% of photographs, sane activation norms, the target
+moving more than the unrelated candidates, and the stated distinct-image counts
+actually present. A raw difference-in-means direction matching the J-space one
+downgrades to `ROBUSTNESS_WEAK_GO` rather than vetoing: it answers "did the
+decomposition earn its keep", not "did transfer happen".
+
+The external unrelated control is assigned by rotation over the non-focal
+concepts in ranking order. Its only inputs are two ordered name lists, which is
+what makes it impossible to have chosen after seeing how the candidates behaved.
+In a forced choice among the focal concepts the only alternative is the target's
+direct contrast, which is not unrelated to it at all.
+
+### Cost, stated before it is spent
+
+`estimate_model_passes` derives the budget from the configuration: at the
+committed design, 1,152 capability + 224 activation + 576 clean-scoring + 5,184
+intervention = **7,136 forward passes**, ~1 h on one L4, ~19 MB of Drive. A
+"pass" is one teacher-forced forward over prompt plus one candidate sequence, so
+scoring six candidates costs six passes — which is why widening the concept set
+is not free and why same-modality causal cells are skipped: they cost the same
+and answer a different question. The robustness notebook refuses to load Gemma
+until `CONFIRM_MODEL_PASS_BUDGET` is set by hand, separately from
+`RUN_MODEL_STAGES`.
+
+Layer 38 remains late and remains the only validated layer. However well this
+replicates, a final-prompt-token edit there cannot establish that an effect
+precedes answer-language convergence. Spoken audio is excluded by design and
+environmental audio is not tested; neither absence is evidence about either.
