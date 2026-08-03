@@ -115,6 +115,14 @@ def test_confirmed_real_path_explicitly_allows_the_guarded_model_load(notebook):
     )
 
 
+def test_model_repo_revision_and_frozen_lens_are_the_validated_triple(notebook):
+    source = _source(notebook)
+    assert 'MODEL_REPO_ID = "google/gemma-4-E4B-it"' in source
+    assert "google/gemma-3n-e4b-it" not in source.casefold()
+    assert 'MODEL_REVISION = "fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd"' in source
+    assert "text_jlens_early_layer_recalibration_v2/artifacts/lens.validated.pt" in source
+
+
 def test_bootstrap_comes_before_any_repository_import(notebook):
     cells = ["".join(cell["source"]) for cell in _code_cells(notebook)]
     install = next(

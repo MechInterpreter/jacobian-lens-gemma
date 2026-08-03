@@ -242,7 +242,7 @@ LENS_PATH = (
 LENS_EXPECT_SHA256 = (
     "sha256:4b17bf6086901e633f94d3391f5de6eccd3e735cc24cece63887505d73641c2b"
 )
-MODEL_REPO_ID = "google/gemma-3n-e4b-it"
+MODEL_REPO_ID = "google/gemma-4-E4B-it"
 MODEL_REVISION = "fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd"
 
 # --------------------------------------------------------------- the data
