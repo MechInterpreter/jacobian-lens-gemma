@@ -20,6 +20,7 @@ from dataclasses import asdict, dataclass, field
 
 from jlens.mmpilot.backend import ModalityUnsupportedError, PilotBackend
 from jlens.mmpilot.capability import (
+    PROMPT_PROTOCOL_VERSION,
     balanced_capability_record,
     build_ordered_questions,
     build_prompt,
@@ -30,6 +31,7 @@ from jlens.mmpilot.capability import (
     score_candidate_sequences,
 )
 from jlens.mmpilot.causal import (
+    CONTROL_KINDS,
     DEFAULT_ALPHAS,
     condition_key,
     estimate_concept_direction,
@@ -39,7 +41,13 @@ from jlens.mmpilot.causal import (
     summarize_interventions,
     unit_direction_tensor,
 )
+from jlens.mmpilot.independence import (
+    CAUSAL_AGGREGATION_VERSION,
+    IMAGE_IDENTITY_RULE_VERSION,
+)
 from jlens.mmpilot.jspace import (
+    CONVENTIONS,
+    EXCLUSION_RULE_VERSION,
     activation_record,
     activation_tensor,
     build_dictionary,
@@ -54,6 +62,17 @@ from jlens.mmpilot.reconstruction import (
     summarize_reconstruction_controls,
 )
 from jlens.mmpilot.report import code_statistics, gonogo_report
+from jlens.mmpilot.selection import (
+    CAUSAL_TARGET_SELECTION_VERSION,
+    LEGACY_CAUSAL_TARGET_SELECTION_VERSION,
+    PROFILES,
+    SOURCE_NEGATIVE_SELECTION_VERSION,
+    SOURCE_POSITIVE_SELECTION_VERSION,
+    UNRELATED_CONTROL_SELECTION_VERSION,
+    SubsetProfile,
+    assert_disjoint_images,
+    select_distinct_image_records,
+)
 from jlens.mmpilot.store import UnitStore, safe_key
 from jlens.pursuit import PursuitSettings
 
@@ -82,6 +101,21 @@ class PilotConfig:
     seed: int = 20260731
     max_capability_groups_per_concept: int = 8
 
+    #: Selection policy (:mod:`jlens.mmpilot.selection`). ``"pilot"`` keeps the
+    #: completed four-concept run's behavior; ``"image_unique"`` makes the
+    #: photograph the independent unit before any pass is spent.
+    subset_profile: str = "pilot"
+    #: Deduplicate causal targets on ``image_id`` and hold them disjoint from
+    #: the source-training images. Off for the pilot profile.
+    image_unique_targets: bool = False
+    #: Distinct source-training images a direction must be estimated from.
+    #: ``None`` keeps the pilot's behavior of using whatever is available.
+    min_source_positive_images: int | None = None
+    min_source_negative_images: int | None = None
+    #: Only cross-modal cells. Same-modality interventions answer a different
+    #: question and cost as much, so the robustness study skips them.
+    off_diagonal_causal_only: bool = False
+
     def pursuit_settings(self) -> PursuitSettings:
         return PursuitSettings(
             k=self.pursuit_k,
@@ -97,6 +131,102 @@ class PilotConfig:
                     "causal_concepts", "alphas"):
             payload[key] = list(payload[key])
         return payload
+
+    def profile(self) -> SubsetProfile:
+        return PROFILES[self.subset_profile]
+
+
+#: Version of the fingerprint's field set. Adding or removing a field changes
+#: this, and therefore refuses to resume anything built under the old set.
+SELECTION_FINGERPRINT_VERSION = "mmpilot.selection_fingerprint.v1"
+
+
+def scientific_fingerprint(
+    config: PilotConfig,
+    *,
+    ranked_concepts: Sequence[str],
+    selected_concepts: Sequence[str],
+    focal_concepts: Sequence[str],
+    unrelated_controls: Mapping[str, str],
+    derived_cache_fingerprint: str,
+    split_provenance_checksum: str,
+    n_train_positive_images: int,
+    n_train_negative_images: int,
+    n_test_positive_images: int,
+    n_test_negative_images: int,
+    verdict_version: str,
+) -> dict:
+    """Everything about *what the experiment is* that a resume must match.
+
+    The pilot's fingerprint bound the model, the lens, the layers, the manifest
+    and the alpha sweep. It did not bind which concepts were chosen, how many
+    distinct images each cell got, how one group per photograph was picked,
+    how targets were deduplicated, or how the unrelated control was assigned.
+    Two runs could therefore differ in every one of those and still be treated
+    as the same run — and candidate scoring alone changes with the concept
+    count, so a four-way capability unit is not comparable to a six-way one.
+
+    Ordered sequences stay ordered on purpose: the ranking *order* decides the
+    focal concepts, so a reordering is a different experiment even when the
+    set is identical.
+    """
+    profile = config.profile()
+    return {
+        "version": SELECTION_FINGERPRINT_VERSION,
+        "independent_unit": "image_id",
+        "image_identity_rule_version": IMAGE_IDENTITY_RULE_VERSION,
+        # ---- what was selected, in order
+        "ranked_concepts": list(ranked_concepts),
+        "selected_concepts": list(selected_concepts),
+        "focal_concepts": list(focal_concepts),
+        "n_concepts": len(selected_concepts),
+        # ---- how it was selected
+        "subset_profile": profile.to_dict(),
+        "max_groups_per_image": profile.max_groups_per_image,
+        "representative_group_selection_version": profile.representative_selection,
+        "source_positive_selection_version": (
+            SOURCE_POSITIVE_SELECTION_VERSION
+            if config.min_source_positive_images is not None
+            else "all_available_training_groups.v0"
+        ),
+        "source_negative_selection_version": (
+            SOURCE_NEGATIVE_SELECTION_VERSION
+            if config.min_source_negative_images is not None
+            else "all_available_training_groups.v0"
+        ),
+        "causal_target_selection_version": (
+            CAUSAL_TARGET_SELECTION_VERSION
+            if config.image_unique_targets
+            else LEGACY_CAUSAL_TARGET_SELECTION_VERSION
+        ),
+        "n_distinct_train_positive_images": int(n_train_positive_images),
+        "n_distinct_train_negative_images": int(n_train_negative_images),
+        "n_distinct_heldout_positive_images": int(n_test_positive_images),
+        "n_distinct_heldout_negative_images": int(n_test_negative_images),
+        # ---- provenance of the data it was selected from
+        "derived_cache_fingerprint": derived_cache_fingerprint,
+        "split_provenance_checksum": split_provenance_checksum,
+        # ---- how the model was asked
+        "capability_protocol": PROMPT_PROTOCOL_VERSION,
+        "candidate_ordering_protocol": "canonical_and_reversed_sorted_options.v1",
+        "n_candidates_scored": len(selected_concepts),
+        "capability_threshold": config.capability_threshold,
+        # ---- how it was intervened on
+        "unrelated_control_selection_version": UNRELATED_CONTROL_SELECTION_VERSION,
+        "unrelated_controls": dict(sorted(unrelated_controls.items())),
+        "intervention_controls": list(CONTROL_KINDS),
+        "alphas": list(config.alphas),
+        "off_diagonal_causal_only": config.off_diagonal_causal_only,
+        "direction_top_k": config.direction_top_k,
+        "direction_normalization": CONVENTIONS["direction_normalization"],
+        "intervention_position": CONVENTIONS["position"],
+        "n_target_examples": config.n_target_examples,
+        # ---- how it was measured and judged
+        "representational_exclusion_rule_version": EXCLUSION_RULE_VERSION,
+        "causal_aggregation_version": CAUSAL_AGGREGATION_VERSION,
+        "n_permutations": config.n_permutations,
+        "verdict_version": verdict_version,
+    }
 
 
 @dataclass
@@ -504,13 +634,41 @@ def stage_directions(
                 and code["modality"] == source_modality
                 and code["split"] == "train"
             ]
-            negatives = [code for code in train if not code["concept"]]
-            if not negatives:
+            all_negatives = [code for code in train if not code["concept"]]
+            if not all_negatives:
                 continue
             for concept in concepts:
-                positives = [code for code in train if code["concept"] == concept]
-                if not positives:
+                all_positives = [code for code in train if code["concept"] == concept]
+                if not all_positives:
                     continue
+                # One photograph contributing two captions to a mean is one
+                # example weighted twice, not two examples. Under the
+                # image-unique profile the direction is estimated from distinct
+                # images, and a short set refuses rather than shrinking.
+                if config.min_source_positive_images is not None:
+                    positives, positive_images = select_distinct_image_records(
+                        all_positives,
+                        n_required=config.min_source_positive_images,
+                        role=f"{concept} / {source_modality} source-training positives",
+                        what="direction estimation examples",
+                    )
+                    negatives, negative_images = select_distinct_image_records(
+                        all_negatives,
+                        n_required=config.min_source_negative_images,
+                        role=f"{source_modality} source-training negatives",
+                        exclude_images=frozenset(positive_images),
+                        what="direction estimation examples",
+                    )
+                    assert_disjoint_images(
+                        positive_images,
+                        negative_images,
+                        left_name=f"{concept} / {source_modality} source positives",
+                        right_name="source negatives",
+                    )
+                else:
+                    positives, negatives = all_positives, all_negatives
+                    positive_images = sorted({str(c["image_id"]) for c in positives})
+                    negative_images = sorted({str(c["image_id"]) for c in negatives})
                 for kind in ("source_concept", "raw_residual_difference"):
                     key = safe_key(concept, source_modality, f"L{layer}", kind)
                     cached = store.load("direction", key)
@@ -545,6 +703,25 @@ def stage_directions(
                             source_modality=source_modality,
                             layer=layer,
                         )
+                    record.update(
+                        {
+                            "source_positive_image_ids": list(positive_images),
+                            "source_negative_image_ids": list(negative_images),
+                            "n_source_positive_images": len(set(positive_images)),
+                            "n_source_negative_images": len(set(negative_images)),
+                            "source_split": "train",
+                            "source_positive_selection": (
+                                SOURCE_POSITIVE_SELECTION_VERSION
+                                if config.min_source_positive_images is not None
+                                else "all_available_training_groups.v0"
+                            ),
+                            "source_negative_selection": (
+                                SOURCE_NEGATIVE_SELECTION_VERSION
+                                if config.min_source_negative_images is not None
+                                else "all_available_training_groups.v0"
+                            ),
+                        }
+                    )
                     store.save("direction", key, record)
                     outcome.computed += 1
                     directions[(concept, source_modality, layer, kind)] = record
@@ -568,8 +745,15 @@ def stage_causal(
     concepts: Sequence[str],
     modalities: Sequence[str],
     all_concepts: Sequence[str],
+    unrelated_controls: Mapping[str, str] | None = None,
 ) -> tuple[StageOutcome, dict]:
-    """The source x target transfer matrix, with all four controls."""
+    """The source x target transfer matrix, with all four controls.
+
+    Args:
+        unrelated_controls: ``{focal concept: external unrelated concept}``,
+            decided before the model ran. When absent the first non-focal
+            concept is used, which is the pilot's rule.
+    """
     question = build_question(list(config.concepts) or list(all_concepts))
     candidates = candidate_token_ids(backend, list(config.concepts) or list(all_concepts))
     groups = {group["group_id"]: group for group in subset["splits"]["test"]}
@@ -593,7 +777,11 @@ def stage_causal(
                 # Prefer a control concept outside the focal causal set. In a
                 # two-way forced choice, the only alternative is not actually
                 # unrelated: it is the target's direct contrast.
-                unrelated_concept = next(
+                #
+                # A caller-supplied assignment is fixed before the model runs
+                # and uses only the pre-model ranking — a control chosen after
+                # seeing how the candidates behave is not a control.
+                unrelated_concept = (unrelated_controls or {}).get(concept) or next(
                     (other for other in all_concepts if other not in concepts),
                     next((other for other in all_concepts if other != concept), None),
                 )
@@ -610,8 +798,20 @@ def stage_causal(
                     if other:
                         variants["unrelated_concept"] = other
                 for target_modality in modalities:
+                    if config.off_diagonal_causal_only and target_modality == source_modality:
+                        continue
                     targets = _select_targets(
-                        codes, groups, concept, target_modality, config.n_target_examples
+                        codes,
+                        groups,
+                        concept,
+                        target_modality,
+                        config.n_target_examples,
+                        image_unique=config.image_unique_targets,
+                        source_images=frozenset(
+                            base.get("source_positive_image_ids", [])
+                        )
+                        | frozenset(base.get("source_negative_image_ids", [])),
+                        require_exact=config.image_unique_targets,
                     )
                     for group, sign in targets:
                         identifier = sample_id(group["group_id"], target_modality)
@@ -685,7 +885,18 @@ def stage_causal(
                                         # photograph, so a group-level count of
                                         # image targets over-reports n.
                                         "image_id": group["image_id"],
+                                        "image_identity_rule_version": (
+                                            IMAGE_IDENTITY_RULE_VERSION
+                                        ),
                                         "target_is_positive": sign < 0,
+                                        "source_split": "train",
+                                        "target_split": group.get("split", "test"),
+                                        "target_selection_version": (
+                                            CAUSAL_TARGET_SELECTION_VERSION
+                                            if config.image_unique_targets
+                                            else LEGACY_CAUSAL_TARGET_SELECTION_VERSION
+                                        ),
+                                        "unrelated_control_concept": unrelated_concept,
                                         "direction_checksum": direction["direction_checksum"],
                                     }
                                 )
@@ -704,24 +915,74 @@ def _select_targets(
     concept: str,
     modality: str,
     n_each: int,
+    *,
+    image_unique: bool = False,
+    source_images: frozenset[str] = frozenset(),
+    require_exact: bool = False,
 ) -> list[tuple[Mapping, int]]:
-    """Held-out positives (subtract, ``sign=-1``) and matched negatives (add, ``+1``)."""
-    positives: list[tuple[Mapping, int]] = []
-    negatives: list[tuple[Mapping, int]] = []
-    seen: set[str] = set()
-    for code in sorted(codes, key=lambda c: c["sample_id"]):
-        if code["split"] != "test" or code["modality"] != modality:
-            continue
-        group = groups.get(code["group_id"])
-        if group is None or group["group_id"] in seen:
-            continue
-        if code["concept"] == concept and len(positives) < n_each:
-            positives.append((group, -1))
-            seen.add(group["group_id"])
-        elif code["concept"] is None and len(negatives) < n_each:
-            negatives.append((group, +1))
-            seen.add(group["group_id"])
-    return positives + negatives
+    """Held-out positives (subtract, ``sign=-1``) and matched negatives (add, ``+1``).
+
+    With ``image_unique`` the photograph is the unit: targets are deduplicated
+    on ``image_id`` before examples are chosen, the positive and negative image
+    sets are held disjoint, and any image already spent on source training is
+    excluded. Without it this is the pilot's rule — deduplication on
+    ``group_id`` — which can select two captions of one photograph and count
+    them as two observations.
+
+    Raises:
+        InsufficientDistinctImagesError: When ``require_exact`` is set and
+            fewer than ``n_each`` distinct images are available for either
+            role, or the two roles would have to share one.
+    """
+    candidates = [
+        code
+        for code in sorted(codes, key=lambda c: c["sample_id"])
+        if code["split"] == "test"
+        and code["modality"] == modality
+        and code["group_id"] in groups
+    ]
+    if not image_unique:
+        positives: list[tuple[Mapping, int]] = []
+        negatives: list[tuple[Mapping, int]] = []
+        seen: set[str] = set()
+        for code in candidates:
+            group = groups[code["group_id"]]
+            if group["group_id"] in seen:
+                continue
+            if code["concept"] == concept and len(positives) < n_each:
+                positives.append((group, -1))
+                seen.add(group["group_id"])
+            elif code["concept"] is None and len(negatives) < n_each:
+                negatives.append((group, +1))
+                seen.add(group["group_id"])
+        return positives + negatives
+
+    required = n_each if require_exact else None
+    positive_codes, positive_images = select_distinct_image_records(
+        [code for code in candidates if code["concept"] == concept],
+        n_required=required,
+        role=f"{concept} / {modality} held-out positives",
+        exclude_images=frozenset(source_images),
+        what="causal targets",
+    )
+    negative_codes, negative_images = select_distinct_image_records(
+        [code for code in candidates if code["concept"] is None],
+        n_required=required,
+        role=f"{concept} / {modality} held-out negatives",
+        exclude_images=frozenset(source_images) | set(positive_images),
+        what="causal targets",
+    )
+    assert_disjoint_images(
+        positive_images,
+        negative_images,
+        left_name=f"{concept} / {modality} target positives",
+        right_name="target negatives",
+    )
+    if not require_exact:
+        positive_codes, negative_codes = positive_codes[:n_each], negative_codes[:n_each]
+    return [(groups[code["group_id"]], -1) for code in positive_codes] + [
+        (groups[code["group_id"]], +1) for code in negative_codes
+    ]
 
 
 # ----------------------------------------------------------------- stage 10

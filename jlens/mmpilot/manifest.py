@@ -42,6 +42,12 @@ from jlens.mmpilot.evidence import (
     is_valid_positive,
     negative_evidence,
 )
+from jlens.mmpilot.selection import (
+    PILOT_PROFILE,
+    InsufficientDistinctImagesError,
+    SubsetProfile,
+    choose_representative_groups,
+)
 
 IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
 AUDIO_SUFFIXES = (".wav", ".flac", ".mp3", ".ogg", ".m4a")
@@ -1096,6 +1102,7 @@ def build_subset(
     max_groups_per_image: int = 2,
     seed: str = "spokencoco-pilot",
     evidence_config: EvidenceConfig | None = None,
+    profile: SubsetProfile | None = None,
 ) -> dict:
     """Deterministically select a small, image-disjoint pilot subset.
 
@@ -1121,11 +1128,21 @@ def build_subset(
     would multiply every downstream forward pass without adding independent
     images — which is what the statistics actually need.
 
+    ``profile`` selects a versioned selection policy
+    (:mod:`jlens.mmpilot.selection`). The default reproduces the completed
+    pilot exactly, including its ``max_groups_per_image`` argument;
+    :data:`~jlens.mmpilot.selection.IMAGE_UNIQUE_PROFILE` takes one
+    deterministically chosen group per image and explicit per-split image
+    counts, and records the sibling groups it excluded.
+
     Returns a dict with ``concepts``, ``splits`` (``train`` / ``test`` group
     lists), and ``provenance``.
     """
     if groups_per_concept < 2:
         raise ValueError("groups_per_concept must be >= 2 to allow a train/test split")
+    profile = profile or PILOT_PROFILE
+    if profile.explicit_image_counts:
+        max_groups_per_image = profile.max_groups_per_image
 
     config = evidence_config or config_for_concepts(concepts)
 
@@ -1161,7 +1178,30 @@ def build_subset(
         )
         source_train = [image_id for image_id in pure if any(str(g.get("source_split", "")).lower().startswith("train") for g in by_image[image_id])]
         source_test = [image_id for image_id in pure if any(str(g.get("source_split", "")).lower().startswith(("val", "test")) for g in by_image[image_id])]
-        if groups_per_concept >= 6 and len(source_train) >= 4 and len(source_test) >= 2:
+        if profile.explicit_image_counts:
+            # An image whose groups span both source splits appears in both
+            # lists. Taking prefixes of each would put one photograph on both
+            # sides of the split, so the test pool is drawn from what train
+            # did not claim.
+            n_train = int(profile.n_train_positive_images)
+            n_test = int(profile.n_test_positive_images)
+            train_pool = source_train
+            test_pool = [i for i in source_test if i not in set(source_train)]
+            if len(train_pool) >= n_train and len(test_pool) >= n_test:
+                chosen = train_pool[:n_train] + test_pool[:n_test]
+                split_method = "source_provided_train_validation"
+            else:
+                chosen = pure[: n_train + n_test]
+                split_method = "stable_id_seeded"
+            if len(chosen) < n_train + n_test:
+                raise InsufficientDistinctImagesError(
+                    f"concept {concept!r}: profile {profile.version!r} needs "
+                    f"{n_train} training and {n_test} held-out distinct images "
+                    f"but only {len(chosen)} valid synchronized positive "
+                    f"image(s) are available ({len(pure)} before the split). "
+                    "Refusing to run the design on a smaller set than it states."
+                )
+        elif groups_per_concept >= 6 and len(source_train) >= 4 and len(source_test) >= 2:
             chosen = source_train[:4] + source_test[:2]
             n_train = 4
             split_method = "source_provided_train_validation"
@@ -1170,23 +1210,47 @@ def build_subset(
             n_train = min(max(1, groups_per_concept - 2), max(1, len(chosen) - 1))
             split_method = "stable_id_seeded_4_to_2"
         used_images.update(chosen)
+        train_images, test_images = chosen[:n_train], chosen[n_train:]
+        # A guard, not a policy: an image on both sides of the split makes
+        # every held-out claim about this concept untrue, and the pilot's
+        # source-split prefixes could produce one.
+        overlap = sorted(set(train_images) & set(test_images))
+        if overlap:
+            raise ValueError(
+                f"concept {concept!r}: image(s) {overlap[:8]} were assigned to "
+                "both train and test. Refusing to build a subset whose split "
+                "is not image-disjoint."
+            )
         selected[concept] = {
-            "train_images": chosen[:n_train],
-            "test_images": chosen[n_train:],
+            "train_images": train_images,
+            "test_images": test_images,
             "n_available_images": len(pure),
             "split_method": split_method,
         }
 
-    negatives = sorted(
+    available_negatives = sorted(
         (image_id for image_id, evidence in image_evidence.items()
          if not evidence and image_id not in used_images),
         key=lambda image_id: _stable_rank(image_id, f"{seed}|negative"),
-    )[: negatives_per_concept * 2]
-    n_train_neg = max(1, len(negatives) // 2)
+    )
+    if profile.explicit_image_counts:
+        n_train_neg = int(profile.n_train_negative_images)
+        n_test_neg = int(profile.n_test_negative_images)
+        negatives = available_negatives[: n_train_neg + n_test_neg]
+        if len(negatives) < n_train_neg + n_test_neg:
+            raise InsufficientDistinctImagesError(
+                f"profile {profile.version!r} needs {n_train_neg} training and "
+                f"{n_test_neg} held-out distinct matched-negative images but "
+                f"only {len(negatives)} image(s) carry no evidence of any "
+                "screened concept. Refusing to reuse a negative image."
+            )
+    else:
+        negatives = available_negatives[: negatives_per_concept * 2]
+        n_train_neg = max(1, len(negatives) // 2)
     negative_split = {
         "train_images": negatives[:n_train_neg],
         "test_images": negatives[n_train_neg:],
-        "n_available_images": len(negatives),
+        "n_available_images": len(available_negatives),
     }
 
     def rows(image_ids: Sequence[str], concept: str | None, split: str) -> list[dict]:
@@ -1199,12 +1263,24 @@ def build_subset(
                     for group in candidates
                     if is_valid_positive(group, concept, config)
                 ]
-            chosen = candidates[:max_groups_per_image]
+            chosen, excluded_siblings, selection_reason = choose_representative_groups(
+                candidates, image_id=image_id, seed=seed, profile=profile
+            )
             if concept is not None and not chosen:
                 raise ValueError(
                     f"selected positive image {image_id!r} has no individually "
                     f"valid synchronized group for {concept!r}"
                 )
+            sibling_provenance = (
+                {
+                    "representative_selection": profile.representative_selection,
+                    "representative_selection_reason": selection_reason,
+                    "excluded_sibling_group_ids": excluded_siblings,
+                    "n_sibling_groups_excluded": len(excluded_siblings),
+                }
+                if profile.record_sibling_exclusions
+                else {}
+            )
             for group in chosen:
                 # Every selected row carries the evidence that justified it, so
                 # a reviewer never has to take the label on trust.
@@ -1225,6 +1301,7 @@ def build_subset(
                                     "positive rows individually satisfy visual AND "
                                     "caption evidence"
                                 ),
+                                **sibling_provenance,
                             }})
         return out
 
@@ -1245,6 +1322,8 @@ def build_subset(
             "groups_per_concept": groups_per_concept,
             "negatives_per_concept": negatives_per_concept,
             "max_groups_per_image": max_groups_per_image,
+            "profile": profile.to_dict(),
+            "independent_unit": "image_id",
             "selection_rule": (
                 "images that are a VALID SYNCHRONIZED POSITIVE for exactly one "
                 "selected concept — COCO object annotation AND an approved "

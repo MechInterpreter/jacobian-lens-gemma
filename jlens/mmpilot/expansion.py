@@ -53,6 +53,7 @@ from jlens.mmpilot.manifest import (
     normalize_manifest,
     probe_path,
 )
+from jlens.mmpilot.selection import PILOT_PROFILE, SubsetProfile
 from jlens.mmpilot.store import UnitStore, payload_checksum
 
 #: Metadata formats inspected locally. Discovery is bounded by depth, file count and bytes.
@@ -786,15 +787,50 @@ def _split_plan(
     max_groups_per_image: int,
     seed: str,
     evidence_config: EvidenceConfig,
+    profile: SubsetProfile | None = None,
 ) -> dict:
     """Mirror :func:`~jlens.mmpilot.manifest.build_subset`'s selection exactly.
 
     Ranking has to predict what the split will actually contain, so it applies
-    the same stable ordering and the same halving rather than estimating.
+    the same stable ordering and the same split rule rather than estimating.
+
+    The ``profile`` argument is not decoration. Under a profile with explicit
+    per-split image counts the subset builder splits 8/8, while this function's
+    pilot rule splits ``groups_per_concept - 2`` / 2 — so without it the
+    ranking would report every concept as short of held-out positives and
+    reject the whole candidate set for a shortfall that does not exist.
     """
+    profile = profile or PILOT_PROFILE
     ordered = sorted(image_ids, key=lambda image_id: _stable_rank(image_id, f"{seed}|{concept}"))
-    chosen = ordered[:groups_per_concept]
-    n_train = min(max(1, groups_per_concept - 2), max(1, len(chosen) - 1))
+    if profile.explicit_image_counts:
+        max_groups_per_image = profile.max_groups_per_image
+        n_train = int(profile.n_train_positive_images)
+        n_test = int(profile.n_test_positive_images)
+        source_train = [
+            image_id
+            for image_id in ordered
+            if any(
+                str(g.get("source_split", "")).lower().startswith("train")
+                for g in by_image[image_id]
+            )
+        ]
+        source_test = [
+            image_id
+            for image_id in ordered
+            if image_id not in set(source_train)
+            and any(
+                str(g.get("source_split", "")).lower().startswith(("val", "test"))
+                for g in by_image[image_id]
+            )
+        ]
+        if len(source_train) >= n_train and len(source_test) >= n_test:
+            chosen = source_train[:n_train] + source_test[:n_test]
+        else:
+            chosen = ordered[: n_train + n_test]
+        n_train = min(n_train, max(0, len(chosen) - 1)) if len(chosen) <= n_train else n_train
+    else:
+        chosen = ordered[:groups_per_concept]
+        n_train = min(max(1, groups_per_concept - 2), max(1, len(chosen) - 1))
     train_images, test_images = chosen[:n_train], chosen[n_train:]
 
     def count(images: Sequence[str]) -> int:
@@ -1015,6 +1051,7 @@ def rank_concepts(
     max_groups_per_image: int = 2,
     seed: str = "spokencoco-pilot",
     evidence_config: EvidenceConfig | None = None,
+    profile: SubsetProfile | None = None,
 ) -> list[dict]:
     """Score every candidate concept against what the split will really yield.
 
@@ -1103,6 +1140,7 @@ def rank_concepts(
             max_groups_per_image=max_groups_per_image,
             seed=seed,
             evidence_config=config,
+            profile=profile,
         )
         unmet = []
         if len(pure) < requirements.min_distinct_images:
