@@ -811,12 +811,12 @@ else:
                 raise RuntimeError("a Hugging Face token is required for the gated repo")
             os.environ["HF_TOKEN"] = _token
         from jlens.gemma4 import load_gemma4
-        from jlens.mmpilot.backend import Gemma4PilotBackend
+        from jlens.mmpilot.backend import GemmaPilotBackend
 
         MODEL, PROCESSOR = load_gemma4(
             MODEL_REPO_ID, revision=MODEL_REVISION, token=os.environ["HF_TOKEN"]
         )
-        BACKEND = Gemma4PilotBackend(MODEL, PROCESSOR)
+        BACKEND = GemmaPilotBackend(MODEL, PROCESSOR)
         MODEL_REVISION_USED = MODEL_REVISION
         PROCESSOR_REVISION_USED = MODEL_REVISION
     else:

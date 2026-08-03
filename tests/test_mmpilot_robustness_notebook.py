@@ -98,6 +98,15 @@ def test_the_committed_notebook_matches_its_generator():
     assert NOTEBOOK_PATH.read_text(encoding="utf-8") == before
 
 
+def test_real_backend_import_names_the_implemented_class(notebook):
+    source = _source(notebook)
+    from jlens.mmpilot import backend
+
+    assert "from jlens.mmpilot.backend import GemmaPilotBackend" in source
+    assert "Gemma4PilotBackend" not in source
+    assert hasattr(backend, "GemmaPilotBackend")
+
+
 def test_bootstrap_comes_before_any_repository_import(notebook):
     cells = ["".join(cell["source"]) for cell in _code_cells(notebook)]
     install = next(
