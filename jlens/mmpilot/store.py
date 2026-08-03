@@ -93,10 +93,22 @@ class RunFingerprint:
     split_id: str
     intervention_config: dict = field(default_factory=dict)
     extra: dict = field(default_factory=dict)
+    #: The complete scientific selection and intervention configuration —
+    #: which images were eligible, how one was chosen per photograph, which
+    #: concepts were focal, how controls were assigned, how targets were
+    #: deduplicated. See :func:`jlens.mmpilot.pipeline.scientific_fingerprint`.
+    #:
+    #: Empty by default and **omitted from the digest when empty**, so every
+    #: run directory written before this field existed keeps the digest it was
+    #: written with and stays resumable. Filling it in is what binds a run to
+    #: its selection policy; changing any entry refuses the resume.
+    selection_config: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         payload = asdict(self)
         payload["layers"] = list(self.layers)
+        if not self.selection_config:
+            payload.pop("selection_config")
         return payload
 
     @property
