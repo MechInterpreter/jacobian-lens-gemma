@@ -244,6 +244,8 @@ LENS_EXPECT_SHA256 = (
 )
 MODEL_REPO_ID = "google/gemma-4-E4B-it"
 MODEL_REVISION = "fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd"
+# What verify_architecture holds the loaded checkpoint to. Gemma 4 E4B IT.
+EXPECT_N_LAYERS, EXPECT_D_MODEL, EXPECT_VOCAB = 42, 2560, 262144
 
 # --------------------------------------------------------------- the data
 SPOKENCOCO_BASE_ROOT = "/content/drive/MyDrive/datasets/cstf_spokencoco"
@@ -789,43 +791,131 @@ markdown(
 
 Nothing below this point runs unless `RUN_MODEL_STAGES` **and**
 `CONFIRM_MODEL_PASS_BUDGET` are both True.
+
+**8a runs the real-path preflight before the 16 GB download.** It verifies —
+without loading any weights — that the lens is on disk and matches its pin,
+that its manifest names exactly this model revision and layer 38, that the
+revision resolves on the Hub, that every call the real path will make binds
+against the installed signatures, and that the selection inputs are complete.
+Three L4 starts have died on errors every one of which this cell now catches
+on CPU in seconds.
+
+**8b reproduces the four-concept pilot's tested load sequence** via
+`jlens.mmpilot.real_backend.build_real_backend`: `load_gemma4` (which returns
+the model and its load info — not a processor), parameter freezing,
+`verify_architecture` against 42 layers / d_model 2560 / vocab 262144,
+`AutoProcessor` at the resolved revision, `resolve_processor_interface` by
+inspection, and `GemmaPilotBackend(hf_model, processor, interface)`. The same
+function is exercised by an executable fake-real-path test, so this branch is
+tested code, not notebook-only code.
+
+Both branches finish with the **invariance gate**: activation capture must be
+a no-op and a zero-coefficient intervention must not change the logits.
 """
 )
 
 code(
     '''
-# 8. Load the model (or the MOCK backend) and record what was actually loaded.
+# 8a. REAL PATH PREFLIGHT — must pass before the 16 GB download may start.
+# Reads the lens and its manifest, asks the Hub for metadata only, and binds
+# every real-path call against the installed signatures. No weights load here.
+PREFLIGHT = None
+if not MODEL_STAGES_ENABLED:
+    print("skipped: MODEL_STAGES_ENABLED is False")
+elif not RUN_REAL_ROBUSTNESS:
+    from jlens.mmpilot.preflight import check_call_contracts
+
+    _contract_failures = check_call_contracts()
+    if _contract_failures:
+        raise RuntimeError(
+            "call-signature contracts failed even in MOCK:\\n  - "
+            + "\\n  - ".join(_contract_failures)
+        )
+    print(
+        "MOCK path: full preflight needs the real lens and the Hub; the "
+        "call-signature contracts were checked and all bind."
+    )
+else:
+    import getpass
+
+    from jlens.mmpilot.preflight import format_preflight, real_path_preflight
+
+    if not os.environ.get("HF_TOKEN"):
+        _token = getpass.getpass("HF_TOKEN (input hidden): ").strip()
+        if not _token:
+            raise RuntimeError("a Hugging Face token is required for the gated repo")
+        os.environ["HF_TOKEN"] = _token
+
+    PREFLIGHT = real_path_preflight(
+        model_repo_id=MODEL_REPO_ID,
+        model_revision=MODEL_REVISION,
+        lens_path=LENS_PATH,
+        lens_expect_checksum=LENS_EXPECT_SHA256,
+        layers=CONFIG.layers,
+        expect_d_model=EXPECT_D_MODEL,
+        selected_concepts=list(SELECTED_NAMES),
+        focal_concepts=list(FOCAL_CONCEPTS),
+        unrelated_controls=dict(UNRELATED_CONTROLS),
+        subset=SUBSET,
+        split_provenance_checksum=SPLIT_PROVENANCE_CHECKSUM,
+        token=os.environ["HF_TOKEN"],
+    )
+    print(format_preflight(PREFLIGHT))
+'''
+)
+
+code(
+    '''
+# 8b. Load the model (or the MOCK backend), audit the architecture, resolve
+# the processor interface, and run the invariance gate.
 MODEL = None
 BACKEND = None
+INTERFACE = None
+LOAD_INFO = None
+ARCH_REPORT = None
+INVARIANCE = None
 AVAILABLE_MODALITIES = []
 BLOCKED_MODALITIES = []
 if not MODEL_STAGES_ENABLED:
     print("skipped: MODEL_STAGES_ENABLED is False")
 else:
     if RUN_REAL_ROBUSTNESS:
-        import getpass
+        # The tested construction sequence from the completed pilot, as
+        # package code: load -> freeze -> verify_architecture -> AutoProcessor
+        # at the resolved revision -> resolve_processor_interface ->
+        # GemmaPilotBackend(hf_model, processor, interface).
+        from jlens.mmpilot.real_backend import build_real_backend
 
-        if not os.environ.get("HF_TOKEN"):
-            _token = getpass.getpass("HF_TOKEN (input hidden): ").strip()
-            if not _token:
-                raise RuntimeError("a Hugging Face token is required for the gated repo")
-            os.environ["HF_TOKEN"] = _token
-        from jlens.gemma4 import load_gemma4
-        from jlens.mmpilot.backend import GemmaPilotBackend
-
-        MODEL, PROCESSOR = load_gemma4(
+        BUNDLE = build_real_backend(
             MODEL_REPO_ID,
             revision=MODEL_REVISION,
             token=os.environ["HF_TOKEN"],
+            device="cuda" if torch.cuda.is_available() else "cpu",
             allow_model_load=True,
+            expect_n_layers=EXPECT_N_LAYERS,
+            expect_d_model=EXPECT_D_MODEL,
+            expect_vocab_size=EXPECT_VOCAB,
         )
-        BACKEND = GemmaPilotBackend(MODEL, PROCESSOR)
-        MODEL_REVISION_USED = MODEL_REVISION
-        PROCESSOR_REVISION_USED = MODEL_REVISION
+        MODEL = BUNDLE.lens_model
+        BACKEND = BUNDLE.backend
+        INTERFACE = BUNDLE.interface
+        LOAD_INFO = BUNDLE.load_info
+        ARCH_REPORT = BUNDLE.architecture
+        MODEL_REVISION_USED = BUNDLE.model_revision
+        PROCESSOR_REVISION_USED = BUNDLE.processor_revision
+        print("resolved interface:")
+        print(json.dumps(INTERFACE, indent=2, default=str))
+        print(json.dumps(
+            {k: ARCH_REPORT[k] for k in ("n_layers", "d_model", "vocab_size", "layout_path")
+             if k in ARCH_REPORT},
+            indent=2, default=str,
+        ))
+        print(f"model revision used: {MODEL_REVISION_USED}")
     else:
         from jlens.mmpilot.mock import MockPilotBackend
 
         BACKEND = MockPilotBackend(MOCK_WORLD, supports_audio=False)
+        INTERFACE = BACKEND.interface
         MODEL_REVISION_USED = "mock"
         PROCESSOR_REVISION_USED = "mock"
 
@@ -840,6 +930,23 @@ else:
             "spoken audio is outside this study by design; it must not be in "
             "the configured modalities"
         )
+
+    # The invariance gate, before anything is measured: capturing an
+    # activation must not change the forward pass, and a zero-coefficient
+    # intervention must not change the logits. Raises on any violation.
+    from jlens.mmpilot.backend import run_invariance_gate
+    from jlens.mmpilot.capability import build_prompt, build_question
+
+    _probe = BACKEND.build_inputs(
+        prompt=build_prompt(
+            build_question(sorted(SELECTED_NAMES)),
+            modality="text",
+            caption="a photo used only to probe the hooks",
+        ),
+        modality="text",
+    )
+    INVARIANCE = run_invariance_gate(BACKEND, _probe, list(CONFIG.causal_layers))
+    print(f"invariance gate passed: {INVARIANCE['passed']}")
 '''
 )
 
@@ -963,6 +1070,13 @@ the study stops and names the missing artifact.
 code(
     '''
 # 10. Validate the frozen, previously fitted lens. Nothing is fitted here.
+#
+# The real branch goes through jlens.mmpilot.real_backend.load_validated_lens,
+# which re-checks the pinned checksum AND the validated_lens_manifest.json
+# published beside the lens: status, checksum agreement, the model revision it
+# was validated against, and that layer 38 passed the held-out native readout.
+# A lens used with a model it was never validated for answers a different
+# question than the one its manifest certifies.
 LENS = None
 LENS_VALIDATION = None
 if not MODEL_STAGES_ENABLED:
@@ -971,24 +1085,31 @@ else:
     from jlens.mmpilot.jspace import validate_lens
 
     if RUN_REAL_ROBUSTNESS:
-        from jlens.lens import JacobianLens
-        from jlens.mmpilot.cache import file_sha256
+        from jlens.mmpilot.real_backend import load_validated_lens
 
-        _checksum = file_sha256(LENS_PATH)
-        if _checksum != LENS_EXPECT_SHA256:
-            raise RuntimeError(
-                f"lens checksum {_checksum} != pinned {LENS_EXPECT_SHA256}; "
-                "refusing to use a lens other than the validated one"
-            )
-        LENS = JacobianLens.load(LENS_PATH)
-        _lens_path, _lens_checksum = LENS_PATH, _checksum
-        _expect_repo, _expect_revision = MODEL_REPO_ID, MODEL_REVISION
+        VALIDATED = load_validated_lens(
+            LENS_PATH,
+            expect_checksum=LENS_EXPECT_SHA256,
+            layers=CONFIG.layers,
+            model_revision=MODEL_REVISION_USED,
+        )
+        LENS = VALIDATED.lens
+        NATIVE_LENS_VALIDATION = VALIDATED.native_validation
+        _lens_path, _lens_checksum = VALIDATED.path, VALIDATED.checksum
+        _expect_repo, _expect_revision = MODEL_REPO_ID, MODEL_REVISION_USED
+        _expect_d_model, _expect_checksum = EXPECT_D_MODEL, LENS_EXPECT_SHA256
     else:
-        from jlens.mmpilot.mock import mock_lens
+        from jlens.mmpilot.mock import MOCK_LENS_CHECKSUM, mock_lens
 
         LENS = mock_lens(layers=CONFIG.layers)
-        _lens_path, _lens_checksum = "mock", "sha256:mock-identity-lens"
+        NATIVE_LENS_VALIDATION = {
+            "status": "validated_text_only",
+            "native_readout_layers_passing": list(CONFIG.layers),
+            "native_validation_path": "mock://native-readout-validation",
+        }
+        _lens_path, _lens_checksum = "mock", MOCK_LENS_CHECKSUM
         _expect_repo, _expect_revision = "mock/gemma-like", "mock"
+        _expect_d_model, _expect_checksum = BACKEND.d_model, MOCK_LENS_CHECKSUM
 
     LENS_VALIDATION = validate_lens(
         LENS,
@@ -999,8 +1120,10 @@ else:
         model_revision=_expect_revision,
         expect_model_repo_id=_expect_repo,
         expect_model_revision=_expect_revision,
-        expect_d_model=BACKEND.d_model,
+        expect_d_model=_expect_d_model,
+        expect_checksum=_expect_checksum,
     )
+    LENS_VALIDATION["native_readout_validation"] = NATIVE_LENS_VALIDATION
     print(json.dumps(LENS_VALIDATION, indent=2, default=str)[:1200])
     print("\\nfrozen:", LENS_VALIDATION["frozen"])
 '''
@@ -1054,7 +1177,18 @@ if not MODEL_STAGES_ENABLED:
 else:
     from jlens.mmpilot.pipeline import build_dictionaries, stage_codes
 
-    DICTIONARIES = build_dictionaries(LENS, CONFIG.layers, BACKEND)
+    # The frozen dictionary is ~262k x 2560 atoms on the real path. fp16 on the
+    # GPU next to the bf16 model is the configuration the pilot ran; leaving it
+    # on CPU makes the pursuit orders of magnitude slower without changing a
+    # number (correlations are computed in float32 either way).
+    DICTIONARIES = build_dictionaries(
+        LENS,
+        CONFIG.layers,
+        BACKEND,
+        device="cuda" if (RUN_REAL_ROBUSTNESS and torch.cuda.is_available()) else "cpu",
+        dtype=torch.float16 if RUN_REAL_ROBUSTNESS else torch.float32,
+        build_chunk_rows=32768 if RUN_REAL_ROBUSTNESS else None,
+    )
     CODE_OUTCOME = stage_codes(
         STORE, ACTIVATIONS, DICTIONARIES, CONFIG, lens_checksum=LENS_VALIDATION["lens_checksum"]
     )

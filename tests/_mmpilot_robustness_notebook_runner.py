@@ -87,6 +87,8 @@ def main() -> int:
                 "model_stages_enabled": namespace["MODEL_STAGES_ENABLED"],
                 "spoken_audio_enabled": namespace["ENABLE_SPOKEN_AUDIO"],
                 "model_is_none": namespace["MODEL"] is None,
+                "invariance_passed": (namespace.get("INVARIANCE") or {}).get("passed"),
+                "preflight_ran": namespace.get("PREFLIGHT") is not None,
                 "run_dir": str(namespace["RUN_DIR"]),
                 # Selection, all decided before any model ran.
                 "ranked_concepts": namespace["RANKED_CONCEPTS"],

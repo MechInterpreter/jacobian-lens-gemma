@@ -98,13 +98,17 @@ def test_the_committed_notebook_matches_its_generator():
     assert NOTEBOOK_PATH.read_text(encoding="utf-8") == before
 
 
-def test_real_backend_import_names_the_implemented_class(notebook):
+def test_real_backend_import_names_the_implemented_entry_point(notebook):
+    """The real branch calls the tested package function, not ad-hoc notebook
+    code — that function is what the fake-real-path test executes."""
     source = _source(notebook)
-    from jlens.mmpilot import backend
+    from jlens.mmpilot import real_backend
 
-    assert "from jlens.mmpilot.backend import GemmaPilotBackend" in source
+    assert "from jlens.mmpilot.real_backend import build_real_backend" in source
+    assert "from jlens.mmpilot.real_backend import load_validated_lens" in source
     assert "Gemma4PilotBackend" not in source
-    assert hasattr(backend, "GemmaPilotBackend")
+    assert callable(real_backend.build_real_backend)
+    assert callable(real_backend.load_validated_lens)
 
 
 def test_confirmed_real_path_explicitly_allows_the_guarded_model_load(notebook):
@@ -177,7 +181,10 @@ def test_the_budget_confirmation_gates_every_model_stage(notebook):
 
     cells = ["".join(cell["source"]) for cell in _code_cells(notebook)]
     for needle in (
-        "load_gemma4",
+        "build_real_backend(",
+        "real_path_preflight(",
+        "run_invariance_gate(",
+        "load_validated_lens(",
         "MockPilotBackend(",
         "stage_capability",
         "stage_activations",
@@ -197,7 +204,7 @@ def test_the_budget_confirmation_gates_every_model_stage(notebook):
 def test_the_budget_is_printed_before_the_model_cell(notebook):
     cells = ["".join(cell["source"]) for cell in _code_cells(notebook)]
     budget = next(i for i, c in enumerate(cells) if "format_budget(" in c)
-    model = next(i for i, c in enumerate(cells) if "load_gemma4" in c)
+    model = next(i for i, c in enumerate(cells) if "build_real_backend(" in c)
     selection = next(i for i, c in enumerate(cells) if "build_subset(" in c)
     assert selection < budget < model
     # Ranking and the subset share one cell; the order inside it still matters.
@@ -210,7 +217,7 @@ def test_the_focal_concepts_are_fixed_before_the_model_cell(notebook):
     cells = ["".join(cell["source"]) for cell in _code_cells(notebook)]
     focal = next(i for i, c in enumerate(cells) if "select_focal_concepts(" in c)
     controls = next(i for i, c in enumerate(cells) if "unrelated_control_assignment(" in c)
-    model = next(i for i, c in enumerate(cells) if "load_gemma4" in c)
+    model = next(i for i, c in enumerate(cells) if "build_real_backend(" in c)
     capability = next(i for i, c in enumerate(cells) if "stage_capability" in c)
     assert focal < model and controls < model
     assert focal < capability and controls < capability
@@ -245,7 +252,14 @@ def test_the_validated_lens_is_pinned_and_never_fitted(notebook):
     )
     assert "fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd" in source
     assert "validate_lens" in source
-    assert "refusing to use a lens other than the validated one" in source
+    # The checksum guard now lives in the tested loader the notebook calls.
+    assert "load_validated_lens(" in source
+    assert "expect_checksum=LENS_EXPECT_SHA256" in source
+    import inspect
+
+    from jlens.mmpilot import real_backend
+
+    assert "lens other than the validated one" in inspect.getsource(real_backend)
     assert "This notebook does not fit a lens." in source
     assert ".fit(" not in source
 
@@ -424,6 +438,11 @@ def test_the_full_mock_study_runs_to_a_verdict(full_path):
     )
     assert "VERDICT:" in stdout
     assert report["resume_status"] == "starting"
+    # The invariance gate runs on the MOCK backend too, and the MOCK branch of
+    # the preflight cell still binds every real-path call signature.
+    assert report["invariance_passed"] is True
+    assert "call-signature contracts were checked and all bind" in stdout
+    assert "invariance gate passed: True" in stdout
 
 
 def test_all_six_concepts_clear_the_mock_capability_gate(full_path):
