@@ -531,3 +531,68 @@ the other answer candidates move less than the target does — and the mirrored
 image→text cell shows the same pattern. Anything less than that is a WEAK GO at
 best, and the follow-up should be the single cell that resolves it, not a
 framework.
+
+## Same-image dependence, and what the independent unit is
+
+SpokenCOCO gives one COCO photograph roughly five written captions and a spoken
+reading of each. `build_subset` keeps `max_groups_per_image` of them — two, by
+default — so **one image can enter a run as two synchronized groups**. Those two
+groups are not two observations. They are one photograph with the caption text
+differing, which is why the capability output showed image margins arriving in
+identical pairs while the text margins moved.
+
+The consequence splits in two, and the two halves are handled differently.
+
+**Representation.** `jlens.mmpilot.jspace.admissible_targets` drops any target
+sharing the query's `image_id`, and that rule supersedes the group-level one.
+Excluding only the exact synchronized group is not sufficient: a caption could
+otherwise reach its own photograph through a sibling caption's group, which
+measures the dataset's pairing rather than the model. The rule is applied
+identically to retrieval, matched/mismatched separation, weighted support
+overlap, the raw-residual baseline and the shuffled-label control — a report in
+which some of those were image-disjoint and others were not would not mean
+anything. The rule is versioned (`EXCLUSION_RULE_VERSION`) and the exclusion
+accounting, including the eligible-target distribution, is reported per pair. A
+modality pair that keeps no evaluable query raises rather than reporting the
+`0.0` an empty denominator produces, which is indistinguishable from a measured
+failure.
+
+**Causation.** Intervention units are stored per synchronized group, so
+averaging them flat counts one image twice and reports an `n` the design never
+earned. `jlens.mmpilot.independence.summarize_interventions_by_image` averages
+within image first and then computes the cell statistic over images: `n` counts
+photographs. The group-level row is preserved verbatim under `group_level` and
+the difference is reported, so the correction is visible rather than
+substituted. Distinct captions of one image stay available per cell under
+`per_image` as descriptive detail; identical image conditions never count more
+than once as independent observations.
+
+Note the asymmetry in what each half can fix. The representational rule is a
+genuine repair — future runs measure the right thing. The causal aggregation is
+an honest recount of evidence a completed run already produced; it cannot undo
+`_select_targets` having deduplicated on `group_id` rather than `image_id` in
+that run, only report where a cell rests on fewer photographs than it appears
+to.
+
+Image identity is resolved, never assumed: `resolve_image_identity` probes the
+aliases the artifacts actually use, normalizes COCO filenames and integer ids to
+one key, and cross-checks against the saved image media checksums. One id
+spanning two photographs, one photograph under two ids, one group claiming two
+images, or a group recorded in two splits each stop the audit. An audit that
+guessed at identity could not establish independence, which is the only thing it
+exists to do.
+
+An image appearing in both splits, or sibling groups of one image landing on
+opposite sides of the split, are **hard failures**: no re-aggregation repairs
+them, because they make every held-out claim in the run untrue.
+
+`notebooks/mmpilot_image_independence_audit_colab.ipynb` runs the whole audit on
+a free CPU runtime against a completed run directory. It loads no model, no
+processor and no media, needs no Hugging Face token, writes only new versioned
+artifacts, and records the originals' checksums before and after. Its verdict is
+one of `GO_CONFIRMED_AFTER_IMAGE_DEDUP`, `WEAK_GO_AFTER_IMAGE_DEDUP`,
+`NO_GO_AFTER_IMAGE_DEDUP` or `AUDIT_BLOCKED`; the original recommendation is not
+privileged, and a `GO` requires every concept to have passed behaviorally, both
+directions to beat the shuffled control after image exclusion, the source effect
+to exceed both the random and the external unrelated control, and the evidence
+not to rest on a single duplicated photograph.
