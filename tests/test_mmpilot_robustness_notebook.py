@@ -107,6 +107,12 @@ def test_real_backend_import_names_the_implemented_class(notebook):
     assert hasattr(backend, "GemmaPilotBackend")
 
 
+def test_confirmed_real_path_explicitly_allows_the_guarded_model_load(notebook):
+    source = _source(notebook)
+    assert "allow_model_load=True" in source
+    assert source.index("if MODEL_STAGES_ENABLED") < source.index("allow_model_load=True")
+
+
 def test_bootstrap_comes_before_any_repository_import(notebook):
     cells = ["".join(cell["source"]) for cell in _code_cells(notebook)]
     install = next(

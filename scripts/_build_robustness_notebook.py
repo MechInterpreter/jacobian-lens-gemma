@@ -814,7 +814,10 @@ else:
         from jlens.mmpilot.backend import GemmaPilotBackend
 
         MODEL, PROCESSOR = load_gemma4(
-            MODEL_REPO_ID, revision=MODEL_REVISION, token=os.environ["HF_TOKEN"]
+            MODEL_REPO_ID,
+            revision=MODEL_REVISION,
+            token=os.environ["HF_TOKEN"],
+            allow_model_load=True,
         )
         BACKEND = GemmaPilotBackend(MODEL, PROCESSOR)
         MODEL_REVISION_USED = MODEL_REVISION
