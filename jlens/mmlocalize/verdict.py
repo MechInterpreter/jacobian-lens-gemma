@@ -110,6 +110,7 @@ class LocalizationBudget:
     n_targets_per_cell: int
     n_conditions_per_target: int
     n_validation_prompts: int
+    validation_target_discovery_passes: int
     text_validation_passes: int
     capability_passes: int
     activation_passes: int
@@ -139,6 +140,7 @@ def estimate_localization_passes(
     n_targets_per_cell: int,
     alphas: Sequence[float],
     n_validation_prompts: int,
+    n_validation_discovery_prompts: int = 0,
     n_control_kinds_with_alpha: int = 4,
     n_candidate_orders: int = 2,
     n_readout_variants: int = 5,
@@ -168,6 +170,7 @@ def estimate_localization_passes(
     # One forward per (prompt, layer-independent capture) per readout variant is
     # not needed: the variants re-read one captured residual. The model cost is
     # one teacher-forced forward per validation prompt.
+    target_discovery = int(n_validation_discovery_prompts)
     text_validation = n_validation_prompts
     capability = n_capability_groups * n_modalities * n_candidate_orders * n_candidates
     activation = n_total_groups * n_modalities  # every layer in one pass
@@ -178,6 +181,7 @@ def estimate_localization_passes(
     recalibration = n_recalibration_prompts if recalibration_enabled else 0
 
     units = {
+        "validation_target_discovery": target_discovery,
         "text_validation": n_validation_prompts,
         "capability": n_capability_groups * n_modalities,
         "activation": n_total_groups * n_modalities * n_layers_captured,
@@ -187,6 +191,7 @@ def estimate_localization_passes(
         "metric": 4 + n_layers_captured,
     }
     bytes_per = {
+        "validation_target_discovery": 0,
         "text_validation": n_readout_variants * 1_200,
         "capability": 12_000,
         "activation": d_model * 20 + 2_000,
@@ -209,12 +214,15 @@ def estimate_localization_passes(
         n_targets_per_cell=n_targets_per_cell,
         n_conditions_per_target=n_conditions,
         n_validation_prompts=int(n_validation_prompts),
+        validation_target_discovery_passes=target_discovery,
         text_validation_passes=text_validation,
         capability_passes=capability,
         activation_passes=activation,
         causal_clean_passes=clean,
         causal_intervention_passes=intervention,
-        total_passes=text_validation + capability + activation + clean + intervention,
+        total_passes=(
+            target_discovery + text_validation + capability + activation + clean + intervention
+        ),
         recalibration_passes=recalibration,
         estimated_units=units,
         estimated_drive_bytes=estimated_bytes,
@@ -239,6 +247,8 @@ def format_budget(budget: LocalizationBudget, *, seconds_per_pass: float = 0.5) 
         f"  targets per cell                {budget.n_targets_per_cell}",
         f"  conditions per target           {budget.n_conditions_per_target}",
         "",
+        f"  target-discovery passes         "
+        f"{budget.validation_target_discovery_passes:>8,}",
         f"  text lens-validation passes     {budget.text_validation_passes:>8,}",
         f"  capability passes               {budget.capability_passes:>8,}",
         f"  activation passes               {budget.activation_passes:>8,}",

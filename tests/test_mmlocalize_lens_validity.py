@@ -10,6 +10,7 @@ assertion about "unique top-1", "midrank" and "tied-at-max" here exists because
 one of those three quantities was being read as if it were another.
 """
 
+import hashlib
 import math
 
 import pytest
@@ -25,6 +26,7 @@ from jlens.mmlocalize.lens_validity import (
     RANK_CONVENTIONS,
     READOUT_VARIANTS,
     RECALIBRATION_PLAN,
+    InsufficientTargetDiversityError,
     LayerNotEligibleError,
     LayerValidityGate,
     RecalibrationRefused,
@@ -35,12 +37,72 @@ from jlens.mmlocalize.lens_validity import (
     evaluate_layer_validity,
     fold_of,
     gate_text,
+    select_target_diverse_prompts,
     summarize_variant,
     tie_aware_row,
 )
 
 VOCAB = 200
 TARGET = 7
+
+
+def test_target_diverse_prompt_selection_guarantees_floor_and_is_deterministic():
+    pool = [f"prompt {index}" for index in range(40)]
+
+    def target(prompt):
+        return int(prompt.rsplit(" ", 1)[1]) % 10
+
+    first, manifest = select_target_diverse_prompts(
+        pool,
+        n_prompts=16,
+        min_distinct_target_tokens=8,
+        excluded={},
+        seed=17,
+        target_token_for_prompt=target,
+    )
+    second, again = select_target_diverse_prompts(
+        list(reversed(pool)),
+        n_prompts=16,
+        min_distinct_target_tokens=8,
+        excluded={},
+        seed=17,
+        target_token_for_prompt=target,
+    )
+
+    assert first == second
+    assert manifest == again
+    assert manifest["n_selected_distinct_target_tokens"] >= 8
+    assert len({row["target_token_id"] for row in manifest["prompts"]}) >= 8
+
+
+def test_target_diverse_prompt_selection_refuses_impossible_pool_before_lens_scoring():
+    pool = [f"prompt {index}" for index in range(40)]
+    with pytest.raises(InsufficientTargetDiversityError, match="only 7 distinct"):
+        select_target_diverse_prompts(
+            pool,
+            n_prompts=16,
+            min_distinct_target_tokens=8,
+            excluded={},
+            seed=17,
+            target_token_for_prompt=lambda prompt: int(prompt.rsplit(" ", 1)[1]) % 7,
+        )
+
+
+def test_target_diverse_prompt_selection_respects_exclusions():
+    pool = [f"prompt {index}" for index in range(30)]
+    excluded_prompt = pool[3]
+    excluded = {hashlib.sha256(excluded_prompt.encode()).hexdigest(): "prior_fit"}
+    selected, manifest = select_target_diverse_prompts(
+        pool,
+        n_prompts=12,
+        min_distinct_target_tokens=8,
+        excluded=excluded,
+        seed=21,
+        target_token_for_prompt=lambda prompt: int(prompt.rsplit(" ", 1)[1]),
+    )
+
+    assert excluded_prompt not in selected
+    assert manifest["n_selected_distinct_target_tokens"] >= 8
 
 
 def _actual(target: int = TARGET) -> torch.Tensor:

@@ -81,12 +81,21 @@ def test_no_eligible_layer_means_no_causal_cost():
 def test_the_total_is_the_sum_of_its_parts():
     budget = _budget()
     assert budget.total_passes == (
-        budget.text_validation_passes
+        budget.validation_target_discovery_passes
+        + budget.text_validation_passes
         + budget.capability_passes
         + budget.activation_passes
         + budget.causal_clean_passes
         + budget.causal_intervention_passes
     )
+
+
+def test_target_discovery_is_budgeted_separately():
+    without_discovery = _budget()
+    with_discovery = _budget(n_validation_discovery_prompts=320)
+    assert with_discovery.validation_target_discovery_passes == 320
+    assert with_discovery.total_passes == without_discovery.total_passes + 320
+    assert with_discovery.estimated_units["validation_target_discovery"] == 320
 
 
 def test_only_off_diagonal_cells_are_counted():
@@ -109,6 +118,7 @@ def test_the_printed_budget_names_every_cost_and_the_eligibility_caveat():
     text = format_budget(_budget())
     for needle in (
         "TOTAL model forward passes",
+        "target-discovery passes",
         "text lens-validation passes",
         "ONE forward pass records all of them",
         "decided by Stage B, not assumed",

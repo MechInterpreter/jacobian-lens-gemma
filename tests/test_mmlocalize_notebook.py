@@ -179,6 +179,15 @@ def test_the_validity_gate_is_printed_before_any_result_producing_cell(notebook)
     assert gate < scoring
 
 
+def test_validation_prompts_are_target_diverse_before_lens_scoring(notebook):
+    source = _code_source(notebook)
+    assert "select_target_diverse_prompts(" in source
+    assert "min_distinct_target_tokens=" in source
+    assert "LOCALIZATION_VALIDITY_GATE.min_distinct_target_tokens" in source
+    assert source.index("select_target_diverse_prompts(") < source.index("tie_aware_row(")
+    assert "n_validation_discovery_prompts=POOL_RECORDS" in source
+
+
 def test_the_targets_are_frozen_before_the_model_cell(notebook):
     cells = ["".join(cell["source"]) for cell in _code_cells(notebook)]
     freeze = next(i for i, c in enumerate(cells) if "freeze_targets(" in c)
@@ -419,7 +428,8 @@ def test_the_budget_separates_capture_from_causal_cost(cpu_path):
     # Four layers, one pass each: capture does not multiply by layers.
     assert budget["activation_passes"] == budget["n_total_groups"] * 2
     assert budget["total_passes"] == (
-        budget["text_validation_passes"]
+        budget["validation_target_discovery_passes"]
+        + budget["text_validation_passes"]
         + budget["capability_passes"]
         + budget["activation_passes"]
         + budget["causal_clean_passes"]
@@ -533,6 +543,11 @@ def test_the_run_fingerprint_binds_the_whole_localization_configuration(full_pat
     assert selection["source_image_ids"] and selection["target_image_ids"]
     assert not set(selection["source_image_ids"]) & set(selection["target_image_ids"])
     assert len(selection["validation_prompt_hashes"]) == 32
+    assert len(selection["validation_prompt_target_ids"]) == 32
+    assert selection["validation_prompt_selection_protocol"].startswith(
+        "target-token-stratified"
+    )
+    assert selection["validation_prompt_selection_checksum"].startswith("sha256:")
     assert report["fingerprint_digest"].startswith("sha256:")
 
 

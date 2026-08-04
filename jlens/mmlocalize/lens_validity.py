@@ -63,6 +63,7 @@ it evidence.
 
 from __future__ import annotations
 
+import hashlib
 import math
 import statistics
 from collections.abc import Iterable, Mapping, Sequence
@@ -125,6 +126,121 @@ VALIDATION_PROMPT_SEED = 20260804
 
 LAYER_ELIGIBLE = "ELIGIBLE"
 LAYER_INELIGIBLE = "INELIGIBLE"
+
+#: Selection is stratified on the model's final-layer argmax before any lens
+#: readout is computed.  This prevents a deterministic sample with too few
+#: target tokens from making the non-degeneracy gate impossible by construction.
+VALIDATION_PROMPT_SELECTION_PROTOCOL = "target-token-stratified-stable-rank-v1"
+
+
+class InsufficientTargetDiversityError(RuntimeError):
+    """The independent prompt pool cannot satisfy the declared diversity floor."""
+
+
+def select_target_diverse_prompts(
+    pool: Sequence[str],
+    *,
+    n_prompts: int,
+    min_distinct_target_tokens: int,
+    excluded: Mapping[str, str],
+    seed: int,
+    target_token_for_prompt,
+) -> tuple[list[str], dict]:
+    """Choose a deterministic held-out set that can pass the diversity clause.
+
+    ``target_token_for_prompt`` may run the frozen model's ordinary output path,
+    but it must not inspect a J-lens or any candidate layer.  We first scan the
+    independent pool for final-output target IDs, reserve one prompt for each of
+    the required distinct IDs, and fill the remaining positions in the same
+    stable hash order.  The threshold is not relaxed when the pool is short.
+    """
+    if min_distinct_target_tokens > n_prompts:
+        raise ValueError(
+            "min_distinct_target_tokens cannot exceed the held-out prompt count"
+        )
+
+    unique: dict[str, str] = {}
+    for prompt in pool:
+        sha = hashlib.sha256(str(prompt).encode()).hexdigest()
+        if sha not in excluded:
+            unique.setdefault(sha, str(prompt))
+    ordered = sorted(
+        unique.items(),
+        key=lambda item: (
+            hashlib.sha256(f"{seed}|{item[0]}".encode()).hexdigest(),
+            item[0],
+        ),
+    )
+    if len(ordered) < n_prompts:
+        raise InsufficientTargetDiversityError(
+            f"only {len(ordered)} independent prompts remain after exclusions; "
+            f"the protocol requires exactly {n_prompts}"
+        )
+
+    candidates: list[dict] = []
+    for order, (sha, prompt) in enumerate(ordered):
+        try:
+            target_token_id = int(target_token_for_prompt(prompt))
+        except Exception as exc:
+            raise RuntimeError(
+                f"failed to discover the final-output target for prompt {sha}"
+            ) from exc
+        candidates.append(
+            {
+                "prompt": prompt,
+                "prompt_sha256": sha,
+                "target_token_id": target_token_id,
+                "stable_order": order,
+            }
+        )
+
+    first_by_target: dict[int, dict] = {}
+    for row in candidates:
+        first_by_target.setdefault(row["target_token_id"], row)
+    if len(first_by_target) < min_distinct_target_tokens:
+        raise InsufficientTargetDiversityError(
+            f"the {len(candidates)}-prompt independent pool exposes only "
+            f"{len(first_by_target)} distinct final-output target token(s); "
+            f"the fixed gate requires at least {min_distinct_target_tokens}. "
+            "Refusing before any J-lens readout is scored."
+        )
+
+    reserved = list(first_by_target.values())[:min_distinct_target_tokens]
+    selected_shas = {row["prompt_sha256"] for row in reserved}
+    selected = list(reserved)
+    for row in candidates:
+        if len(selected) >= n_prompts:
+            break
+        if row["prompt_sha256"] not in selected_shas:
+            selected.append(row)
+            selected_shas.add(row["prompt_sha256"])
+    selected.sort(key=lambda row: (row["stable_order"], row["prompt_sha256"]))
+
+    selected_targets = {row["target_token_id"] for row in selected}
+    if len(selected_targets) < min_distinct_target_tokens:  # defensive invariant
+        raise AssertionError("target-diverse selection lost its reserved target tokens")
+    prompts = [row["prompt"] for row in selected]
+    manifest = {
+        "protocol": VALIDATION_PROMPT_SELECTION_PROTOCOL,
+        "seed": int(seed),
+        "pool_size": len(pool),
+        "n_unique_unexcluded": len(candidates),
+        "n_excluded": len(pool) - len(candidates),
+        "n_prompts": len(prompts),
+        "min_distinct_target_tokens": int(min_distinct_target_tokens),
+        "n_available_distinct_target_tokens": len(first_by_target),
+        "n_selected_distinct_target_tokens": len(selected_targets),
+        "prompts": [
+            {
+                "prompt_sha256": row["prompt_sha256"],
+                "target_token_id": row["target_token_id"],
+                "stable_order": row["stable_order"],
+            }
+            for row in selected
+        ],
+    }
+    manifest["selection_checksum"] = payload_checksum(manifest)
+    return prompts, manifest
 
 
 class LayerNotEligibleError(RuntimeError):

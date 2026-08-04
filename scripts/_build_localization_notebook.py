@@ -953,6 +953,7 @@ BUDGET = estimate_localization_passes(
     n_targets_per_cell=N_TARGET_POSITIVE_IMAGES + N_TARGET_NEGATIVE_IMAGES,
     alphas=CONFIG.alphas,
     n_validation_prompts=N_VALIDATION_PROMPTS,
+    n_validation_discovery_prompts=POOL_RECORDS,
     recalibration_enabled=RUN_TEXT_RECALIBRATION,
 )
 print(format_budget(BUDGET))
@@ -1278,12 +1279,12 @@ else:
     from jlens.mmlocalize.lens_validity import (
         eligible_layers,
         evaluate_all_layers,
+        select_target_diverse_prompts,
         tie_aware_row,
     )
     from jlens.native_readout import (
         excluded_prompt_hashes,
         prompt_sha256,
-        select_confirmatory_prompts,
     )
 
     if RUN_REAL_LOCALIZATION:
@@ -1318,18 +1319,39 @@ else:
         POOL = mock_validation_prompts(POOL_RECORDS)
         EXCLUDED_PROMPTS = {prompt_sha256(p): "mock_v2_fitting" for p in POOL[:40]}
 
-    VALIDATION_PROMPTS, PROMPT_MANIFEST = select_confirmatory_prompts(
+    _final = READOUT_MODEL.n_layers - 1
+
+    def _discover_target_token(_prompt):
+        _ids = READOUT_MODEL.encode(_prompt)
+        with torch.no_grad():
+            with ActivationRecorder(READOUT_MODEL.layers, at=[_final]) as _capture:
+                READOUT_MODEL.forward(_ids)
+            _actual = READOUT_MODEL.unembed(
+                _capture.activations[_final][0, -1].float()
+            )
+        return int(_actual.argmax())
+
+    print(
+        f"discovering final-output targets for up to {len(POOL)} independent "
+        "prompts before any J-lens readout is scored ..."
+    )
+    VALIDATION_PROMPTS, PROMPT_MANIFEST = select_target_diverse_prompts(
         POOL,
         n_prompts=N_VALIDATION_PROMPTS,
+        min_distinct_target_tokens=(
+            LOCALIZATION_VALIDITY_GATE.min_distinct_target_tokens
+        ),
         excluded=EXCLUDED_PROMPTS,
         seed=VALIDATION_PROMPT_SEED,
+        target_token_for_prompt=_discover_target_token,
     )
     PROMPT_MANIFEST["modality"] = "text"
     PROMPT_MANIFEST["excluded_roles"] = sorted(set(EXCLUDED_PROMPTS.values()))
     print(
         f"{len(VALIDATION_PROMPTS)} held-out prompts from a pool of "
         f"{PROMPT_MANIFEST['pool_size']}; {PROMPT_MANIFEST['n_excluded']} excluded "
-        f"as {PROMPT_MANIFEST['excluded_roles']}; overlap=0"
+        f"as {PROMPT_MANIFEST['excluded_roles']}; overlap=0; "
+        f"distinct targets={PROMPT_MANIFEST['n_selected_distinct_target_tokens']}"
     )
 
     VARIANTS = {
@@ -1338,7 +1360,6 @@ else:
         "random": control_lens(LENS, "random", seed=CONTROL_SEED),
         "wrong_layer": wrong_layer_lens(LENS),
     }
-    _final = READOUT_MODEL.n_layers - 1
     for _index, _prompt in enumerate(VALIDATION_PROMPTS):
         _sha = PROMPT_MANIFEST["prompts"][_index]["prompt_sha256"]
         _ids = READOUT_MODEL.encode(_prompt)
@@ -1350,6 +1371,16 @@ else:
             _actual = READOUT_MODEL.unembed(
                 _recorder.activations[_final][0, -1].float()
             )
+            _expected_target = int(
+                PROMPT_MANIFEST["prompts"][_index]["target_token_id"]
+            )
+            _observed_target = int(_actual.argmax())
+            if _observed_target != _expected_target:
+                raise RuntimeError(
+                    f"prompt {_sha} changed final-output target between "
+                    f"selection ({_expected_target}) and scoring "
+                    f"({_observed_target}); refusing a non-deterministic gate"
+                )
             for _layer in LAYERS:
                 _residual = _recorder.activations[_layer][0, -1].float()
                 _scored = {"logit_lens": READOUT_MODEL.unembed(_residual)}
@@ -1504,6 +1535,13 @@ else:
             "completed_run_fingerprint": COMPLETED_RUN["fingerprint"],
             "validation_prompt_hashes": [
                 row["prompt_sha256"] for row in PROMPT_MANIFEST["prompts"]
+            ],
+            "validation_prompt_target_ids": [
+                row["target_token_id"] for row in PROMPT_MANIFEST["prompts"]
+            ],
+            "validation_prompt_selection_protocol": PROMPT_MANIFEST["protocol"],
+            "validation_prompt_selection_checksum": PROMPT_MANIFEST[
+                "selection_checksum"
             ],
             "localization_concepts": list(CONCEPTS),
         }
@@ -1787,6 +1825,7 @@ else:
         n_targets_per_cell=N_TARGET_POSITIVE_IMAGES + N_TARGET_NEGATIVE_IMAGES,
         alphas=CONFIG.alphas,
         n_validation_prompts=N_VALIDATION_PROMPTS,
+        n_validation_discovery_prompts=POOL_RECORDS,
         recalibration_enabled=False,
     )
     print("\\nACTUAL budget now that eligibility is known:")
