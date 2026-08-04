@@ -698,3 +698,101 @@ Layer 38 remains late and remains the only validated layer. However well this
 replicates, a final-prompt-token edit there cannot establish that an effect
 precedes answer-language convergence. Spoken audio is excluded by design and
 environmental audio is not tested; neither absence is evidence about either.
+
+## Layer localization: where does the transfer first appear?
+
+The robustness study returned `ROBUSTNESS_GO` at physical layer 38 and earned
+one claim: a frozen text-calibrated J-lens at late layer 38 exposes concept
+representations that causally transfer between written text and images. Layer 38
+sits at ~90% of depth, close enough to the output that a final-prompt-token edit
+cannot separate "concept representation" from "answer-language convergence".
+
+`notebooks/multimodal_jspace_layer_localization_colab.ipynb` and
+`jlens/mmlocalize/` ask the one follow-up that earns: **how early?** Four
+predetermined physical layers — 20, 26, 32, 38 (~normalized 48, 62, 76, 90) —
+two concepts that already replicated bidirectionally (cat, toilet), off-diagonal
+cells only, the same frozen lens, never refitted.
+
+### Physical is not normalized
+
+`jlens/mmlocalize/layers.py` is the only place the conversion happens, and every
+artifact carries both numbers. `LOCALIZATION_LAYERS` is immutable in membership
+*and order*: `assert_immutable_layer_set` refuses a layer added after a result,
+a layer dropped because it failed, and the `LAYERS=(32,)` shortcut. "Earliest"
+is only meaningful along a fixed ordering.
+
+### Eligibility is earned, and the new gate is not a laxer one
+
+Layer 32 failed the v2 conjunction with median rank 1 and MRR ≈ 0.71 but **zero**
+unique top-1 agreements, and a top-10 overlap (0.113) that lost to the
+wrong-layer control (0.150). Those are one fact twice: both quantities were read
+off a tie block at the maximum, where `argmax` reports the tie-break rule and a
+top-10 slice is an arbitrary ten of the tied tokens.
+
+`jlens/mmlocalize/lens_validity.py` rebuilds the gate around ties rather than
+relaxing it. Every rank is reported under three conventions — optimistic
+(the v2 number), pessimistic, and **midrank**, the mean over all tie-break
+orders and the only one invariant to how ties break. The criterion uses midrank.
+The gate **adds** three blocking clauses: a tied-at-maximum ceiling, a
+wrong-layer MRR margin (the wrong-layer concern that failed layer 32, restated on
+a metric ties do not corrupt), and stability across four fixed prompt folds. It
+**drops** only the unique-top-1 floor, because under ties that quantity is a
+property of the tie-break and not of the lens. Both gates are computed for every
+layer and both are printed.
+
+Layer 32's v2 numbers were known when the gate was written; pretending otherwise
+would be worse than saying so. What is genuinely fixed in advance is everything
+that decides the outcome — metrics, tie convention, thresholds, controls, folds,
+and the held-out prompt set — all bound into `LayerValidityGate.digest`, which
+participates in the resume fingerprint, so editing any of it invalidates stored
+results rather than rescoring them.
+
+`load_lens_for_localization` separates two claims the robustness loader bundles:
+**fitted** (a Jacobian exists, so a readout is defined — required) and
+**certified** (a held-out readout already passed — recorded, not required).
+Without that separation the question would be unaskable, since deciding it is
+Stage B's job.
+
+### An ineligible layer is not a negative result
+
+A layer that failed the gate was never causally tested, so "no transfer found
+there" is not an observation. `assert_causally_eligible` refuses to run an
+intervention stage there, its diagnostics are preserved, and the rubric routes
+that case to `INCONCLUSIVE_LAYER_LOCALIZATION` — never `LATE_ONLY_SUPPORTED`,
+which is a claim about layers that *were* tested and came back empty.
+
+Layer 38 is the anchor, not a competitor: if the established result does not
+reproduce on this subset, there is nothing for an earlier layer to be earlier
+than, and that is inconclusive too.
+
+### The targets are frozen before the first layer is scored
+
+`jlens/mmlocalize/targets.py` verifies the completed run by fingerprint and then
+only reads it, freezes and checksums the image set, and writes an exact
+image-exclusion audit. The preferred policy takes photographs the completed run
+never touched; the fallback reuses its images as a **paired within-sample**
+comparison and is labelled as one everywhere it appears. The two are never
+mixed, and the decision is made from availability alone, before any layer runs.
+`assert_same_targets_across_layers` refuses drift: a depth contrast on different
+photographs per layer is partly a contrast between photographs.
+
+Concepts are **conditioned, not sampled**. cat and toilet are fixed because they
+are the two that replicated bidirectionally, so every number answers "how early
+for concepts already known to transfer", not "how many concepts transfer".
+
+### Cost, stated before it is spent
+
+Activation capture does **not** multiply by layers — one forward pass records all
+four residuals, which is why a four-layer diagnostic costs what a one-layer study
+did. Causal cost *does* multiply by eligible layers, and eligibility is unknown
+until Stage B, so section 7 prints the worst case (all four eligible) for
+confirmation and section 16 reprints the actual cost once the gate has decided.
+`RUN_REAL_LOCALIZATION`, `RUN_MODEL_STAGES` and `CONFIRM_MODEL_PASS_BUDGET` are
+all False in the committed notebook; `RUN_TEXT_RECALIBRATION` is separate again
+and fits nothing — recalibration is a bounded, text-only plan published to a new
+path, and the v2 artifact is never overwritten.
+
+The verdict reports the **earliest tested layer with evidence**, never the
+earliest layer in the model. Four layers cannot resolve where a signal begins: a
+layer between two tested ones is untested, and anything shallower than 20 is
+unexamined.
