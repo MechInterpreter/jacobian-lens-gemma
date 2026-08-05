@@ -189,6 +189,12 @@ def test_the_only_multimodal_import_is_the_pure_tie_aware_scorer(notebook):
     ], multimodal
 
 
+def test_real_target_discovery_uses_the_lens_model_protocol(notebook):
+    source = _code_source(notebook)
+    assert "ordinary_next_token_argmax(" in source
+    assert "logits_from_ids" not in source
+
+
 # --------------------------------------------------------------- execution
 
 

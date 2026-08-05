@@ -622,14 +622,16 @@ code(
 # 7. Choose the held-out sets, stratified on the model's own output target.
 from jlens.calibration.gate import (
     audit_target_diversity,
+    ordinary_next_token_argmax,
     select_diverse_validation_prompts,
 )
 
 if MODEL_STAGES_ENABLED:
     def _target_token(prompt):
         # The model's ordinary output path only. No lens, no candidate layer.
-        ids = MODEL.encode(prompt, max_length=MAX_SEQ_LEN)
-        return int(MODEL.logits_from_ids(ids)[0, -1].argmax())
+        return ordinary_next_token_argmax(
+            MODEL, prompt, max_length=MAX_SEQ_LEN
+        )
 else:
     def _target_token(prompt):
         return int(prompt.split()[1]) % 40

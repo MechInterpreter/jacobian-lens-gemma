@@ -48,6 +48,7 @@ from jlens.calibration.gate import (
     eligible_layers,
     evaluate_calibration_layers,
     gate_text,
+    ordinary_next_token_argmax,
     select_diverse_validation_prompts,
 )
 from jlens.calibration.mock import (
@@ -362,6 +363,32 @@ def test_scale_point_larger_than_the_corpus_is_refused(partitions):
 
 def _target_for(prompt: str) -> int:
     return int(prompt.split()[1]) % 40
+
+
+def test_ordinary_next_token_argmax_uses_the_lens_model_protocol():
+    model = MockCalibrationModel()
+    prompt = "record 42 " + "word " * 40
+    input_ids = model.encode(prompt, max_length=48)
+    expected = int(model.unembed(model.forward(input_ids))[0, -1].argmax())
+    assert ordinary_next_token_argmax(model, prompt, max_length=48) == expected
+    assert not hasattr(model, "logits_from_ids")
+
+
+def test_ordinary_next_token_argmax_accepts_hf_style_model_output():
+    class Output:
+        def __init__(self, hidden):
+            self.last_hidden_state = hidden
+
+    class HFStyleMock(MockCalibrationModel):
+        def forward(self, input_ids):
+            return Output(super().forward(input_ids))
+
+    model = HFStyleMock()
+    result = ordinary_next_token_argmax(
+        model, "record 7 " + "word " * 40, max_length=48
+    )
+    assert isinstance(result, int)
+    assert 0 <= result < model.vocab_size
 
 
 def test_diversity_audit_reports_distinct_count_and_dominance():

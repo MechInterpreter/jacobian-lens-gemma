@@ -31,6 +31,9 @@ from __future__ import annotations
 import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
+from typing import Any
+
+import torch
 
 from jlens.mmlocalize.lens_validity import (
     CONTROL_VARIANTS,
@@ -52,6 +55,45 @@ from jlens.mmlocalize.lens_validity import (
 )
 from jlens.mmpilot.store import payload_checksum
 
+
+def ordinary_next_token_argmax(
+    model: Any, prompt: str, *, max_length: int
+) -> int:
+    """Target token from the ordinary :class:`LensModel` output pathway.
+
+    The protocol exposes ``encode``, ``forward`` (residual stack), and
+    ``unembed``; it does not expose a ``logits_from_ids`` convenience method.
+    Hugging Face adapters return ``BaseModelOutput`` while the CPU mock returns
+    a tensor, so both representations are resolved explicitly here.
+    """
+    input_ids = model.encode(prompt, max_length=max_length)
+    with torch.inference_mode():
+        output = model.forward(input_ids)
+        if isinstance(output, torch.Tensor):
+            residual = output
+        elif hasattr(output, "last_hidden_state"):
+            residual = output.last_hidden_state
+        elif isinstance(output, (tuple, list)) and output:
+            residual = output[0]
+        else:
+            raise TypeError(
+                "LensModel.forward returned no residual tensor via a tensor, "
+                "last_hidden_state, or tuple[0]"
+            )
+        if not isinstance(residual, torch.Tensor) or residual.ndim != 3:
+            raise ValueError(
+                "LensModel.forward residual must have shape [batch, sequence, "
+                f"d_model], got {type(residual).__name__} "
+                f"{getattr(residual, 'shape', None)}"
+            )
+        logits = model.unembed(residual)
+    if not isinstance(logits, torch.Tensor) or logits.ndim != 3:
+        raise ValueError(
+            "LensModel.unembed must return [batch, sequence, vocab] logits, "
+            f"got {type(logits).__name__} {getattr(logits, 'shape', None)}"
+        )
+    return int(logits[0, -1].argmax().item())
+
 __all__ = [
     "CALIBRATION_GATE",
     "CALIBRATION_VALIDITY_PROTOCOL",
@@ -71,6 +113,7 @@ __all__ = [
     "evaluate_calibration_layers",
     "eligible_layers",
     "gate_text",
+    "ordinary_next_token_argmax",
     "select_diverse_validation_prompts",
     "tie_aware_row",
 ]
