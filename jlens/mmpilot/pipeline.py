@@ -17,6 +17,7 @@ import hashlib
 import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 
 from jlens.mmpilot.backend import ModalityUnsupportedError, PilotBackend
 from jlens.mmpilot.capability import (
@@ -276,6 +277,20 @@ def _build_inputs_for(
             image=media["load_image"](group["image_path"]),
             media_path=group["image_path"],
         )
+    # The spoken-audio condition's claim is that the recording is the only
+    # evidence. Check it against this group's own caption and file names rather
+    # than trusting build_prompt to have left them out.
+    from jlens.mmpilot.audio import assert_no_text_leakage
+
+    assert_no_text_leakage(
+        prompt,
+        forbidden=[
+            group.get("caption", ""),
+            Path(str(group.get("audio_path", ""))).stem,
+            Path(str(group.get("image_path", ""))).stem,
+            str(group.get("image_id", "")),
+        ],
+    )
     data, sampling_rate = media["load_audio"](group["audio_path"])
     return backend.build_inputs(
         prompt=prompt,

@@ -14,6 +14,13 @@ and an unsupported modality raises :class:`ModalityUnsupportedError`, which the
 notebook records as a blocked condition. Speech is never substituted with its
 transcript.
 
+Spoken audio needs more than inspection, so it has its own resolver in
+:mod:`jlens.mmpilot.audio`: ``supports("spoken_audio")`` is True only when a
+:class:`~jlens.mmpilot.audio.ResolvedAudioInterface` has been *probed* against
+this processor. Component presence is not support — a processor with a feature
+extractor and an audio token still returns zero placeholder tokens when the
+prompt is passed as bare text, which is the defect that blocked this pilot.
+
 Two invariance checks live here because they are properties of the hook
 mechanics rather than of any experiment: :func:`check_capture_noop` (a capture
 hook must not change logits) and :func:`check_zero_intervention` (a
@@ -63,6 +70,10 @@ class BuiltInputs:
         route: How the inputs were built (processor call vs chat template).
         modality_token_range: ``[start, end)`` of the modality's token span
             when the processor exposes one contiguous run, else ``None``.
+        audio: The verification record from
+            :func:`~jlens.mmpilot.audio.verify_audio_encoding` for a
+            spoken-audio input, else ``None``. Present means the placeholder
+            span was checked against the features it was built from.
     """
 
     tensors: dict
@@ -72,6 +83,7 @@ class BuiltInputs:
     media_checksum: str | None = None
     route: dict = field(default_factory=dict)
     modality_token_range: list[int] | None = None
+    audio: dict | None = None
 
     @property
     def final_prompt_position(self) -> int:
@@ -134,6 +146,12 @@ def resolve_processor_interface(processor: Any, hf_config: Any) -> dict:
     is recorded verbatim in the run manifest, and ``supports_audio=False`` is a
     hard block on the spoken-audio condition rather than a reason to fall back
     to transcripts.
+
+    ``supports_audio=True`` is the weaker claim: the *components* exist. It is
+    necessary and **not sufficient** — this checkpoint reports True here and
+    still produces zero audio placeholder tokens when the prompt is passed as
+    bare text. Whether an end-to-end audio input can be built is settled by
+    :func:`jlens.mmpilot.audio.resolve_audio_interface`, which probes it.
     """
     call_params = list(inspect.signature(processor.__call__).parameters)
     audio_kwarg = next(
@@ -198,6 +216,10 @@ class GemmaPilotBackend:
         processor: ``AutoProcessor`` for the same revision.
         interface: Result of :func:`resolve_processor_interface`.
         device: Where inputs are moved before the forward pass.
+        audio_interface: A probed
+            :class:`~jlens.mmpilot.audio.ResolvedAudioInterface`, or ``None``.
+            ``None`` blocks ``spoken_audio`` — the backend will not guess a
+            calling convention for a channel whose failure mode is silent.
     """
 
     def __init__(
@@ -207,10 +229,12 @@ class GemmaPilotBackend:
         interface: Mapping,
         *,
         device: torch.device | str = "cuda",
+        audio_interface: Any = None,
     ) -> None:
         self.hf_model = hf_model
         self.processor = processor
         self.interface = dict(interface)
+        self.audio_interface = audio_interface
         self.device = torch.device(device)
         self.tokenizer = getattr(processor, "tokenizer", processor)
         text_config = hf_model.config.get_text_config()
@@ -227,7 +251,11 @@ class GemmaPilotBackend:
         if modality == "image":
             return bool(self.interface["supports_image"])
         if modality == "spoken_audio":
-            return bool(self.interface["supports_audio"])
+            # Deliberately not ``interface["supports_audio"]``: that flag says
+            # the components exist, and this checkpoint has them while still
+            # producing zero placeholder tokens on a bare text prompt. Only a
+            # probed interface counts as support.
+            return self.audio_interface is not None
         raise ValueError(f"unknown modality {modality!r}")
 
     def unembedding_weight(self) -> torch.Tensor:
@@ -253,13 +281,16 @@ class GemmaPilotBackend:
                 f"the loaded processor does not accept {modality!r} "
                 f"(interface: {self.interface})"
             )
+        if modality == "spoken_audio":
+            return self._build_audio_inputs(
+                prompt=prompt,
+                audio=audio,
+                sampling_rate=sampling_rate,
+                media_path=media_path,
+            )
         kwargs: dict[str, Any] = {"text": prompt, "return_tensors": "pt"}
         if image is not None:
             kwargs["images"] = image
-        if audio is not None:
-            kwargs[self.interface["audio_kwarg"]] = audio
-            if sampling_rate is not None and "sampling_rate" in self.interface["call_parameters"]:
-                kwargs["sampling_rate"] = sampling_rate
         if not self.interface["has_chat_template"]:
             encoded = self.processor(**kwargs)
             route = {"route": "processor_call", "kwargs": sorted(k for k in kwargs if k != "text")}
@@ -267,8 +298,6 @@ class GemmaPilotBackend:
             content: list[dict] = []
             if image is not None:
                 content.append({"type": "image", "image": image})
-            if audio is not None:
-                content.append({"type": "audio", "audio": audio})
             content.append({"type": "text", "text": prompt})
             encoded = self.processor.apply_chat_template(
                 [{"role": "user", "content": content}],
@@ -285,13 +314,7 @@ class GemmaPilotBackend:
         }
         tensors.setdefault("use_cache", False)
         input_ids = tensors["input_ids"]
-        token_id = (
-            self.interface["image_token_id"]
-            if modality == "image"
-            else self.interface["audio_token_id"]
-            if modality == "spoken_audio"
-            else None
-        )
+        token_id = self.interface["image_token_id"] if modality == "image" else None
         return BuiltInputs(
             tensors=tensors,
             prompt_len=int(input_ids.shape[1]),
@@ -300,6 +323,63 @@ class GemmaPilotBackend:
             media_checksum=file_checksum(media_path) if media_path else None,
             route=route,
             modality_token_range=contiguous_token_range(input_ids, token_id),
+        )
+
+    def _build_audio_inputs(
+        self,
+        *,
+        prompt: str,
+        audio: Any,
+        sampling_rate: int | None,
+        media_path: str | None,
+    ) -> BuiltInputs:
+        """One spoken-audio input, built and then held to the model's invariant.
+
+        Three things happen here that the generic path cannot do. The waveform
+        is coerced to the feature extractor's own rate, dtype and channel count
+        (or refused). The audio is passed as a chat-template **content block**,
+        which is what makes the template render the audio token for the
+        processor to expand. And the result is verified: features without
+        placeholders — the state that blocked this pilot — is a refusal here,
+        not a ``masked_scatter`` failure later.
+        """
+        from jlens.mmpilot.audio import (
+            encode_audio_prompt,
+            prepare_waveform,
+            verify_audio_encoding,
+        )
+
+        resolved = self.audio_interface
+        if audio is None:
+            raise ValueError("the spoken_audio condition needs its recording")
+        prepared = prepare_waveform(
+            audio,
+            int(sampling_rate) if sampling_rate is not None else resolved.sampling_rate,
+            expected_rate=resolved.sampling_rate,
+        )
+        encoded = encode_audio_prompt(self.processor, prompt, prepared.samples)
+        verified = verify_audio_encoding(
+            encoded, audio_token_id=resolved.audio_token_id
+        )
+        tensors = {
+            key: (value.to(self.device) if torch.is_tensor(value) else value)
+            for key, value in dict(encoded).items()
+        }
+        tensors.setdefault("use_cache", False)
+        return BuiltInputs(
+            tensors=tensors,
+            prompt_len=int(tensors["input_ids"].shape[1]),
+            modality="spoken_audio",
+            prompt_hash=text_hash(prompt),
+            media_checksum=file_checksum(media_path) if media_path else None,
+            route={
+                "route": resolved.call_convention,
+                "add_generation_prompt": True,
+                "protocol_version": resolved.protocol_version,
+                "protocol_fingerprint": resolved.protocol_fingerprint,
+            },
+            modality_token_range=list(verified["audio_token_span"]),
+            audio={**verified, "waveform": prepared.to_dict()},
         )
 
     @torch.no_grad()

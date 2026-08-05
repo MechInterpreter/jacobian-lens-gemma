@@ -621,6 +621,334 @@ class MockPilotBackend:
         return self.hf_model(**payload).logits.float()
 
 
+# ------------------------------------------------- the mock audio processor
+
+
+#: Mock stand-ins for the pinned checkpoint's real audio tokens.
+MOCK_AUDIO_TOKEN_ID = 5
+MOCK_BOA_TOKEN_ID = 3
+MOCK_EOA_TOKEN_ID = 4
+
+
+#: Feature width the mock feature extractor emits per frame.
+MOCK_AUDIO_FEATURE_DIM = 8
+
+
+class MockAudioFeatureExtractor:
+    """Frame arithmetic and eight per-frame statistics — not a filterbank.
+
+    The statistics are real functions of the samples, so two different
+    recordings produce different features and silence produces a distinct one.
+    A feature extractor that returned zeros would make "waveform differs from
+    silence" pass for the wrong reason.
+    """
+
+    def __init__(self, sampling_rate: int = 16_000, hop_length: int = 160) -> None:
+        self.sampling_rate = sampling_rate
+        self.hop_length = hop_length
+
+    def n_frames(self, n_samples: int) -> int:
+        return max(1, n_samples // self.hop_length - 1)
+
+    def __call__(self, waveform) -> torch.Tensor:
+        samples = torch.as_tensor(waveform, dtype=torch.float32).reshape(-1)
+        hop = self.hop_length
+        n_frames = self.n_frames(int(samples.numel()))
+        rows = []
+        for index in range(n_frames):
+            frame = samples[index * hop : index * hop + 2 * hop]
+            if frame.numel() == 0:
+                frame = samples[:1]
+            half = max(1, frame.numel() // 2)
+            rows.append(
+                torch.stack(
+                    [
+                        frame.mean(),
+                        frame.abs().mean(),
+                        frame.pow(2).mean(),
+                        frame.max(),
+                        frame.min(),
+                        frame[:half].mean(),
+                        frame[half:].mean() if frame[half:].numel() else frame.mean(),
+                        frame.abs().max(),
+                    ]
+                )
+            )
+        return torch.stack(rows).unsqueeze(0)
+
+
+class MockAudioProcessor:
+    """A processor that reproduces ``Gemma4Processor``'s audio contract exactly.
+
+    Two things about the real processor have to be reproduced, because they are
+    what the repair is about:
+
+    1. ``apply_chat_template`` renders an ``{"type": "audio"}`` content block as
+       the audio token, and only *then* does the processor expand it against the
+       features. Audio passed without that token yields features and **zero**
+       placeholders, silently.
+    2. The number of placeholders is derived from the feature mask through two
+       stride-2 reductions, so it tracks the recording's duration.
+
+    The ``emit_*`` flags exist so every refusal in
+    :mod:`jlens.mmpilot.audio` can be exercised deterministically on CPU,
+    without needing a checkpoint that is broken in that particular way.
+    """
+
+    chat_template = "{# mock #}"
+
+    def __init__(
+        self,
+        *,
+        sampling_rate: int = 16_000,
+        emit_placeholders: bool = True,
+        emit_features: bool = True,
+        placeholder_delta: int = 0,
+        contiguous: bool = True,
+        renders_audio_token: bool = True,
+    ) -> None:
+        self.feature_extractor = MockAudioFeatureExtractor(sampling_rate)
+        self.audio_token = "<|audio|>"
+        self.audio_token_id = MOCK_AUDIO_TOKEN_ID
+        self.boa_token = "<|audio>"
+        self.eoa_token = "<audio|>"
+        self.tokenizer = SimpleNamespace(chat_template=self.chat_template)
+        self.emit_placeholders = emit_placeholders
+        self.emit_features = emit_features
+        self.placeholder_delta = placeholder_delta
+        self.contiguous = contiguous
+        self.renders_audio_token = renders_audio_token
+
+    def __call__(self, images=None, text=None, videos=None, audio=None, **kwargs):
+        """The bare call. Note it does **not** insert a placeholder for you."""
+        return self._encode(text or "", audio, placeholder_in_text=False)
+
+    def apply_chat_template(
+        self,
+        conversation,
+        *,
+        add_generation_prompt=True,
+        tokenize=True,
+        return_dict=True,
+        return_tensors="pt",
+        **kwargs,
+    ):
+        blocks = list(conversation[0]["content"])
+        audio = next(
+            (block["audio"] for block in blocks if block.get("type") == "audio"), None
+        )
+        prompt = "".join(
+            str(block.get("text", "")) for block in blocks if block.get("type") == "text"
+        )
+        return self._encode(
+            prompt, audio, placeholder_in_text=audio is not None and self.renders_audio_token
+        )
+
+    def _placeholder_count(self, n_frames: int) -> int:
+        t = n_frames
+        for _ in range(2):
+            t = min((t + 2 - 3) // 2 + 1, len(range(0, t, 2)))
+        return max(0, t)
+
+    def _encode(self, prompt: str, audio, *, placeholder_in_text: bool) -> dict:
+        prompt_ids = [_BOS, *(_TEXT_BASE + (index % 8) for index in range(len(prompt.split())))]
+        encoded: dict[str, torch.Tensor] = {}
+        placeholders: list[int] = []
+        if audio is not None:
+            n_samples = int(torch.as_tensor(audio).numel())
+            n_frames = self.feature_extractor.n_frames(n_samples)
+            if self.emit_features:
+                encoded["input_features"] = self.feature_extractor(audio)
+                encoded["input_features_mask"] = torch.ones(1, n_frames, dtype=torch.bool)
+            if placeholder_in_text and self.emit_placeholders:
+                count = max(0, self._placeholder_count(n_frames) + self.placeholder_delta)
+                placeholders = [
+                    MOCK_BOA_TOKEN_ID,
+                    *([MOCK_AUDIO_TOKEN_ID] * count),
+                    MOCK_EOA_TOKEN_ID,
+                ]
+                if not self.contiguous and count >= 2:
+                    placeholders.insert(1 + count // 2, _TEXT_BASE)
+        ids = [prompt_ids[0], *placeholders, *prompt_ids[1:]]
+        encoded["input_ids"] = torch.tensor([ids], dtype=torch.long)
+        encoded["attention_mask"] = torch.ones(1, len(ids), dtype=torch.long)
+        return encoded
+
+
+def mock_audio_config(*, audio_tower: bool = True) -> SimpleNamespace:
+    """A config shaped like the checkpoint's, for the audio resolver."""
+    return SimpleNamespace(
+        audio_token_id=MOCK_AUDIO_TOKEN_ID,
+        image_token_id=None,
+        **(
+            {"audio_config": SimpleNamespace(hidden_size=MOCK_AUDIO_FEATURE_DIM)}
+            if audio_tower
+            else {}
+        ),
+    )
+
+
+class MockAudioTokenizer:
+    """The tokenizer surface :class:`~jlens.mmpilot.backend.GemmaPilotBackend`
+    actually uses: ``__call__`` with ``add_special_tokens``, plus a template.
+
+    Words are split into two-character pieces, so an answer like ``" cat"``
+    encodes to **more than one token**. That is deliberate, and matches
+    :meth:`MockPilotBackend.encode_candidate`: a mock whose every candidate is a
+    single token would let first-token scoring pass every test the pilot has.
+    """
+
+    chat_template = "{# mock #}"
+
+    def __call__(self, text, add_special_tokens=False, return_tensors=None):
+        ids = []
+        for word in str(text).split():
+            for start in range(0, len(word), 2):
+                piece = word[start : start + 2]
+                ids.append(
+                    _TEXT_BASE + (sum(map(ord, piece)) % (MOCK_VOCAB - _TEXT_BASE))
+                )
+        return {"input_ids": ids or [_PAD]}
+
+
+class MockAudioTower(nn.Module):
+    """Projects frames to residual width, with the same two stride-2 reductions
+    the placeholder count assumes — so it returns exactly as many vectors as
+    there are placeholders, which is the invariant the real model enforces."""
+
+    def __init__(self, d_model: int) -> None:
+        super().__init__()
+        self.proj = nn.Linear(MOCK_AUDIO_FEATURE_DIM, d_model, bias=False)
+        with torch.no_grad():
+            generator = torch.Generator().manual_seed(23)
+            self.proj.weight.copy_(
+                torch.randn(d_model, MOCK_AUDIO_FEATURE_DIM, generator=generator)
+            )
+
+    def forward(self, input_features, input_features_mask=None, **_kwargs):
+        hidden = self.proj(input_features)
+        for _ in range(2):
+            t_out = (hidden.shape[1] + 2 - 3) // 2 + 1
+            hidden = hidden[:, ::2][:, :t_out]
+        return hidden
+
+
+class _AudioBlock(nn.Module):
+    """Block 0 mixes every position, so the final prompt token really depends
+    on the audio span; later blocks are the identity."""
+
+    def __init__(self, broadcast: bool) -> None:
+        super().__init__()
+        self.broadcast = broadcast
+
+    def forward(self, hidden: torch.Tensor, **_kwargs) -> torch.Tensor:
+        if self.broadcast:
+            return hidden + hidden.mean(dim=1, keepdim=True)
+        return hidden
+
+
+class _AudioLanguageModel(nn.Module):
+    def __init__(self, d_model: int, n_layers: int) -> None:
+        super().__init__()
+        generator = torch.Generator().manual_seed(5)
+        self.embed_tokens = nn.Embedding(MOCK_VOCAB, d_model)
+        with torch.no_grad():
+            self.embed_tokens.weight.copy_(
+                torch.randn(MOCK_VOCAB, d_model, generator=generator) * 0.05
+            )
+        self.layers = nn.ModuleList(
+            _AudioBlock(broadcast=(index == 0)) for index in range(n_layers)
+        )
+
+
+class _AudioInner(nn.Module):
+    def __init__(self, d_model: int, n_layers: int) -> None:
+        super().__init__()
+        self.language_model = _AudioLanguageModel(d_model, n_layers)
+        self.audio_tower = MockAudioTower(d_model)
+
+
+class MockAudioGemmaLike(nn.Module):
+    """Gemma 4's module layout with a **working** audio tower.
+
+    The tower's output is scattered into the placeholder positions and the
+    tokens/features counts are checked exactly as ``Gemma4Model.forward`` checks
+    them, so a mismatched input fails here for the same reason and with the same
+    message it would fail on the real model.
+    """
+
+    def __init__(self, *, d_model: int = MOCK_D_MODEL, n_layers: int = 4) -> None:
+        super().__init__()
+        self.model = _AudioInner(d_model, n_layers)
+        self.lm_head = nn.Linear(d_model, MOCK_VOCAB, bias=False)
+        with torch.no_grad():
+            generator = torch.Generator().manual_seed(13)
+            rows = torch.randn(MOCK_VOCAB, d_model, generator=generator)
+            self.lm_head.weight.copy_(rows / rows.norm(dim=-1, keepdim=True))
+        self.config = SimpleNamespace(
+            get_text_config=lambda: SimpleNamespace(
+                hidden_size=d_model, num_hidden_layers=n_layers, vocab_size=MOCK_VOCAB
+            ),
+            image_token_id=None,
+            audio_token_id=MOCK_AUDIO_TOKEN_ID,
+            audio_config=SimpleNamespace(hidden_size=MOCK_AUDIO_FEATURE_DIM),
+        )
+        for parameter in self.parameters():
+            parameter.requires_grad_(False)
+
+    def forward(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        input_features=None,
+        input_features_mask=None,
+        **_kwargs,
+    ):
+        hidden = self.model.language_model.embed_tokens(input_ids)
+        if input_features is not None:
+            features = self.model.audio_tower(input_features, input_features_mask)
+            mask = input_ids == MOCK_AUDIO_TOKEN_ID
+            if int(mask.sum()) != int(features.shape[1]):
+                raise ValueError(
+                    "Audio features and audio tokens do not match, tokens: "
+                    f"{int(mask.sum())}, features: {int(features.shape[1])}"
+                )
+            hidden = hidden.clone()
+            hidden[mask] = features.reshape(-1, hidden.shape[-1]).to(hidden.dtype)
+        for block in self.model.language_model.layers:
+            hidden = block(hidden)
+        return SimpleNamespace(logits=self.lm_head(hidden))
+
+
+def build_mock_audio_backend(**processor_kwargs):
+    """``(backend, processor, resolved)`` — the MOCK spoken-audio world.
+
+    A real :class:`~jlens.mmpilot.backend.GemmaPilotBackend` over a processor
+    that reproduces ``Gemma4Processor``'s audio contract and a model that really
+    consumes the tower's output. The feasibility notebook's MOCK branch runs the
+    *same* audit code against this as its real branch runs against Gemma, so the
+    two cannot drift.
+    """
+    from jlens.mmpilot.audio import resolve_audio_interface
+    from jlens.mmpilot.backend import GemmaPilotBackend, resolve_processor_interface
+
+    processor = MockAudioProcessor(**processor_kwargs)
+    processor.tokenizer = MockAudioTokenizer()
+    model = MockAudioGemmaLike()
+    interface = resolve_processor_interface(processor, model.config)
+    resolved = resolve_audio_interface(
+        processor,
+        model.config,
+        model_repo_id="mock/gemma-like",
+        model_revision="mock-rev",
+        processor_revision="mock-rev",
+    )
+    backend = GemmaPilotBackend(
+        model, processor, interface, device="cpu", audio_interface=resolved
+    )
+    return backend, processor, resolved
+
+
 MOCK_LENS_CHECKSUM = "sha256:mock-identity-lens"
 
 

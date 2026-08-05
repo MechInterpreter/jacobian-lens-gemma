@@ -76,6 +76,11 @@ class RealBackendBundle:
     model_revision: str
     processor_revision: str
     device: str
+    #: The probed native spoken-audio protocol, when ``resolve_audio`` was
+    #: requested and succeeded. ``None`` leaves ``spoken_audio`` blocked.
+    audio_interface: Any = None
+    #: Why audio is blocked, when it is. ``""`` when audio was not requested.
+    audio_blocked_reason: str = ""
 
 
 def build_real_backend(
@@ -88,6 +93,7 @@ def build_real_backend(
     expect_n_layers: int = EXPECT_N_LAYERS,
     expect_d_model: int = EXPECT_D_MODEL,
     expect_vocab_size: int = EXPECT_VOCAB,
+    resolve_audio: bool = False,
 ) -> RealBackendBundle:
     """Load, audit, and wrap the real Gemma 4 checkpoint.
 
@@ -96,6 +102,12 @@ def build_real_backend(
             which refuses the ~16 GB download without it. Deliberately not
             defaulted to True here: the notebook states it explicitly, so the
             guard is visible at the call site rather than buried.
+        resolve_audio: Probe the native spoken-audio protocol with
+            :func:`jlens.mmpilot.audio.resolve_audio_interface` and attach it to
+            the backend. Defaults to False, which leaves ``spoken_audio``
+            blocked. Every completed run so far was text-and-image; turning this
+            on changes what the backend will accept, so it is stated at the call
+            site rather than inferred from the checkpoint having an audio tower.
 
     Raises:
         RuntimeError: From ``load_gemma4`` when ``allow_model_load`` is False.
@@ -130,7 +142,35 @@ def build_real_backend(
         repo_id, revision=resolved_revision, token=token
     )
     interface = resolve_processor_interface(processor, hf_model.config)
-    backend = GemmaPilotBackend(hf_model, processor, interface, device=device)
+
+    audio_interface = None
+    audio_blocked_reason = ""
+    if resolve_audio:
+        from jlens.mmpilot.audio import (
+            SpokenAudioUnsupportedError,
+            resolve_audio_interface,
+        )
+
+        try:
+            audio_interface = resolve_audio_interface(
+                processor,
+                hf_model.config,
+                model_repo_id=repo_id,
+                model_revision=resolved_revision,
+                processor_revision=resolved_revision,
+            )
+        except SpokenAudioUnsupportedError as exc:
+            # A blocked channel is a recorded result, never a crashed run: the
+            # text-and-image study must still be able to proceed.
+            audio_blocked_reason = str(exc)
+
+    backend = GemmaPilotBackend(
+        hf_model,
+        processor,
+        interface,
+        device=device,
+        audio_interface=audio_interface,
+    )
     return RealBackendBundle(
         backend=backend,
         lens_model=lens_model,
@@ -141,6 +181,8 @@ def build_real_backend(
         model_revision=resolved_revision,
         processor_revision=resolved_revision,
         device=device,
+        audio_interface=audio_interface,
+        audio_blocked_reason=audio_blocked_reason,
     )
 
 
