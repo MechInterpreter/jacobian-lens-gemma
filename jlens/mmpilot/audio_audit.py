@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -52,7 +53,16 @@ from jlens.mmpilot.backend import (
 )
 from jlens.mmpilot.store import payload_checksum
 
-AUDIT_VERSION = "jlens.mmpilot.spoken_audio_feasibility.v1"
+AUDIT_VERSION = "jlens.mmpilot.spoken_audio_feasibility.v2"
+
+#: The candidate-scoring **validity** rule, versioned separately from the audit
+#: because it is a distinct claim with distinct criteria. v1 conflated two
+#: things: it required the fixture to contain a multi-token candidate, and the
+#: fixture was the pilot's behavioral concepts, which Gemma tokenizes as single
+#: tokens (``" cat"`` -> ``[5866]``, ``" dog"`` -> ``[4799]``). Complete-sequence
+#: scoring executed correctly and returned finite scores, and the audit still
+#: reported FAIL — a defect in the fixture and the rule, not in the scorer.
+SCORING_VALIDITY_RULE = "jlens.mmpilot.scoring_validity.v2"
 
 AUDIO_READY = "AUDIO_READY"
 AUDIO_BLOCKED = "AUDIO_BLOCKED"
@@ -82,6 +92,122 @@ REQUIRED_CHECKS = (
     "no_transcript_leakage",
     "final_prompt_position",
 )
+
+
+#: Fixed, predeclared candidate pool, in the order it is searched. COCO category
+#: names, chosen because they are the vocabulary this project already works in
+#: and because compound names are *likely* to be multi-token — never because any
+#: of them is assumed to be. Every length is measured against the live tokenizer
+#: in :func:`select_scoring_candidates`; the pool is a search order, not a claim.
+#:
+#: Single-word entries sit at the end deliberately. They are a fallback for a
+#: tokenizer that fuses the compounds, and the selection still refuses unless at
+#: least one chosen candidate really is multi-token.
+SCORING_CANDIDATE_POOL: tuple[str, ...] = (
+    "traffic light",
+    "fire hydrant",
+    "tennis racket",
+    "dining table",
+    "parking meter",
+    "teddy bear",
+    "sports ball",
+    "cell phone",
+    "wine glass",
+    "baseball glove",
+    "potted plant",
+    "hot dog",
+    "refrigerator",
+    "umbrella",
+    "broccoli",
+    "microwave",
+)
+
+
+class ScoringCandidateError(RuntimeError):
+    """No pool candidate exercises multi-token scoring under this tokenizer."""
+
+
+def _is_prefix(a: Sequence[int], b: Sequence[int]) -> bool:
+    """Whether either token sequence is a prefix of the other.
+
+    A prefix pair makes the comparison degenerate: the shorter candidate's score
+    is a strict sub-sum of the longer one's, so agreement between them says
+    nothing about whether the *whole* sequence was scored.
+    """
+    short, long = (a, b) if len(a) <= len(b) else (b, a)
+    return list(long[: len(short)]) == list(short)
+
+
+def select_scoring_candidates(
+    backend: Any,
+    *,
+    pool: Sequence[str] = SCORING_CANDIDATE_POOL,
+    n: int = 2,
+) -> dict[str, list[int]]:
+    """Pick candidates that actually exercise complete-sequence scoring.
+
+    Deterministic and tokenizer-driven: every pool entry is encoded through the
+    backend's own ``encode_candidate``, and the first pair in pool order
+    satisfying the constraints is taken. Nothing is assumed about how any phrase
+    tokenizes — that assumption is what produced a FAIL on a scorer that was
+    working.
+
+    Constraints, in priority order:
+
+    1. Every candidate encodes to at least one token.
+    2. Token sequences are distinct.
+    3. Neither sequence is a prefix of the other (see :func:`_is_prefix`).
+    4. **Both** candidates are multi-token, if any such pair exists.
+    5. Otherwise at least one candidate is multi-token.
+
+    Raises:
+        ScoringCandidateError: If no pair satisfies even the weaker rule 5 — the
+            tokenizer cannot exercise multi-token scoring at all, which is a
+            refusal rather than a silently degraded check.
+    """
+    if n != 2:
+        raise ValueError(f"the scoring-validity rule is defined for 2 candidates, got {n}")
+
+    encoded: list[tuple[str, list[int]]] = []
+    seen: set[tuple[int, ...]] = set()
+    rejected: list[dict] = []
+    for phrase in pool:
+        ids = [int(i) for i in backend.encode_candidate(f" {phrase}")]
+        if not ids:
+            rejected.append({"candidate": phrase, "why": "encoded to zero tokens"})
+            continue
+        key = tuple(ids)
+        if key in seen:
+            rejected.append({"candidate": phrase, "why": "duplicate token sequence"})
+            continue
+        seen.add(key)
+        encoded.append((phrase, ids))
+
+    def _first_pair(require_both_multi: bool) -> dict[str, list[int]] | None:
+        for i in range(len(encoded)):
+            for j in range(i + 1, len(encoded)):
+                (name_a, ids_a), (name_b, ids_b) = encoded[i], encoded[j]
+                multi = (len(ids_a) > 1) + (len(ids_b) > 1)
+                if multi < (2 if require_both_multi else 1):
+                    continue
+                if _is_prefix(ids_a, ids_b):
+                    continue
+                return {name_a: ids_a, name_b: ids_b}
+        return None
+
+    chosen = _first_pair(require_both_multi=True) or _first_pair(require_both_multi=False)
+    if chosen is None:
+        raise ScoringCandidateError(
+            "no pair of pool candidates exercises multi-token scoring under this "
+            "tokenizer: every candidate encodes to a single token, or every "
+            "multi-token pair is prefix-degenerate. Complete-sequence scoring "
+            "cannot be distinguished from first-token scoring here, so this is "
+            "refused rather than reported as a pass.\n"
+            f"  measured: "
+            f"{json.dumps({name: ids for name, ids in encoded}, sort_keys=True)}\n"
+            f"  rejected: {json.dumps(rejected, sort_keys=True)}"
+        )
+    return chosen
 
 
 @dataclass
@@ -123,6 +249,117 @@ def verdict_from_checks(checks: Sequence[Check | Mapping]) -> str:
     return AUDIO_READY
 
 
+def check_scoring_validity(
+    backend: Any,
+    inputs: Any,
+    candidate_ids: Mapping[str, Sequence[int]],
+    *,
+    tolerance: float = 1e-4,
+) -> Check:
+    """Does the scorer correctly score **complete** candidate sequences?
+
+    This is a question about the mechanism, and deliberately not about the
+    model's answer. Which candidate wins is recorded and ignored: the recording
+    was never chosen to be about any candidate, so a "wrong" prediction here is
+    the expected state, not a defect. Whether Gemma can recognize a concept from
+    speech is a *behavioral capability* question belonging to the later
+    SpokenCOCO experiment.
+
+    Passes when, and only when:
+
+    - scoring executes and every candidate has a non-empty token sequence;
+    - ``n_tokens`` matches the ids actually supplied;
+    - at least one candidate is multi-token, and no candidate's tokens are a
+      prefix of another's;
+    - every per-token term and every aggregate is finite;
+    - ``sum_logprob`` equals the sum of the recorded ``token_logprobs`` within
+      ``tolerance``, and ``mean_logprob * n_tokens`` agrees with it;
+    - reversing the candidate order leaves each candidate's own score unchanged
+      within ``tolerance``.
+    """
+    from jlens.mmpilot.capability import score_candidate_sequences
+
+    forward = dict(candidate_ids)
+    reverse = dict(reversed(list(forward.items())))
+
+    detail: dict[str, Any] = {
+        "rule": SCORING_VALIDITY_RULE,
+        "tolerance": tolerance,
+        "candidate_token_ids": {name: [int(i) for i in ids] for name, ids in forward.items()},
+        "n_tokens_per_candidate": {name: len(list(ids)) for name, ids in forward.items()},
+        "measures": "scoring_validity_only",
+        "semantic_prediction_is_not_a_criterion": True,
+    }
+
+    try:
+        scores = score_candidate_sequences(
+            backend, inputs, forward, return_token_logprobs=True
+        )
+        reordered = score_candidate_sequences(
+            backend, inputs, reverse, return_token_logprobs=True
+        )
+    except Exception as exc:  # noqa: BLE001 - a failure to score is the result
+        detail["error"] = f"{type(exc).__name__}: {exc}"
+        return Check("candidate_sequence_scoring", passed=False, detail=detail)
+
+    detail["scores"] = scores
+    failures: list[str] = []
+
+    sequences = {name: [int(i) for i in ids] for name, ids in forward.items()}
+    if not all(sequences.values()):
+        failures.append("a candidate encoded to zero tokens")
+    if len({tuple(ids) for ids in sequences.values()}) != len(sequences):
+        failures.append("candidate token sequences are not distinct")
+    names = list(sequences)
+    if len(names) == 2 and _is_prefix(sequences[names[0]], sequences[names[1]]):
+        failures.append(
+            "one candidate's tokens are a prefix of the other's, so agreement "
+            "would not distinguish complete-sequence from first-token scoring"
+        )
+    if not any(len(ids) > 1 for ids in sequences.values()):
+        failures.append(
+            "no candidate is multi-token, so complete-sequence scoring was never "
+            "exercised (this is a fixture defect, not a scorer defect)"
+        )
+
+    order_deltas: dict[str, float] = {}
+    for name, row in scores.items():
+        ids = sequences[name]
+        if row["n_tokens"] != len(ids):
+            failures.append(f"{name}: n_tokens {row['n_tokens']} != {len(ids)} supplied")
+        terms = [float(value) for value in row.get("token_logprobs", [])]
+        if len(terms) != len(ids):
+            failures.append(f"{name}: {len(terms)} per-token terms for {len(ids)} tokens")
+        aggregates = [float(row["sum_logprob"]), float(row["mean_logprob"])]
+        if not all(math.isfinite(value) for value in [*terms, *aggregates]):
+            failures.append(f"{name}: non-finite per-token or aggregate score")
+            continue
+        if abs(float(row["sum_logprob"]) - sum(terms)) > tolerance:
+            failures.append(
+                f"{name}: sum_logprob {row['sum_logprob']!r} != sum of its own "
+                f"per-token terms {sum(terms)!r}"
+            )
+        if abs(float(row["mean_logprob"]) * len(ids) - float(row["sum_logprob"])) > tolerance:
+            failures.append(f"{name}: mean_logprob is not sum_logprob / n_tokens")
+        delta = abs(float(row["sum_logprob"]) - float(reordered[name]["sum_logprob"]))
+        order_deltas[name] = delta
+        if delta > tolerance:
+            failures.append(
+                f"{name}: score moved by {delta:.3e} when the candidate order "
+                "changed; scoring must not depend on the order candidates are "
+                "presented in"
+            )
+
+    detail["order_invariance_max_abs_delta"] = max(order_deltas.values(), default=0.0)
+    detail["order_invariance_per_candidate"] = order_deltas
+    detail["failures"] = failures
+    # Recorded because it is interesting, and explicitly not a criterion.
+    ranked = sorted(scores.items(), key=lambda kv: (-kv[1]["sum_logprob"], kv[0]))
+    detail["reported_only_argmax"] = ranked[0][0] if ranked else None
+
+    return Check("candidate_sequence_scoring", passed=not failures, detail=detail)
+
+
 @dataclass
 class AudioAuditResult:
     """Everything the feasibility report needs, and its verdict."""
@@ -135,9 +372,23 @@ class AudioAuditResult:
     mode: str = "mock"
 
     def to_dict(self) -> dict:
+        scoring = next(
+            (
+                check.detail
+                for check in self.checks
+                if check.name == "candidate_sequence_scoring"
+            ),
+            {},
+        )
         payload = {
             "audit_version": AUDIT_VERSION,
             "audio_protocol_version": AUDIO_PROTOCOL_VERSION,
+            # The scoring-validity rule and the token sequences it was applied
+            # to are part of the audit's fingerprint: a verdict produced under a
+            # different rule, or against candidates that tokenize differently,
+            # is not the same verdict.
+            "scoring_validity_rule": SCORING_VALIDITY_RULE,
+            "scoring_candidate_token_ids": scoring.get("candidate_token_ids"),
             "created_utc": datetime.now(timezone.utc).isoformat(),
             "mode": self.mode,
             "verdict": self.verdict,
@@ -167,34 +418,40 @@ def run_audio_audit(
     waveforms: Sequence[tuple[str, Any]],
     sampling_rate: int,
     layers: Sequence[int],
-    candidate_ids: Mapping[str, Sequence[int]],
+    candidate_ids: Mapping[str, Sequence[int]] | None = None,
     forbidden_text: Sequence[str] = (),
     mode: str = "mock",
     environment: Mapping | None = None,
     logit_tolerance: float = 1e-4,
+    score_tolerance: float = 1e-4,
 ) -> AudioAuditResult:
     """Run every feasibility check against a backend with audio resolved.
 
     Args:
         waveforms: At least two ``(label, samples)`` pairs of *different*
             recordings. Silence is added automatically as the null comparison.
-        candidate_ids: Complete candidate token sequences, so scoring is
-            exercised on whole answers rather than first tokens.
+        candidate_ids: Complete candidate token sequences. ``None`` selects them
+            with :func:`select_scoring_candidates`, which measures token lengths
+            against the live tokenizer — do not hand in the pilot's behavioral
+            concepts, which Gemma encodes as single tokens and which therefore
+            cannot exercise complete-sequence scoring at all.
         forbidden_text: Captions, transcripts and file stems that must not
             appear in ``prompt``.
 
     Never raises for a failed check — a failure is the result. It raises only if
     the caller passed something structurally impossible (fewer than two
-    waveforms).
+    waveforms), or if candidate selection was delegated here and the tokenizer
+    cannot supply a multi-token candidate.
     """
     from jlens.mmpilot.audio import assert_no_text_leakage
-    from jlens.mmpilot.capability import score_candidate_sequences
 
     if len(waveforms) < 2:
         raise ValueError(
             "the audit needs at least two different recordings; one cannot show "
             "that the model distinguishes them"
         )
+    if candidate_ids is None:
+        candidate_ids = select_scoring_candidates(backend)
 
     checks: list[Check] = []
     resolved = getattr(backend, "audio_interface", None)
@@ -358,20 +615,10 @@ def run_audio_audit(
         )
     )
 
-    # --- complete candidate sequences.
-    scores = score_candidate_sequences(backend, primary, candidate_ids)
+    # --- complete candidate sequences. A question about the mechanism only:
+    # which candidate wins is recorded and is not a criterion.
     checks.append(
-        Check(
-            "candidate_sequence_scoring",
-            passed=all(row["n_tokens"] == len(candidate_ids[name]) for name, row in scores.items())
-            and any(len(ids) > 1 for ids in candidate_ids.values()),
-            detail={
-                "scores": scores,
-                "n_tokens_per_candidate": {
-                    name: len(list(ids)) for name, ids in candidate_ids.items()
-                },
-            },
-        )
+        check_scoring_validity(backend, primary, candidate_ids, tolerance=score_tolerance)
     )
 
     # --- the harness must not be the effect.
@@ -470,6 +717,44 @@ def audit_markdown(result: AudioAuditResult) -> str:
             f"{interface.get('notes', {}).get('placeholder_counts')}",
         ]
 
+    scoring = next(
+        (row for row in payload["checks"] if row["name"] == "candidate_sequence_scoring"),
+        None,
+    )
+    if scoring is not None:
+        detail = scoring["detail"]
+        lines += [
+            "",
+            "## Candidate scoring: validity, not capability",
+            "",
+            "Two different questions, and only the first is asked here.",
+            "",
+            "**Scoring validity** — does the mechanism correctly score *complete* "
+            "candidate token sequences? That is what this check measures: finite "
+            "per-token and aggregate terms, an aggregate equal to the sum of its "
+            "own per-token terms, at least one genuinely multi-token candidate, "
+            "no prefix-degenerate pair, and a score that does not move when the "
+            "candidate order changes.",
+            "",
+            "**Behavioral capability** — can Gemma recognize a concept from the "
+            "recording? **Not measured here, and not measurable here.** The "
+            "waveform was never selected to be about any candidate, so which "
+            "candidate scores highest is meaningless and is deliberately not a "
+            "criterion. That question belongs to the SpokenCOCO experiment.",
+            "",
+            f"- rule: `{detail.get('rule')}`",
+            f"- candidates: `{detail.get('candidate_token_ids')}`",
+            f"- tokens per candidate: `{detail.get('n_tokens_per_candidate')}`",
+            f"- order-invariance max |Δ|: "
+            f"{detail.get('order_invariance_max_abs_delta')}",
+            f"- highest-scoring candidate (**reported only, not a criterion**): "
+            f"`{detail.get('reported_only_argmax')}`",
+        ]
+        if detail.get("failures"):
+            lines += ["", "Failures:"] + [
+                f"- {failure}" for failure in detail["failures"]
+            ]
+
     lines += ["", "## Checks", "", "| check | required | result | detail |", "| --- | --- | --- | --- |"]
     for row in payload["checks"]:
         detail = json.dumps(row["detail"], default=str, sort_keys=True)
@@ -540,14 +825,19 @@ __all__ = [
     "AUDIO_INVALID",
     "AUDIO_READY",
     "AUDIT_VERSION",
+    "SCORING_CANDIDATE_POOL",
+    "SCORING_VALIDITY_RULE",
+    "ScoringCandidateError",
     "PROTECTED_RUN_FRAGMENTS",
     "REQUIRED_CHECKS",
     "RUN_PREFIX",
     "AudioAuditResult",
     "Check",
     "audit_markdown",
+    "check_scoring_validity",
     "new_audit_run_dir",
     "run_audio_audit",
+    "select_scoring_candidates",
     "verdict_from_checks",
     "write_audit_report",
 ]
