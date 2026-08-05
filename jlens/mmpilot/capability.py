@@ -129,12 +129,22 @@ def score_candidate_sequences(
     backend: PilotBackend,
     inputs: BuiltInputs,
     candidate_ids: Mapping[str, Sequence[int]],
+    *,
+    return_token_logprobs: bool = False,
 ) -> dict[str, dict]:
     """Teacher-forced conditional log likelihood of each complete candidate.
 
     One forward pass per candidate (batch size 1). Returns, per candidate,
     ``sum_logprob`` (the decision statistic), ``mean_logprob`` (length-
     normalized, reported for context), ``n_tokens``, and ``token_ids``.
+
+    Args:
+        return_token_logprobs: Also return ``token_logprobs``, the per-token
+            terms ``sum_logprob`` is the sum of. Off by default so the units the
+            scientific stages persist keep exactly the fields they always had;
+            the spoken-audio feasibility audit turns it on so it can check the
+            aggregate against its own terms rather than recomputing them
+            separately and comparing two implementations.
     """
     scores: dict[str, dict] = {}
     for candidate, ids in candidate_ids.items():
@@ -147,15 +157,20 @@ def score_candidate_sequences(
                 "processor expanded tokens inside the model — refusing to score"
             )
         log_probs = torch.log_softmax(logits[0].float(), dim=-1)
+        per_token: list[float] = []
         total = 0.0
         for offset, token_id in enumerate(ids):
-            total += float(log_probs[inputs.prompt_len - 1 + offset, int(token_id)])
+            term = float(log_probs[inputs.prompt_len - 1 + offset, int(token_id)])
+            per_token.append(term)
+            total += term
         scores[candidate] = {
             "sum_logprob": total,
             "mean_logprob": total / len(ids),
             "n_tokens": len(ids),
             "token_ids": [int(i) for i in ids],
         }
+        if return_token_logprobs:
+            scores[candidate]["token_logprobs"] = per_token
     return scores
 
 
