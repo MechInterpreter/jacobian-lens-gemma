@@ -1250,3 +1250,133 @@ def mock_lens(layers: Sequence[int] = MOCK_LAYERS, *, d_model: int = MOCK_D_MODE
         n_prompts=100,
         d_model=d_model,
     )
+
+
+#: The three-layer mock stand-in for the published layer-35/38/40 artifacts.
+MOCK_PUBLISHED_LAYERS: tuple[int, ...] = (2, 3, 4)
+
+#: A mock layer that must be refused: it stands in for layer 32, which was
+#: tested and failed confirmation.
+MOCK_FAILED_CONFIRMATION_LAYER = 1
+
+
+def build_mock_published_lenses(
+    root: str | Path,
+    *,
+    layers: Sequence[int] = MOCK_PUBLISHED_LAYERS,
+    d_model: int = MOCK_D_MODEL,
+    model_repo_id: str = "mock/gemma-like",
+    model_revision: str = "mockrevision0000000000000000000000000000",
+    scale: int = 100,
+    include_failed_layer: bool = True,
+) -> dict:
+    """Write per-layer published artifacts in the real calibration's format.
+
+    One ``.pt`` per layer plus the ``.json`` sidecar
+    :func:`jlens.calibration.publication.build_artifact` writes, so the MOCK run
+    exercises :func:`jlens.mmpilot.published_lens.load_published_lenses` — the
+    schema inspection, the checksum agreement, the confirmation clause — rather
+    than skipping straight to an in-memory lens.
+
+    ``include_failed_layer`` also writes a layer whose confirmation *failed*, in
+    the shape :func:`jlens.calibration.publication.record_failed_layer` produces.
+    Nothing loads it; it exists so a test can point the loader at it and watch
+    the refusal happen.
+
+    Returns ``{"specs", "failed_spec", "expectations", "root"}`` with the specs
+    in the shape the notebook's configuration uses.
+    """
+    from jlens.metadata import file_sha256
+    from jlens.mmpilot.published_lens import (
+        EXPECTED_ARTIFACT_FORMAT,
+        PublishedLensExpectations,
+        PublishedLensSpec,
+    )
+    from jlens.mmpilot.store import payload_checksum
+
+    root = Path(root)
+    root.mkdir(parents=True, exist_ok=True)
+
+    def write(layer: int, *, passed: bool) -> dict:
+        destination = root / f"lens.layer{layer}.scale{scale}.validated.pt"
+        JacobianLens(
+            jacobians={int(layer): torch.eye(d_model)},
+            n_prompts=scale,
+            d_model=d_model,
+        ).save(str(destination))
+        checksum = file_sha256(str(destination))
+        artifact = {
+            "artifact_format_version": EXPECTED_ARTIFACT_FORMAT,
+            "protocol_version": "mock.calibration.v1",
+            "frozen": True,
+            "validated": bool(passed),
+            "model_repo_id": model_repo_id,
+            "model_revision": model_revision,
+            "tokenizer_repo_id": model_repo_id,
+            "tokenizer_revision": model_revision,
+            "physical_layer": int(layer),
+            "normalized_depth": round(int(layer) / MOCK_N_LAYERS, 4),
+            "d_model": int(d_model),
+            "target_layer": MOCK_N_LAYERS - 1,
+            "hook_site": "block_output",
+            "residual_convention": (
+                "pre-final-norm residual after the block; the exact input to "
+                "block l+1"
+            ),
+            "vector_orientation": (
+                "J_l maps a layer-l residual into the final-layer basis; applied "
+                "as residual @ J_l.T"
+            ),
+            "normalization_convention": "readout is lm_head(final_norm(J_l @ h))",
+            "logit_softcap": 30.0,
+            "calibration_modality": "text-only",
+            "spokencoco_used": False,
+            "multimodal_data_used": False,
+            "cross_modal_alignment": False,
+            "modality_specific_lens": False,
+            "corpus_id": "mock/wikitext-like",
+            "corpus_revision": "mock",
+            "n_fitting_prompts": int(scale),
+            "scale_point": int(scale),
+            "gate_digest": "sha256:mock-gate",
+            "confirmation_protocol": "mock-confirmation-v1",
+            "confirmation_failed_checks": [] if passed else ["mock_rank_criterion"],
+            "confirmation_metrics": {"mean_reciprocal_rank": 0.9 if passed else 0.1},
+            "validation_protocol": "mock-validation-v1",
+            "validation_failed_checks": [],
+            "estimator": "jlens.fitting.fit (upstream, unmodified)",
+            "objective": "not_applicable_estimator_is_a_sample_mean",
+            "lens_path": str(destination),
+            "lens_checksum": checksum,
+        }
+        if not passed:
+            artifact["published"] = False
+            artifact["reason"] = "did not pass the confirmation gate"
+        artifact["artifact_checksum"] = payload_checksum(artifact)
+        destination.with_suffix(".json").write_text(
+            json.dumps(artifact, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        return {"layer": int(layer), "path": str(destination), "expect_sha256": checksum}
+
+    specs = [
+        PublishedLensSpec(**write(int(layer), passed=True)) for layer in sorted(layers)
+    ]
+    failed_spec = (
+        PublishedLensSpec(**write(MOCK_FAILED_CONFIRMATION_LAYER, passed=False))
+        if include_failed_layer
+        else None
+    )
+    expectations = PublishedLensExpectations(
+        model_repo_id=model_repo_id,
+        model_revision=model_revision,
+        scale_point=int(scale),
+        d_model=int(d_model),
+        confirmed_layers=tuple(int(layer) for layer in sorted(layers)),
+        failed_confirmation_layers=(MOCK_FAILED_CONFIRMATION_LAYER,),
+    )
+    return {
+        "root": str(root),
+        "specs": specs,
+        "failed_spec": failed_spec,
+        "expectations": expectations,
+    }
