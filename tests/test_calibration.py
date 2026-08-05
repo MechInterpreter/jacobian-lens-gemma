@@ -25,6 +25,7 @@ from jlens.calibration.corpus import (
     audit_leakage,
     build_partitions,
     build_records,
+    collect_records_for_partition_quotas,
     corpus_manifest,
     hamming_distance,
     nested_subset,
@@ -250,6 +251,55 @@ def test_exact_duplicates_are_collapsed_before_bucketing():
 def test_short_partition_is_refused_rather_than_shrunk(records):
     with pytest.raises(ValueError, match="requires exactly"):
         build_partitions(records, corpus_id="mock/train", n_validation=10_000)
+
+
+def test_collection_continues_until_every_partition_quota_is_met():
+    records, partitions = collect_records_for_partition_quotas(
+        "mock/train",
+        mock_corpus_texts(10_000),
+        min_chars=100,
+        min_fit=1_000,
+        n_validation=128,
+        n_confirmation=128,
+        max_texts=10_000,
+    )
+    assert len(records) > 1_000 + 128 + 128
+    assert len(partitions.fit) >= 1_000
+    assert len(partitions.validation) == 128
+    assert len(partitions.confirmation) == 128
+
+
+def test_quota_collection_is_deterministic():
+    kwargs = {
+        "min_chars": 100,
+        "min_fit": 100,
+        "n_validation": 128,
+        "n_confirmation": 128,
+        "max_texts": 10_000,
+    }
+    first_records, first = collect_records_for_partition_quotas(
+        "mock/train", mock_corpus_texts(10_000), **kwargs
+    )
+    second_records, second = collect_records_for_partition_quotas(
+        "mock/train", mock_corpus_texts(10_000), **kwargs
+    )
+    assert [record.record_id for record in first_records] == [
+        record.record_id for record in second_records
+    ]
+    assert first.manifest() == second.manifest()
+
+
+def test_quota_collection_refuses_bounded_shortfall_without_shrinking():
+    with pytest.raises(ValueError, match=r"observed=.*required=.*max_texts=20"):
+        collect_records_for_partition_quotas(
+            "mock/train",
+            mock_corpus_texts(20),
+            min_chars=100,
+            min_fit=100,
+            n_validation=128,
+            n_confirmation=128,
+            max_texts=20,
+        )
 
 
 def test_partition_checksums_change_with_content(records, partitions):

@@ -519,8 +519,7 @@ code(
 # 6. Stream (or synthesize) the corpus, split it, and audit for leakage.
 from jlens.calibration.corpus import (
     audit_leakage,
-    build_partitions,
-    build_records,
+    collect_records_for_partition_quotas,
     corpus_manifest,
     scale_nesting_audit,
 )
@@ -533,22 +532,16 @@ if MODEL_STAGES_ENABLED:
     from datasets import load_dataset  # noqa: PLC0415
 
     CORPUS_ID = f"{CORPUS_CONFIG['config']}/{CORPUS_CONFIG['split']}"
-    # Enough headroom for the largest active scale plus both held-out sets.
-    _needed = max(PLANNED_SCALES) * 2 + 4 * (N_VALIDATION_PROMPTS + N_CONFIRMATION_PROMPTS)
+    # A hard safety bound, not a target count. Hash partitioning is stochastic
+    # in count, so collection continues until every exact quota is satisfied.
+    _max_texts = max(10_000, 8 * (max(PLANNED_SCALES) + N_VALIDATION_PROMPTS + N_CONFIRMATION_PROMPTS))
     _stream = load_dataset(
         CORPUS_CONFIG["hf_dataset"],
         CORPUS_CONFIG["config"],
         split=CORPUS_CONFIG["split"],
         streaming=True,
     )
-    _texts, _kept = [], 0
-    for _record in _stream:
-        _texts.append(_record["text"])
-        if len(str(_record["text"]).strip()) >= CORPUS_CONFIG["min_chars"]:
-            _kept += 1
-            if _kept >= _needed:
-                break
-    RECORDS = build_records(CORPUS_ID, _texts, min_chars=CORPUS_CONFIG["min_chars"])
+    _texts = (_record["text"] for _record in _stream)
     CORPUS_CONFIG["revision_status"] = "RESOLVE_AND_RECORD_ON_FIRST_REAL_RUN"
 else:
     from jlens.calibration.mock import mock_corpus_texts  # noqa: PLC0415
@@ -563,11 +556,15 @@ else:
         "min_chars": 100,
         "license": "n/a",
     }
-    RECORDS = build_records(CORPUS_ID, mock_corpus_texts(2400), min_chars=100)
+    _max_texts = 10_000
+    _texts = mock_corpus_texts(_max_texts)
 
-PARTITIONS = build_partitions(
-    RECORDS,
+RECORDS, PARTITIONS = collect_records_for_partition_quotas(
     corpus_id=CORPUS_ID,
+    texts=_texts,
+    min_chars=CORPUS_CONFIG["min_chars"],
+    min_fit=max(PLANNED_SCALES),
+    max_texts=_max_texts,
     seed=SPLIT_SEED,
     n_validation=N_VALIDATION_PROMPTS,
     n_confirmation=N_CONFIRMATION_PROMPTS,

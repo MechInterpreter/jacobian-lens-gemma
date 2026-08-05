@@ -207,6 +207,76 @@ def build_records(
     return records
 
 
+def collect_records_for_partition_quotas(
+    corpus_id: str,
+    texts: Iterable[str],
+    *,
+    min_chars: int = 600,
+    min_fit: int,
+    n_validation: int,
+    n_confirmation: int,
+    max_texts: int,
+    seed: int = SPLIT_SEED,
+) -> tuple[list[CorpusRecord], Partitions]:
+    """Consume a text stream until every deterministic split quota is met.
+
+    Hash bucketing is not guaranteed to put an exact nominal sample count into
+    each partition.  This helper therefore counts *unique* normalized records
+    as it streams and stops only after fit, validation, and confirmation all
+    satisfy their requested sizes.  ``max_texts`` keeps a corrupt or unsuitable
+    stream from running forever; quotas are never silently reduced.
+    """
+    requirements = {
+        "fit": int(min_fit),
+        "validation": int(n_validation),
+        "confirmation": int(n_confirmation),
+    }
+    if any(value < 0 for value in requirements.values()):
+        raise ValueError(f"partition quotas must be non-negative: {requirements}")
+    if max_texts <= 0:
+        raise ValueError(f"max_texts must be positive, got {max_texts}")
+
+    records: list[CorpusRecord] = []
+    unique_checksums: set[str] = set()
+    counts = {name: 0 for name in PARTITIONS}
+    texts_seen = 0
+    for stream_index, text in enumerate(texts):
+        if texts_seen >= max_texts:
+            break
+        texts_seen += 1
+        if len(str(text).strip()) < min_chars:
+            continue
+        record = CorpusRecord.build(corpus_id, stream_index, text)
+        records.append(record)
+        if record.normalized_checksum in unique_checksums:
+            continue
+        unique_checksums.add(record.normalized_checksum)
+        bucket = assign_bucket(record.record_id, seed=seed)
+        name = _partition_for_bucket(
+            bucket,
+            fit=FIT_BUCKETS,
+            validation=VALIDATION_BUCKETS,
+            confirmation=CONFIRMATION_BUCKETS,
+        )
+        if name is not None:
+            counts[name] += 1
+        if all(counts[name] >= required for name, required in requirements.items()):
+            return records, build_partitions(
+                records,
+                corpus_id=corpus_id,
+                seed=seed,
+                n_validation=n_validation,
+                n_confirmation=n_confirmation,
+            )
+
+    raise ValueError(
+        "corpus stream ended or reached the bounded collection limit before "
+        f"partition quotas were met: observed={counts}, required={requirements}, "
+        f"texts_seen={texts_seen}, max_texts={max_texts}. Stream more corpus "
+        "records; do not shrink the held-out partitions"
+    )
+
+
 # --------------------------------------------------------------------- splits
 
 
