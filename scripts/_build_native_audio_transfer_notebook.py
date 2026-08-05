@@ -159,7 +159,15 @@ code(
 if IN_COLAB:
     print("installing the repository (editable) ...")
     result = subprocess.run(
-        [sys.executable, "-m", "pip", "install", "-e", f"{REPO_PATH}[gemma]"],
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "transformers==5.13.1",
+            "-e",
+            f"{REPO_PATH}[gemma]",
+        ],
         capture_output=True,
         text=True,
     )
@@ -268,6 +276,7 @@ LENS_FITTED_SCALE = 100
 
 MODEL_REPO_ID = "google/gemma-4-E4B-it"
 MODEL_REVISION = "fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd"
+TRANSFORMERS_VERSION_EXPECTED = "5.13.1"
 EXPECT_N_LAYERS, EXPECT_D_MODEL, EXPECT_VOCAB = 42, 2560, 262144
 
 # ------------------------------------------------- the spoken-audio protocol
@@ -477,6 +486,12 @@ try:
 except ModuleNotFoundError:
     TRANSFORMERS_VERSION = "not-installed"
 print(f"transformers {TRANSFORMERS_VERSION}")
+if RUN_REAL_AUDIO_TRANSFER and TRANSFORMERS_VERSION != TRANSFORMERS_VERSION_EXPECTED:
+    raise RuntimeError(
+        f"this run is bound to transformers=={TRANSFORMERS_VERSION_EXPECTED}, "
+        f"but the runtime imported {TRANSFORMERS_VERSION}. Restart the session "
+        "and rerun the pinned bootstrap before loading Gemma"
+    )
 print(f"cuda available: {torch.cuda.is_available()}")
 if torch.cuda.is_available():
     _properties = torch.cuda.get_device_properties(0)

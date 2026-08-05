@@ -16,7 +16,7 @@ The pilot recorded:
 
 That observation is correct and reproducible. It is **not** a statement that the
 pinned checkpoint lacks audio. Against `google/gemma-4-E4B-it` at revision
-`fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd` with `transformers==5.10.2`:
+`fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd` with `transformers==5.13.1`:
 
 ```python
 processor(text="Answer with exactly one word.", audio=waveform, return_tensors="pt")

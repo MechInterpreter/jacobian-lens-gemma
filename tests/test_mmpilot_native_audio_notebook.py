@@ -142,6 +142,13 @@ def test_every_switch_is_committed_false(notebook):
         assert assignments == ["False"], (name, assignments)
 
 
+def test_real_audio_runtime_pins_the_audited_transformers_release(notebook):
+    source = _code_source(notebook)
+    assert '"transformers==5.13.1"' in source
+    assert 'TRANSFORMERS_VERSION_EXPECTED = "5.13.1"' in source
+    assert "TRANSFORMERS_VERSION != TRANSFORMERS_VERSION_EXPECTED" in source
+
+
 def test_the_three_published_lens_pins_are_the_confirmed_ones(notebook):
     source = _code_source(notebook)
     for layer, checksum in PUBLISHED_PINS.items():
