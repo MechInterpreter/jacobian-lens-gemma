@@ -52,22 +52,22 @@ supplying invented values.
 Three consequences follow, and they shape the entire study:
 
 1. **"More prompts" reduces estimator *variance*, nothing else.** The estimator
-   is unbiased for its own target regardless of scale. Increasing 1k → 10k
+   is unbiased for its own target regardless of scale. Increasing 100 → 1,000
    shrinks the Monte-Carlo error of `Ĵ_l` by roughly `√10 ≈ 3.16×`. It cannot
    fix a lens that is wrong in expectation.
 2. **Scale points are exactly nested for free.** Because the estimator is a
    running mean over a deterministically ordered prompt list, the sufficient
-   statistic (`jacobian_sum`, `n_done`) at prompt 1,000 *is* the 1k lens, and
-   the same accumulator continued to prompt 10,000 *is* the 10k lens. The 1k,
-   5k and 10k lenses cost exactly as much as the 10k lens alone. This is
+   statistic (`jacobian_sum`, `n_done`) at prompt 100 *is* the 100-prompt lens,
+   and the same accumulator continued to 250 and 1,000 gives the later lenses.
+   The three lenses cost exactly as much as the 1k lens alone. This is
    implemented as snapshots of the accumulator, not as three separate fits.
 3. **The primary source predicts the study will find a plateau immediately.**
    The upstream README states verbatim: *"The paper's lenses use 1000 sequences
    of 128 tokens from a pretraining-like corpus. Quality saturates quickly
-   (§9.3); ~100 prompts is usable."* Our first scale point (1,000) is already
-   the paper's full production scale, and 10× beyond the stated usable
-   threshold. **If earlier layers fail at 1k, the primary source gives us no
-   reason to expect 5k or 10k to rescue them.** That is a real answer to the
+   (§9.3); ~100 prompts is usable."* Our first scale point tests that stated
+   usable threshold, and the 1,000-prompt endpoint matches the paper's full
+   production scale. **If earlier layers fail at 1k, the primary source gives us no
+   reason to expect larger runs to rescue them.** That is a real answer to the
    scientific question, not a disappointing one — see §6.
 
 ---
@@ -163,7 +163,7 @@ decompose them.
    could not confirm a section with that number.** We cite the README's claim as
    the README's claim, and flag the paper-side location as **requiring
    verification**. Do not repeat "§9.3" as if it were read directly.
-6. **The paper's own guidance argues against the 5k and 10k scale points.**
+6. **The paper's own guidance supports staging before the 1k endpoint.**
    See §1.3 and §6.
 
 ---
@@ -178,7 +178,7 @@ adds orchestration, not physics.
 | Jacobian estimator | `jlens/fitting.py:100-213` | **As-is, untouched** | none | The estimator stays byte-identical to upstream; our numbers are comparable to the paper's by construction |
 | Multi-layer capture in one pass | `jlens.fitting.jacobian_for_prompt` | **As-is** | none | All 8 layers already come from **one** forward and one set of backward passes — `torch.autograd.grad(inputs=source_activations)` takes every source layer at once (`fitting.py:187-192`). Nothing to build. |
 | Running-mean accumulation + resume | `jlens.fitting.fit` | **As-is** | none | Already atomic, already refuses incompatible `source_layers`/`target_layer`/`skip_first` |
-| Scale snapshots | `fit(on_prompt=...)` hook | **Reuse, new callback** | new observer | `on_prompt` exposes `jacobian_sum` and `n_done` (`fitting.py:412-428`), so 1k/5k/10k snapshots cost **zero** extra compute |
+| Scale snapshots | `fit(on_prompt=...)` hook | **Reuse, new callback** | new observer | `on_prompt` exposes `jacobian_sum` and `n_done` (`fitting.py:412-428`), so 100/250/1k snapshots cost **zero** extra compute |
 | Lens container / save / load / merge | `jlens/lens.py` | **As-is** | none | fp16 serialization, `merge()` for sharded runs |
 | Model loading, revision pinning | `jlens.gemma4.load_gemma4`, `resolve_revision` | **As-is** | none | Immutable SHA resolved before download; `allow_model_load` gate preserved |
 | Architecture verification | `jlens.gemma4.verify_architecture` | **As-is** | none | Hard-fails on MoE/width/depth/trainable params |
@@ -259,12 +259,9 @@ Given §1, the sharpest available statement is:
 > result is explained as an underpowered estimate and nothing about Gemma's
 > depth was ever established by it.
 
-**Both outcomes are informative, and the 1k point carries almost all of the
-information.** The 5k and 10k points test whether the primary source's
-saturation claim holds for Gemma 4 — a real but secondary question, and one
-whose cost is disproportionate (see the protocol's budget). This is why the
-plateau rule is written to *stop*, and why `RUN_OPTIONAL_LARGE_SCALE` exists but
-defaults to False and is not reachable automatically.
+**Both outcomes are informative.** The 100 and 250 checkpoints test the primary
+source's saturation claim economically; the 1k endpoint matches the paper. No
+larger scale is authorized in the two-week protocol.
 
 ---
 

@@ -30,7 +30,7 @@ What the fingerprint binds, and why each entry is there:
   rescoring them, which is what makes the gate predeclared in practice;
 * the plateau-rule digest — same reason, for the scale decision;
 * the scale schedule — a run that was going to stop at 1k is not the same run
-  as one that will continue to 10k, because the nested prefix must match.
+  as one that will continue to 1k, because the nested prefix must match.
 """
 
 from __future__ import annotations

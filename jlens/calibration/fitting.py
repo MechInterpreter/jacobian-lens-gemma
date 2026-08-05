@@ -9,15 +9,15 @@ property that makes the study a reproduction rather than a re-derivation.
 
 The one idea here is the **scale snapshot**. Because ``J_l`` is a running mean
 over a deterministically ordered prompt list, the accumulator's state after
-1,000 prompts *is* the 1,000-prompt lens. So the three scale points are taken as
+100 prompts *is* the 100-prompt lens. So the three scale points are taken as
 snapshots of one accumulator rather than three separate fits:
 
-    fit(prompts[:10_000], on_prompt=snapshot_scales(...))
-       -> writes lens.scale1000.pt  when n_done hits 1_000
-       -> writes lens.scale5000.pt  when n_done hits 5_000
-       -> writes lens.scale10000.pt when n_done hits 10_000
+    fit(prompts[:1_000], on_prompt=snapshot_scales(...))
+       -> writes lens.scale100.pt  when n_done hits 100
+       -> writes lens.scale250.pt  when n_done hits 250
+       -> writes lens.scale1000.pt when n_done hits 1_000
 
-The 1k, 5k and 10k lenses therefore cost exactly as much as the 10k lens alone,
+The 100, 250 and 1k lenses therefore cost exactly as much as the 1k lens alone,
 and each is bit-identical to what a standalone fit on the same prefix would
 produce. A test asserts that equality rather than assuming it.
 

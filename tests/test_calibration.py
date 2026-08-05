@@ -58,6 +58,7 @@ from jlens.calibration.mock import (
 )
 from jlens.calibration.plan import (
     CALIBRATION_LAYERS,
+    OPTIONAL_SCALE_POINTS,
     SCALE_POINTS,
     build_capture_plan,
     estimate_budget,
@@ -992,14 +993,19 @@ def test_failed_layers_keep_diagnostics_and_are_never_marked_validated():
 # ------------------------------------------------------------------- budget
 
 
+def test_two_week_scale_schedule_stops_at_the_paper_endpoint():
+    assert SCALE_POINTS == (100, 250, 1_000)
+    assert OPTIONAL_SCALE_POINTS == ()
+
+
 def test_budget_rows_are_cumulative_and_carry_an_uncertainty_range():
     plan = build_capture_plan()
     budget = estimate_budget(plan, scale_points=SCALE_POINTS)
     hours = [row["fitting_hours_central"] for row in budget.per_scale]
     assert hours == sorted(hours)
-    # nested, so 5k is 5x 1k rather than 1k + 5k
-    assert budget.row(5_000)["fitting_hours_central"] == pytest.approx(
-        5 * budget.row(1_000)["fitting_hours_central"], rel=1e-3
+    # nested, so 250 is 2.5x 100 rather than 100 + 250
+    assert budget.row(250)["fitting_hours_central"] == pytest.approx(
+        2.5 * budget.row(100)["fitting_hours_central"], rel=1e-3
     )
     for row in budget.per_scale:
         assert row["fitting_hours_low"] < row["fitting_hours_central"]

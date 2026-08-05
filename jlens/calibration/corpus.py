@@ -16,8 +16,8 @@ Three jobs, in order:
    Silently dropping the offending record would quietly change the split.
 
 Nested scale subsets are produced here too: within the fit partition, records
-are ordered by a second stable hash, so the first 1,000 are always a subset of
-the first 5,000. That is what makes scale the only variable that changes
+are ordered by a second stable hash, so the first 100 are always a subset of
+the first 250 and 1,000. That is what makes scale the only variable that changes
 between scale points — and, because the estimator is a running mean, what makes
 the three scale points cost as much as the largest alone.
 
@@ -44,7 +44,7 @@ SPLIT_PROTOCOL = "stable-hash-bucket-v1"
 SPLIT_SEED = 20260805
 
 #: Buckets per partition. Fit is deliberately large: the study needs up to
-#: 10,000 fit prompts but only 128 each for development and confirmation.
+#: 1,000 fit prompts but only 128 each for development and confirmation.
 N_BUCKETS = 100
 FIT_BUCKETS = (0, 79)
 VALIDATION_BUCKETS = (80, 89)
@@ -246,8 +246,8 @@ def nested_order_key(record_id: str, *, seed: int = SPLIT_SEED) -> str:
 class Partitions:
     """Independent fit / development / confirmation record sets.
 
-    ``fit`` is stored in nested scale order: ``fit[:1000]`` is the 1k scale
-    point and is a strict prefix of ``fit[:5000]``.
+    ``fit`` is stored in nested scale order: ``fit[:100]`` is the first scale
+    point and is a strict prefix of ``fit[:250]`` and ``fit[:1000]``.
     """
 
     fit: tuple[CorpusRecord, ...]
@@ -367,7 +367,7 @@ def nested_subset(records: Sequence[CorpusRecord], n: int) -> tuple[CorpusRecord
 
     Raises:
         ValueError: If fewer than ``n`` records are available. Quietly
-            returning a shorter list would make a 5k scale point that is
+            returning a shorter list would make a named scale snapshot that is
             secretly a 4,317k scale point.
     """
     if n < 0:

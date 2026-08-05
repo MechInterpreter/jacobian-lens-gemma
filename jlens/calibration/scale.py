@@ -7,10 +7,11 @@ anything at layers earlier than 38, and where does it stop buying?**
 
 Two rules decide it, and both are fixed here before any number exists:
 
-* :data:`PLATEAU_RULE` — when, if ever, extending past 10,000 prompts is
-  justified. It is a conjunction of four clauses, three of which must show that
-  an *earlier* layer is still genuinely climbing, and one of which forbids
-  trading a late layer away to get there.
+* :data:`PLATEAU_RULE` — whether improvement remains visible at the
+  paper-matched 1,000-prompt endpoint. It is a conjunction of four clauses,
+  three of which must show that an *earlier* layer is still genuinely climbing,
+  and one of which forbids trading a late layer away to get there. The result
+  is diagnostic; this two-week protocol authorizes no extension beyond 1,000.
 * :func:`select_scale` — which scale point the study reports. Parsimony:
   the smallest scale that already reaches the largest scale's eligible set.
 
@@ -63,7 +64,7 @@ COMPARED_METRICS = (
 
 @dataclass(frozen=True)
 class PlateauRule:
-    """When extending past the largest planned scale point is justified.
+    """Whether the estimator is still improving at the largest scale point.
 
     All four clauses must hold. Attributes mirror the frozen config.
 
@@ -84,7 +85,7 @@ class PlateauRule:
             a layer that already passed.
     """
 
-    version: str = "conservative-earlier-layer-improvement-v1"
+    version: str = "paper-endpoint-convergence-diagnostic-v2"
     earlier_layers: tuple[int, ...] = (8, 14, 20, 26, 32)
     min_mrr_improvement: float = 0.05
     min_median_midrank_relative_drop: float = 0.20
@@ -108,7 +109,7 @@ PREDECLARED PLATEAU RULE — {self.version}
 Digest: {self.digest}
 Fixed before any scale-comparison number exists. Not revisable afterwards.
 
-Extending past the largest planned scale point is justified ONLY IF ALL hold:
+The estimator is marked STILL IMPROVING at the largest scale ONLY IF ALL hold:
 
   1. Some layer in {list(self.earlier_layers)} that FAILED the gate at the
      second-largest scale improves at the largest scale by
@@ -120,11 +121,10 @@ Extending past the largest planned scale point is justified ONLY IF ALL hold:
      improvement (still climbing, not decaying into a plateau).
   4. No layer that passed at the second-largest scale fails at the largest.
 
-Otherwise the verdict is {PLATEAU_REACHED} and the study stops.
+Otherwise the verdict is {PLATEAU_REACHED}.
 
-Even when the rule fires, nothing runs automatically: RUN_OPTIONAL_LARGE_SCALE
-and CONFIRM_OPTIONAL_LARGE_SCALE_BUDGET are separate manual switches, and the
-optional scales cost 25-50x the 1,000-prompt point.
+This rule is diagnostic only. The two-week protocol stops at the paper-matched
+1,000-prompt endpoint whether or not improvement remains visible there.
 """
 
 
@@ -396,10 +396,10 @@ def evaluate_plateau(
         "candidates": candidates,
         "eligible_layers_lost": lost,
         "runs_automatically": False,
+        "maximum_authorized_scale": 1_000,
         "note": (
-            "Even when justified, the optional extension requires "
-            "RUN_OPTIONAL_LARGE_SCALE and CONFIRM_OPTIONAL_LARGE_SCALE_BUDGET "
-            "to be set by hand."
+            "This is a convergence diagnostic, not authorization for a larger "
+            "run. The two-week protocol stops at the paper-matched 1,000 prompts."
         ),
     }
     payload["plateau_checksum"] = payload_checksum(payload)

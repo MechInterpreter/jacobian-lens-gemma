@@ -16,9 +16,10 @@ number of prompts reduces estimator variance and does nothing else.
 
 Two consequences are load-bearing:
 
-* **Scale points nest for free.** The accumulator at prompt 1,000 *is* the 1k
-  lens; continuing the same accumulator to 10,000 *is* the 10k lens. The three
-  scale points cost exactly as much as the largest alone.
+* **Scale points nest for free.** The accumulator at prompt 100 *is* the
+  100-prompt lens; continuing the same accumulator to 250 and then 1,000 gives
+  the later snapshots. The three scale points cost exactly as much as the
+  largest confirmed prefix alone.
 * **A three-way split is still required**, not for the estimator — which cannot
   overfit — but for the *gate*, which is a decision procedure applied to
   eight layers at three scales and would otherwise be selected on its own

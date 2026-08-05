@@ -1,5 +1,5 @@
 {
-  "protocol_version": "research-grade-multilayer-text-jlens-calibration-v1",
+  "protocol_version": "research-grade-multilayer-text-jlens-calibration-v2-feasible-scales",
   "artifact_format_version": "jlens.calibration.artifact.v1",
   "frozen_utc": "2026-08-05",
   "mode": "research_grade_calibration",
@@ -83,12 +83,14 @@
   },
 
   "scale": {
-    "points": [1000, 5000, 10000],
+    "points": [100, 250, 1000],
     "nested": true,
-    "nesting_note": "The estimator is a running mean over a deterministically ordered fit list, so the accumulator at prompt 1000 IS the 1k lens. Snapshots are taken from the accumulator; the three scale points cost exactly as much as the largest alone.",
-    "optional_points": [25000, 50000],
+    "nesting_note": "The estimator is a running mean over a deterministically ordered fit list, so the accumulator at prompt 100 IS the 100-prompt lens and is continued to 250 and the paper-matched 1000-prompt endpoint. Snapshots cost exactly as much as the largest confirmed prefix alone.",
+    "optional_points": [],
     "optional_enabled": false,
-    "optional_requires_plateau_rule_and_explicit_budget_confirmation": true
+    "optional_requires_plateau_rule_and_explicit_budget_confirmation": false,
+    "maximum_authorized_scale": 1000,
+    "larger_scale_policy": "not authorized in the two-week study"
   },
 
   "fitting": {
@@ -145,7 +147,7 @@
   },
 
   "plateau_rule": {
-    "version": "conservative-earlier-layer-improvement-v1",
+    "version": "paper-endpoint-convergence-diagnostic-v2",
     "declared_before_results": true,
     "earlier_layers_of_interest": [8, 14, 20, 26, 32],
     "min_mrr_improvement": 0.05,
@@ -153,7 +155,9 @@
     "min_continuation_fraction": 0.5,
     "require_no_degeneracy_increase": true,
     "require_no_eligible_layer_lost": true,
-    "scale_selection": "smallest scale point whose development eligible-layer set equals the largest computed scale's set; otherwise the largest computed scale"
+    "scale_selection": "smallest scale point whose development eligible-layer set equals the largest computed scale's set; otherwise the largest computed scale",
+    "diagnostic_only": true,
+    "authorizes_extension": false
   },
 
   "publication": {
@@ -178,10 +182,9 @@
   },
 
   "budget_confirmation": {
-    "CONFIRM_1K_BUDGET": false,
-    "CONFIRM_5K_BUDGET": false,
-    "CONFIRM_10K_BUDGET": false,
-    "CONFIRM_OPTIONAL_LARGE_SCALE_BUDGET": false
+    "CONFIRM_100_BUDGET": false,
+    "CONFIRM_250_BUDGET": false,
+    "CONFIRM_1K_BUDGET": false
   },
 
   "paths": {

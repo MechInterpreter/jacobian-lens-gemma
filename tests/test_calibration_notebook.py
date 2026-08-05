@@ -52,11 +52,9 @@ REQUIRED_SECTIONS = [
 COMMITTED_SWITCHES = (
     "RUN_REAL_CALIBRATION",
     "RUN_MODEL_STAGES",
+    "CONFIRM_100_BUDGET",
+    "CONFIRM_250_BUDGET",
     "CONFIRM_1K_BUDGET",
-    "CONFIRM_5K_BUDGET",
-    "CONFIRM_10K_BUDGET",
-    "RUN_OPTIONAL_LARGE_SCALE",
-    "CONFIRM_OPTIONAL_LARGE_SCALE_BUDGET",
     "RUN_FINAL_CONFIRMATION",
     "PUBLISH_VALIDATED_LENSES",
 )
@@ -140,9 +138,11 @@ def test_notebook_states_there_is_no_optimizer(notebook):
 
 def test_notebook_states_the_budget_honestly(notebook):
     source = _source(notebook)
-    assert "23 L4-hours" in source
-    assert "233 L4-hours" in source
-    assert "ten days" in source
+    assert "paper-matched 1,000-prompt endpoint" in source
+    assert "100 prompts is the upstream usable-scale benchmark" in source
+    assert "no scale beyond 1,000" in source
+    assert "RUN_OPTIONAL_LARGE_SCALE" not in source
+    assert "CONFIRM_OPTIONAL_LARGE_SCALE_BUDGET" not in source
 
 
 def test_notebook_carries_the_mock_disclaimer(notebook):
@@ -292,12 +292,13 @@ def test_comparison_and_plateau_are_computed(default_run):
 
 def test_the_optional_extension_does_not_run_even_when_the_rule_fires(default_run):
     assert default_run["plateau_extension_justified"] is True
-    assert default_run["run_optional_large_scale"] is False
+    assert default_run["plateau_runs_automatically"] is False
+    assert default_run["budget"]["scale_points"][-1] == 1_000
 
 
 def test_budget_is_reported_for_the_real_scale_points(default_run):
     scales = [row["scale"] for row in default_run["budget"]["per_scale"]]
-    assert scales == [1_000, 5_000, 10_000]
+    assert scales == [100, 250, 1_000]
     assert default_run["budget"]["cumulative_not_additive"] is True
 
 

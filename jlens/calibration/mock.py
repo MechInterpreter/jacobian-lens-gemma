@@ -82,7 +82,7 @@ MOCK_VOCAB = 512
 #: The frozen grid, unchanged.
 MOCK_LAYERS = (8, 14, 20, 26, 32, 35, 38, 40)
 
-#: Small synthetic equivalents of 1k / 5k / 10k. Nesting behaviour is what is
+#: Small synthetic equivalents of 100 / 250 / 1k. Nesting behaviour is what is
 #: under test, not the absolute numbers.
 MOCK_SCALE_POINTS = (8, 16, 32)
 

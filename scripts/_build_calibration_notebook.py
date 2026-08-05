@@ -56,22 +56,24 @@ workflow an "optimizer configuration" is describing a different object.
 
 **The scale points are free.** Because the estimator is a running mean over a
 deterministically ordered list, the accumulator at prompt 1,000 *is* the 1k
-lens. The 1k/5k/10k lenses are snapshots of **one** accumulator, so all three
-cost exactly as much as the 10k lens alone.
+lens. The 100/250/1k lenses are snapshots of **one** accumulator, so all three
+cost exactly as much as the 1k lens alone.
 
 **The primary source predicts a plateau immediately.** The upstream README
 states: *"The paper's lenses use 1000 sequences of 128 tokens from a
 pretraining-like corpus. Quality saturates quickly (§9.3); ~100 prompts is
-usable."* Our first scale point is already the paper's production scale. **If
-earlier layers fail at 1k, there is no source-backed reason to expect 5k or 10k
+usable."* Our first scale point tests that usable-scale claim, while the
+1,000-prompt endpoint matches the paper's production scale. **If earlier layers
+fail at 1k, there is no source-backed reason to expect larger runs
 to rescue them** — and that is a real answer, not a disappointing one.
 
-**The budget is uncomfortable and section 9 says so in numbers.** 1,000 prompts
-is ~23 L4-hours (2–3 Colab sessions). 10,000 is ~233 L4-hours — about ten days
-of continuous L4. Read section 9 before setting any switch.
+**The budget is staged and section 9 says so in numbers.** The 100- and
+250-prompt checkpoints test the upstream saturation claim before the
+paper-matched 1,000-prompt endpoint commits ~23 L4-hours. Read section 9 before
+setting any switch.
 
 **Nothing starts by itself.** `RUN_REAL_CALIBRATION`, `RUN_MODEL_STAGES`, every
-`CONFIRM_*_BUDGET`, `RUN_OPTIONAL_LARGE_SCALE`, `RUN_FINAL_CONFIRMATION` and
+`CONFIRM_*_BUDGET`, `RUN_FINAL_CONFIRMATION` and
 `PUBLISH_VALIDATED_LENSES` are all False in the committed notebook and must each
 be set by hand. Opening this notebook and running every cell performs a
 deterministic MOCK run and touches no model, no Hub, no Drive and no corpus.
@@ -203,8 +205,8 @@ are separate from the run switches so that "I want to do this" and "I have read
 what it costs" are two different decisions.
 
 The scale schedule is derived from the budget confirmations and is **nested**:
-you cannot confirm 5,000 without also confirming 1,000, because the 5k lens is
-the 1k accumulator continued.
+you cannot confirm 250 without also confirming 100, or 1,000 without both,
+because every larger lens is the smaller accumulator continued.
 """
 )
 
@@ -218,13 +220,10 @@ RUN_REAL_CALIBRATION = False
 RUN_MODEL_STAGES = False
 RUN_FINAL_CONFIRMATION = False
 PUBLISH_VALIDATED_LENSES = False
-RUN_OPTIONAL_LARGE_SCALE = False
-
 # ---- budget confirmations (read section 9 first) -------------------------
+CONFIRM_100_BUDGET = False
+CONFIRM_250_BUDGET = False
 CONFIRM_1K_BUDGET = False
-CONFIRM_5K_BUDGET = False
-CONFIRM_10K_BUDGET = False
-CONFIRM_OPTIONAL_LARGE_SCALE_BUDGET = False
 
 import json
 from pathlib import Path
@@ -242,7 +241,6 @@ from jlens.calibration.gate import (
 )
 from jlens.calibration.plan import (
     CALIBRATION_LAYERS,
-    OPTIONAL_SCALE_POINTS,
     SCALE_POINTS,
     build_capture_plan,
     normalized_depth,
@@ -270,7 +268,7 @@ if tuple(CONFIG["sites"]["source_layers"]) != tuple(LAYERS):
 _CONFIRMED = [
     scale
     for scale, confirmed in zip(
-        SCALE_POINTS, (CONFIRM_1K_BUDGET, CONFIRM_5K_BUDGET, CONFIRM_10K_BUDGET)
+        SCALE_POINTS, (CONFIRM_100_BUDGET, CONFIRM_250_BUDGET, CONFIRM_1K_BUDGET)
     )
     if confirmed
 ]
@@ -286,13 +284,6 @@ MODEL_STAGES_ENABLED = bool(
     RUN_REAL_CALIBRATION and RUN_MODEL_STAGES and ACTIVE_SCALE_POINTS
 )
 MODE = "real" if MODEL_STAGES_ENABLED else "mock"
-
-if RUN_OPTIONAL_LARGE_SCALE and not CONFIRM_OPTIONAL_LARGE_SCALE_BUDGET:
-    raise RuntimeError(
-        "RUN_OPTIONAL_LARGE_SCALE is set without "
-        "CONFIRM_OPTIONAL_LARGE_SCALE_BUDGET. The optional scales cost 25-50x "
-        f"the 1,000-prompt point ({list(OPTIONAL_SCALE_POINTS)} prompts)."
-    )
 
 PLAN = build_capture_plan(
     layers=LAYERS,
@@ -331,7 +322,7 @@ Only mounted for a real run, and only to hold the run directory. The 210 MiB
 accumulator checkpoint and the scale snapshots live here so that a disconnected
 session loses at most one checkpoint interval.
 
-**Put the HuggingFace cache on Drive too.** At ~16 GB per model download and 2–25
+**Put the HuggingFace cache on Drive too.** At ~16 GB per model download and 1–3
 sessions, re-downloading Gemma every session is the second-largest hidden cost
 in this study.
 """
@@ -495,10 +486,10 @@ print("  schedule            " + CONFIG["fitting"]["schedule"])
 print("  " + CONFIG["fitting"]["why_not_applicable"])
 print()
 print("  Consequence 1: more prompts reduces estimator VARIANCE and nothing else.")
-print("  Consequence 2: scale points nest exactly, so 1k/5k/10k cost as much")
-print("                 as 10k alone (snapshots of one accumulator).")
+print("  Consequence 2: scale points nest exactly, so 100/250/1k cost as much")
+print("                 as 1k alone (snapshots of one accumulator).")
 print("  Consequence 3: the upstream README says quality saturates quickly and")
-print("                 ~100 prompts is usable. Our first point is 1,000.")
+print("                 ~100 prompts is usable; that is our first point.")
 print()
 
 BASELINE = baseline_manifest()
@@ -582,7 +573,7 @@ PARTITIONS = build_partitions(
     n_confirmation=N_CONFIRMATION_PROMPTS,
 )
 
-# MOCK uses small synthetic equivalents of 1k/5k/10k; nesting is what is tested.
+# MOCK uses small synthetic equivalents of 100/250/1k; nesting is what is tested.
 if MODEL_STAGES_ENABLED:
     SCALES = tuple(PLANNED_SCALES)
 else:
@@ -684,8 +675,8 @@ markdown(
     """
 ## 8. Model architecture and hook audit
 
-Verifies every assumption the estimator depends on before ~23 hours of GPU time
-are committed: dense routing, 42 layers, `d_model` 2560, vocab 262144, frozen
+Verifies every assumption the estimator depends on before any GPU time is
+committed: dense routing, 42 layers, `d_model` 2560, vocab 262144, frozen
 parameters, tied unembedding, and the residual site the lens reads.
 
 In MOCK mode this is a tiny frozen CPU stack with the same interface — real
@@ -801,8 +792,8 @@ real measurement on this project's own hardware — 100 prompts × 128 tokens ×
 7 layers in 9,665.4 s on an NVIDIA L4 (`docs/pilot_report.md`) — so the
 uncertainty band is wide and stated.
 
-The scale rows are **cumulative, not additive**: reaching 10,000 also produces
-the 1,000 and 5,000 lenses.
+The scale rows are **cumulative, not additive**: reaching 1,000 also produces
+the 100- and 250-prompt lenses.
 """
 )
 
@@ -820,9 +811,10 @@ BUDGET = estimate_budget(
 print(format_budget(BUDGET, PLAN))
 print()
 print("HONEST SUMMARY")
-print("  1,000 prompts fits a research phase: 2-3 Colab sessions.")
-print("  10,000 prompts is ~10 days of continuous L4 and does not.")
-print("  The optional 25k/50k points are 1-2 months on one L4.")
+print("  100 prompts is the upstream usable-scale benchmark (~2-3 hours).")
+print("  250 prompts tests whether earlier layers are still improving (~6 hours).")
+print("  1,000 prompts matches the paper's construction scale (~23 hours).")
+print("  This two-week protocol authorizes no scale beyond 1,000.")
 print("  A fit parallelizes exactly across runtimes via JacobianLens.merge(),")
 print("  so N concurrent L4s divide the wall time by N.")
 '''
@@ -845,10 +837,9 @@ code(
 # 10. What this execution will actually do.
 print(f"RUN_REAL_CALIBRATION          {RUN_REAL_CALIBRATION}")
 print(f"RUN_MODEL_STAGES              {RUN_MODEL_STAGES}")
+print(f"CONFIRM_100_BUDGET            {CONFIRM_100_BUDGET}")
+print(f"CONFIRM_250_BUDGET            {CONFIRM_250_BUDGET}")
 print(f"CONFIRM_1K_BUDGET             {CONFIRM_1K_BUDGET}")
-print(f"CONFIRM_5K_BUDGET             {CONFIRM_5K_BUDGET}")
-print(f"CONFIRM_10K_BUDGET            {CONFIRM_10K_BUDGET}")
-print(f"RUN_OPTIONAL_LARGE_SCALE      {RUN_OPTIONAL_LARGE_SCALE}")
 print(f"RUN_FINAL_CONFIRMATION        {RUN_FINAL_CONFIRMATION}")
 print(f"PUBLISH_VALIDATED_LENSES      {PUBLISH_VALIDATED_LENSES}")
 print()
@@ -1181,9 +1172,8 @@ markdown(
 ## 15. Apply the predeclared plateau rule
 
 The rule was fixed before any number existed and its digest is bound into the
-run fingerprint. Even when it fires, **nothing runs automatically**: the
-optional extension needs two more switches, and it costs 25–50× the
-1,000-prompt point.
+run fingerprint. Here it reports whether improvement is still visible at the
+paper-matched 1,000-prompt endpoint. It never authorizes a larger run.
 """
 )
 
@@ -1207,11 +1197,11 @@ print(f"selected scale         {SELECTION['selected_scale']:,}")
 print(f"reason                 {SELECTION['reason']}")
 print(f"eligible at selection  {SELECTION['eligible_at_selected_scale']}")
 
-if PLATEAU["extension_justified"] and not RUN_OPTIONAL_LARGE_SCALE:
+if PLATEAU["extension_justified"]:
     print()
-    print("The rule fired, and the extension is NOT running: set")
-    print("RUN_OPTIONAL_LARGE_SCALE and CONFIRM_OPTIONAL_LARGE_SCALE_BUDGET by")
-    print(f"hand to reach {list(OPTIONAL_SCALE_POINTS)} prompts.")
+    print("The estimator is still improving at the final 1,000-prompt endpoint.")
+    print("That is recorded as a limitation; this two-week protocol authorizes")
+    print("no larger scale and will not start one automatically.")
 '''
 )
 

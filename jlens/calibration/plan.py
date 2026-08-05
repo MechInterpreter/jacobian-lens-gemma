@@ -39,12 +39,14 @@ from jlens.mmpilot.store import payload_checksum
 #: established layer 38 so a pass there cannot be read as an isolated point.
 CALIBRATION_LAYERS = (8, 14, 20, 26, 32, 35, 38, 40)
 
-#: Nested scale points. See :mod:`jlens.calibration.scale` for the plateau rule.
-SCALE_POINTS = (1_000, 5_000, 10_000)
+#: Nested scale points. The 1,000-prompt endpoint matches the paper; the 100
+#: and 250 snapshots make the upstream saturation claim testable without
+#: committing a full day of L4 time before the estimator is known to work.
+SCALE_POINTS = (100, 250, 1_000)
 
-#: Never reached automatically; requires its own switch and its own budget
-#: confirmation.
-OPTIONAL_SCALE_POINTS = (25_000, 50_000)
+#: No larger scale belongs to the two-week study. Reaching this tuple already
+#: reproduces the paper's published 1,000 x 128-token construction scale.
+OPTIONAL_SCALE_POINTS: tuple[int, ...] = ()
 
 GEMMA4_N_LAYERS = 42
 GEMMA4_D_MODEL = 2560
@@ -219,7 +221,7 @@ class Budget:
     """Compute and storage estimate for one capture plan and a scale schedule.
 
     Scale rows are **cumulative**, because the scale points are nested: reaching
-    10,000 also produces the 1,000 and 5,000 lenses. Summing the rows would
+    1,000 also produces the 100 and 250 lenses. Summing the rows would
     triple-count the same work.
     """
 

@@ -86,14 +86,14 @@ bucket = int(sha256(f"{20260805}|{record_id}").hexdigest()[:8], 16) % 100
 
 | Partition | Buckets | Size drawn | Role |
 |---|---|---|---|
-| Fit | 0–79 | up to 10,000 (50,000 if extended) | estimates `J_l` |
+| Fit | 0–79 | up to 1,000 | estimates `J_l` |
 | Development / validation | 80–89 | **128** | every scale-point decision |
 | Final confirmation | 90–99 | **128** | touched once, at the end |
 
 **Nested scale ordering.** Within the fit partition, prompts are ordered by
-`sha256(f"{split_seed}|nested|{record_id}")`. The first 1,000 are the 1k point,
-the first 5,000 the 5k point. Nesting is therefore exact and scale is the only
-variable that changes between points.
+`sha256(f"{split_seed}|nested|{record_id}")`. The first 100 are the first point,
+the first 250 the second, and the first 1,000 the paper-matched endpoint.
+Nesting is therefore exact and scale is the only variable that changes.
 
 **The confirmation set influences nothing.** It does not participate in corpus
 selection, scale selection, threshold setting, layer selection, or any stopping
@@ -170,7 +170,7 @@ would satisfy a distinct-count floor while measuring almost nothing.
 
 ## 7. Scale study and the plateau rule
 
-Scale points **1,000 / 5,000 / 10,000**, exactly nested, evaluated at each point
+Scale points **100 / 250 / 1,000**, exactly nested, evaluated at each point
 on the same 128 development prompts with the same controls.
 
 Reported per layer per scale: fitting-loss surrogate (`mean_rel_change` of the
@@ -179,23 +179,21 @@ median midrank, optimistic and pessimistic medians, top-10 inclusion, unique
 top-1, tied-at-max rate, per-fold MRR, target diversity, margins over each
 control, logit-lens diagnostic, finiteness, and convergence status.
 
-### Plateau rule — `conservative-earlier-layer-improvement-v1`
+### Endpoint convergence diagnostic — `paper-endpoint-convergence-diagnostic-v2`
 
-Extension past 10,000 is justified **only if all four hold**:
+The estimator is marked still improving at 1,000 **only if all four hold**:
 
-1. Some layer in **{8, 14, 20, 26, 32}** that is INELIGIBLE at 5k improves
-   between 5k and 10k by **ΔMRR ≥ 0.05 and a ≥ 20% relative drop in median
+1. Some layer in **{8, 14, 20, 26, 32}** that is INELIGIBLE at 250 improves
+   between 250 and 1,000 by **ΔMRR ≥ 0.05 and a ≥ 20% relative drop in median
    midrank** — both, on the development set.
-2. That layer's tied-at-max rate does **not** increase from 5k to 10k.
-3. That layer's 5k→10k improvement is **at least 50%** of its 1k→5k improvement
+2. That layer's tied-at-max rate does **not** increase from 250 to 1,000.
+3. That layer's 250→1,000 improvement is **at least 50%** of its 100→250 improvement
    (i.e. it is still climbing, not decaying into a plateau).
-4. **No** layer eligible at 5k becomes ineligible at 10k.
+4. **No** layer eligible at 250 becomes ineligible at 1,000.
 
-Otherwise the verdict is `PLATEAU_REACHED` and the study stops at 10k. The rule
-is not revisable after seeing results; its text is checksummed into the
-fingerprint. Even when it fires, the extension does **not** run automatically —
-`RUN_OPTIONAL_LARGE_SCALE` and `CONFIRM_OPTIONAL_LARGE_SCALE_BUDGET` are separate
-manual switches.
+Otherwise the verdict is `PLATEAU_REACHED`. The diagnostic is not revisable
+after seeing results; its text is checksummed into the fingerprint. It never
+authorizes a larger fit: this two-week protocol stops at 1,000 prompts.
 
 ### Scale selection
 
@@ -261,20 +259,16 @@ second measurement, and the pilot never recorded full-fit peak memory.
 
 | Scale | Central | Range | 12-hour Colab sessions |
 |---|---|---|---|
+| 100 | **2.3 h** | 2.2–2.9 h | **1** |
+| 250 | **5.8 h** | 5.5–7.3 h | **1** |
 | 1,000 | **23.3 h** | 22.2–29.1 h | **2–3** |
-| 5,000 | **116.6 h** | 110.8–145.7 h | **10–13** |
-| 10,000 | **233.2 h** | 221.5–291.5 h | **20–25** |
-| *(optional 25,000)* | *582.9 h* | *553.8–728.6 h* | *49–61* |
-| *(optional 50,000)* | *1,165.8 h* | *1,107.5–1,457.2 h* | *98–122* |
 
 Because the scale points are nested, these are **cumulative, not additive**:
-reaching 10,000 costs 233 h in total and yields all three lenses. Reaching only
-1,000 costs 23.3 h.
+reaching 1,000 costs 23.3 h in total and also yields the 100 and 250 snapshots.
 
-**This must be said plainly: 10,000 prompts is roughly ten days of continuous L4
-time, and the optional extensions are one to two months.** Neither fits inside a
-two-week research phase alongside the multimodal work. The 1,000-prompt point
-does fit, at two or three sessions.
+The staged checkpoints preserve the two-week project: 100 tests the upstream
+usable-scale claim today, 250 measures continued improvement, and 1,000 retains
+direct parity with the paper's published construction scale.
 
 The mitigation that exists and is real: `JacobianLens.merge()` combines lenses
 fitted on disjoint prompt slices as an `n_prompts`-weighted mean, so the fit
@@ -286,8 +280,7 @@ question, not a technical one.
 
 | Work | Cost |
 |---|---|
-| Corpus streaming, 10k records @ min 600 chars | 25–60 MB transferred, 2–6 min |
-| Corpus streaming, 50k records | 150–300 MB, 10–25 min |
+| Corpus streaming, enough records for 1k fit + held-out sets | approximately 5–15 MB, 1–3 min |
 | Split assignment, dedup, leakage audit | CPU-only, < 1 min |
 | Target-token discovery (128 + 128 prompts, 1 forward each) | ~1–2 min |
 | Validation at one scale point (128 prompts × 8 layers × 5 variants) | 5–15 min |
@@ -338,17 +331,15 @@ during fitting. This is why the scale study's cost is entirely the fit.
 ### 9.7 Budget confirmation switches
 
 No model work happens until the matching switch is set by hand:
-`CONFIRM_1K_BUDGET`, `CONFIRM_5K_BUDGET`, `CONFIRM_10K_BUDGET`,
-`CONFIRM_OPTIONAL_LARGE_SCALE_BUDGET` — all False in the committed notebook,
-alongside `RUN_REAL_CALIBRATION`, `RUN_MODEL_STAGES`, `RUN_OPTIONAL_LARGE_SCALE`,
+`CONFIRM_100_BUDGET`, `CONFIRM_250_BUDGET`, `CONFIRM_1K_BUDGET` — all False in
+the committed notebook, alongside `RUN_REAL_CALIBRATION`, `RUN_MODEL_STAGES`,
 `RUN_FINAL_CONFIRMATION` and `PUBLISH_VALIDATED_LENSES`.
 
 ---
 
 ## 10. Recommendation for the first real run
 
-Run **1,000 only**. It is 2–3 sessions, it is the paper's own production scale,
-and it carries nearly all of the scientific information (methodology §6). Decide
-5k and 10k after seeing the 1k table and the plateau evidence between the
-pilot's 100 and the new 1,000 — with real numbers rather than an estimate
-derived from one measurement at a different depth.
+Run **100 first**. It is the upstream repository's stated usable scale and a
+same-day gate on the pipeline. Continue the same accumulator to 250 only after
+L38 reproduces; continue to the paper-matched 1,000 endpoint only when earlier
+layers are still improving or direct paper-scale parity is required.
