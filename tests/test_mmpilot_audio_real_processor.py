@@ -65,6 +65,33 @@ def test_the_content_block_route_produces_a_verified_placeholder_span(real):
     assert end - start == verified["n_placeholders"]
 
 
+def test_the_pilot_concepts_really_are_single_tokens(real):
+    """The root cause of the first real audit's FAIL, against the real tokenizer.
+
+    Nothing was wrong with the scorer. The fixture simply could not exercise
+    complete-sequence scoring, because these encode to one token each.
+    """
+    processor, _ = real
+    tokenizer = processor.tokenizer
+    assert tokenizer(" cat", add_special_tokens=False)["input_ids"] == [5866]
+    assert tokenizer(" dog", add_special_tokens=False)["input_ids"] == [4799]
+
+
+def test_selection_finds_multi_token_candidates_under_the_pinned_tokenizer(real):
+    """The repaired fixture, measured rather than assumed."""
+    from jlens.mmpilot.audio_audit import select_scoring_candidates
+
+    processor, _ = real
+
+    class _Backend:
+        def encode_candidate(self, text):
+            return processor.tokenizer(text, add_special_tokens=False)["input_ids"]
+
+    chosen = select_scoring_candidates(_Backend())
+    assert chosen == {"traffic light": [8827, 2214], "fire hydrant": [4304, 67175]}
+    assert all(len(ids) > 1 for ids in chosen.values())
+
+
 def test_resolution_reports_the_pinned_protocol(real):
     """The recorded interface names what a later run would have to match."""
     processor, config = real
