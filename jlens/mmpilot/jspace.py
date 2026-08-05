@@ -568,6 +568,11 @@ def representational_report(
             pairs[key] = {
                 "n_sources": len(sources),
                 "n_targets": len(targets),
+                # The photograph is the independent unit, so a direction backed
+                # by twelve samples of three images is not a twelve-sample
+                # result. Reported per pair rather than only in aggregate.
+                "n_distinct_source_images": len({str(s["image_id"]) for s in sources}),
+                "n_distinct_target_images": len({str(s["image_id"]) for s in targets}),
                 "exclusions": jspace_retrieval["exclusions"],
                 "jspace_retrieval": jspace_retrieval,
                 "jspace_separation": separation_metrics(sources, targets, jspace),

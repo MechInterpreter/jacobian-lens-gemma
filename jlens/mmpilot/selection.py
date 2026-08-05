@@ -136,7 +136,32 @@ IMAGE_UNIQUE_PROFILE = SubsetProfile(
     causal_target_selection=CAUSAL_TARGET_SELECTION_VERSION,
 )
 
-PROFILES = {profile.name: profile for profile in (PILOT_PROFILE, IMAGE_UNIQUE_PROFILE)}
+#: The same policy at MOCK scale. Two distinct images per split instead of
+#: eight, so a synthetic world small enough to run on CPU in seconds still
+#: exercises every branch of the image-unique rule: one group per photograph,
+#: sibling exclusion, disjoint source and target images, distinct-image floors.
+#:
+#: **It is a plumbing profile and never a scientific one.** Its name is part of
+#: the run fingerprint, so a run built under it can never be resumed or
+#: confused as one built under :data:`IMAGE_UNIQUE_PROFILE`, and every artifact
+#: it produces carries ``mode="mock"``.
+IMAGE_UNIQUE_MOCK_PROFILE = SubsetProfile(
+    name="image_unique_mock",
+    version="image_unique_mock.v1",
+    max_groups_per_image=1,
+    representative_selection=REPRESENTATIVE_SELECTION_VERSION,
+    n_train_positive_images=2,
+    n_test_positive_images=2,
+    n_train_negative_images=2,
+    n_test_negative_images=2,
+    record_sibling_exclusions=True,
+    causal_target_selection=CAUSAL_TARGET_SELECTION_VERSION,
+)
+
+PROFILES = {
+    profile.name: profile
+    for profile in (PILOT_PROFILE, IMAGE_UNIQUE_PROFILE, IMAGE_UNIQUE_MOCK_PROFILE)
+}
 
 
 # --------------------------------------------------- one group per photograph
@@ -307,6 +332,7 @@ def select_focal_concepts(
 
 __all__ = [
     "CAUSAL_TARGET_SELECTION_VERSION",
+    "IMAGE_UNIQUE_MOCK_PROFILE",
     "IMAGE_UNIQUE_PROFILE",
     "LEGACY_CAUSAL_TARGET_SELECTION_VERSION",
     "LEGACY_REPRESENTATIVE_SELECTION_VERSION",

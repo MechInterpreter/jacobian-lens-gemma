@@ -301,6 +301,23 @@ def _build_inputs_for(
     )
 
 
+def build_condition_inputs(
+    backend: PilotBackend,
+    group: Mapping,
+    modality: str,
+    question: str,
+    media: MediaLoader,
+):
+    """One condition's prepared inputs — the same call every stage makes.
+
+    Public because a notebook that wants to inspect a prepared input (token
+    spans, the audio placeholder record, the final prompt position) must build
+    it exactly the way the measured stages do. Building a probe input by hand
+    would check a different object than the one the study runs on.
+    """
+    return _build_inputs_for(backend, group, modality, question, media)
+
+
 def available_modalities(backend: PilotBackend, config: PilotConfig) -> tuple[list[str], list[str]]:
     """``(available, blocked)`` — blocked modalities are reported, never faked."""
     available = [m for m in config.modalities if backend.supports(m)]
@@ -1047,6 +1064,7 @@ __all__ = [
     "PilotConfig",
     "StageOutcome",
     "available_modalities",
+    "build_condition_inputs",
     "build_dictionaries",
     "sample_id",
     "stage_activations",
