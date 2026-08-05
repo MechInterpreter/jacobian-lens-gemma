@@ -260,10 +260,12 @@ AUDIT_LAYERS = (21, 38)
 AUDIO_MEDIA_ROOT = "/content/drive/MyDrive/datasets/cstf_spokencoco/SpokenCOCO"
 RUNS_ROOT = "/content/drive/MyDrive/jacobian-lens-gemma/runs"
 
-# --- the shared question. Identical to the pilot's, and carrying no caption:
-# the recording is the only evidence in a spoken-audio condition.
-AUDIT_CONCEPTS = ("cat", "dog")
-QUESTION = build_question(sorted(AUDIT_CONCEPTS))
+# --- the probe question, used by section 7 before any model exists. It carries
+# no caption, as every spoken-audio prompt must: the recording is the only
+# evidence. Section 9 rebuilds it from the candidates actually selected, so the
+# options asked about and the sequences scored are the same set.
+PROBE_CONCEPTS = ("cat", "dog")
+QUESTION = build_question(sorted(PROBE_CONCEPTS))
 AUDIT_PROMPT = build_prompt(QUESTION, modality="spoken_audio")
 
 MODE = "real" if RUN_REAL_AUDIO_AUDIT else "mock"
@@ -680,9 +682,22 @@ else:
     print("MOCK backend ready")
 
 if BACKEND is not None:
-    from jlens.mmpilot.capability import candidate_token_ids
+    from jlens.mmpilot.audio_audit import select_scoring_candidates
 
-    CANDIDATE_IDS = candidate_token_ids(BACKEND, sorted(AUDIT_CONCEPTS))
+    # Chosen by measuring token lengths against the live tokenizer, never by
+    # assuming them. The pilot's behavioral concepts are single tokens under
+    # this tokenizer (" cat" -> [5866], " dog" -> [4799]) and so cannot
+    # exercise complete-sequence scoring at all.
+    CANDIDATE_IDS = select_scoring_candidates(BACKEND)
+    print("scoring candidates (selected after tokenization):")
+    for _name, _ids in CANDIDATE_IDS.items():
+        print(f"  {_name:16s} n_tokens={len(_ids)} ids={_ids}")
+
+    # Ask about the options actually being scored. Still no caption.
+    QUESTION = build_question(sorted(CANDIDATE_IDS))
+    AUDIT_PROMPT = build_prompt(QUESTION, modality="spoken_audio")
+    print(f"\\naudit prompt: {AUDIT_PROMPT!r}")
+
     _layers = [layer for layer in AUDIT_LAYERS if layer < BACKEND.n_layers] or [
         BACKEND.n_layers - 1
     ]
@@ -755,34 +770,61 @@ markdown(
     """
 ## 11. Complete candidate-sequence scoring
 
-Every candidate's **whole** token sequence is scored by teacher-forced
-conditional log likelihood. First-token scoring would compare prefixes rather
-than answers, and would appear to work.
+Two different questions live here, and only the first is asked.
 
-This confirms the mechanics on an audio input. It is **not** a behavioral gate:
-which answer wins here says nothing, because the recording is arbitrary.
+**Scoring validity** — does the mechanism correctly score *complete* candidate
+token sequences? Every candidate's whole sequence is scored by teacher-forced
+conditional log likelihood, and the check requires finite per-token and
+aggregate terms, an aggregate equal to the sum of its own per-token terms, at
+least one genuinely multi-token candidate, no prefix-degenerate pair, and a
+score that does not move when the candidate order changes.
+
+**Behavioral capability** — can Gemma recognize a concept from the recording?
+**Not measured here, and not measurable here.** The waveform was never selected
+to be about any candidate, so which candidate scores highest is meaningless. It
+is printed, clearly labelled, and is **not** a criterion. That question belongs
+to the SpokenCOCO experiment.
+
+> Candidates are selected in section 9 by measuring token lengths against the
+> live tokenizer. An earlier version of this audit used the pilot's behavioral
+> concepts, which Gemma encodes as single tokens — complete-sequence scoring ran
+> correctly and returned finite scores, and the audit still reported FAIL
+> because its fixture could not exercise the multi-token path. The rule now
+> separates "the scorer works" from "the fixture was capable of showing it".
 """
 )
 
 code(
     """
-# 11. Whole-sequence scoring on an audio input.
+# 11. Whole-sequence scoring on an audio input. Validity only.
 if AUDIT is None:
     print("skipped: no audit was run")
 else:
     _check = {check.name: check for check in AUDIT.checks}["candidate_sequence_scoring"]
+    _detail = _check.detail
     print(f"candidate_sequence_scoring: {'PASS' if _check.passed else 'FAIL'}")
-    print(f"tokens per candidate: {_check.detail['n_tokens_per_candidate']}")
-    for _name, _row in sorted(_check.detail["scores"].items()):
+    print(f"rule:                 {_detail['rule']}")
+    print(f"measures:             {_detail['measures']}")
+    print(f"tokens per candidate: {_detail['n_tokens_per_candidate']}")
+    print(f"order-invariance max |delta|: {_detail['order_invariance_max_abs_delta']:.3e}")
+    for _name, _row in sorted(_detail["scores"].items()):
         print(
-            f"  {_name:12s} sum={_row['sum_logprob']:+.4f} "
-            f"mean={_row['mean_logprob']:+.4f} n_tokens={_row['n_tokens']} "
-            f"ids={_row['token_ids']}"
+            f"  {_name:16s} sum={_row['sum_logprob']:+.4f} "
+            f"mean={_row['mean_logprob']:+.4f} n_tokens={_row['n_tokens']}"
         )
-    print(
-        "\\nWhich candidate scores highest is meaningless here: the recording was "
-        "not chosen to be about either concept."
-    )
+        print(f"    ids={_row['token_ids']}")
+        print(f"    per-token={[round(v, 4) for v in _row.get('token_logprobs', [])]}")
+    for _failure in _detail.get("failures", []):
+        print(f"  FAILURE: {_failure}")
+    print()
+    print("SCORING VALIDITY is what passed or failed above: whether complete")
+    print("token sequences are scored correctly.")
+    print()
+    print(f"highest-scoring candidate: {_detail['reported_only_argmax']!r}")
+    print("  ^ REPORTED ONLY, NOT A CRITERION. The recording was not selected to")
+    print("    be about any candidate, so this says nothing. Whether Gemma can")
+    print("    recognize a concept from speech is BEHAVIORAL CAPABILITY, which")
+    print("    this notebook does not measure and the SpokenCOCO experiment does.")
 """
 )
 

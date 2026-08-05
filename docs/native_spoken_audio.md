@@ -134,6 +134,74 @@ verdict:
 `notebooks/gemma4_native_spoken_audio_feasibility_colab.ipynb` runs it, with
 `RUN_REAL_AUDIO_AUDIT`, `RUN_MODEL_STAGE` and `CONFIRM_MODEL_LOAD` all False.
 
+## Candidate scoring: validity is not capability
+
+The first real audit passed every audio check and still returned
+`AUDIO_INVALID`, on `candidate_sequence_scoring` — while scoring executed and
+returned finite scores for both candidates:
+
+```
+cat   ids [5866]  n_tokens 1  sum -21.9234
+dog   ids [4799]  n_tokens 1  sum -18.0171
+```
+
+**The scorer was not defective.** The audit was handed the pilot's behavioral
+concepts, and Gemma encodes `" cat"` and `" dog"` as **single tokens**, so the
+`any(len(ids) > 1)` term of the old rule was False. The rule reported a fixture
+that could not exercise the multi-token path as though the scorer had failed.
+
+`SCORING_VALIDITY_RULE = jlens.mmpilot.scoring_validity.v2` separates the two
+questions that were run together:
+
+- **Scoring validity** — does the mechanism score *complete* sequences
+  correctly? This is what the audit measures.
+- **Behavioral capability** — can Gemma recognize a concept from a recording?
+  **Not measured, and not measurable here**: the audit's waveform is not
+  selected to be about any candidate. That belongs to the SpokenCOCO experiment.
+
+### The selection rule
+
+`select_scoring_candidates` encodes a fixed, predeclared pool
+(`SCORING_CANDIDATE_POOL`, COCO category names) through the backend's own
+`encode_candidate` and takes the **first pair in pool order** satisfying, in
+priority order: every candidate non-empty; token sequences distinct; neither a
+prefix of the other; **both** multi-token if such a pair exists, otherwise at
+least one. No phrase is assumed to be multi-token — assuming that is what caused
+the original failure. If nothing qualifies it raises `ScoringCandidateError`
+rather than degrading the check.
+
+Under the pinned tokenizer this selects `traffic light` `[8827, 2214]` and
+`fire hydrant` `[4304, 67175]`.
+
+### The PASS criteria
+
+`candidate_sequence_scoring` passes when, and only when:
+
+- scoring executes and every candidate has a non-empty token sequence;
+- `n_tokens` matches the ids supplied;
+- at least one candidate is multi-token, and no candidate's tokens are a prefix
+  of another's;
+- every per-token term and every aggregate is finite;
+- `sum_logprob` equals the sum of its own recorded `token_logprobs` within
+  tolerance, and `mean_logprob × n_tokens` agrees;
+- reversing the candidate order leaves each candidate's own score unchanged
+  within tolerance.
+
+It explicitly does **not** require the recording to contain a candidate concept,
+a particular winner, semantic correctness, equal token lengths, or first-token
+agreement. The highest-scoring candidate is recorded as
+`reported_only_argmax` and is never a criterion.
+
+`score_candidate_sequences(..., return_token_logprobs=True)` supplies the
+per-token terms, so the aggregate is checked against the scorer's own terms
+rather than against a second implementation. The flag is **off by default**, so
+the units the scientific stages persist keep exactly the fields they had.
+
+`AUDIT_VERSION` is now `…feasibility.v2`, and both `scoring_validity_rule` and
+`scoring_candidate_token_ids` enter the audit's `report_checksum`: a verdict
+reached under a different rule, or against candidates that tokenize
+differently, is not the same verdict.
+
 ## Fingerprint consequences
 
 Any change to **any** of the following must change the run fingerprint:
