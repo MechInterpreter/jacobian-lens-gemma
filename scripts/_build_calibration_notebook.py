@@ -1173,6 +1173,14 @@ markdown(
 The rule was fixed before any number existed and its digest is bound into the
 run fingerprint. Here it reports whether improvement is still visible at the
 paper-matched 1,000-prompt endpoint. It never authorizes a larger run.
+
+**The selection is computed before anything is printed.** `evaluate_plateau`
+short-circuits with a reduced payload when there are fewer than two scale
+points — which is exactly the recommended single-scale run — and that payload
+carries no `runs_automatically` field. Reading it positionally would raise
+`KeyError` mid-cell and take `SELECTION` down with it, and without `SELECTION`
+the confirmation vault can never be unlocked and no layer can be published. A
+display field is never allowed to decide whether the scientific step runs.
 """
 )
 
@@ -1182,15 +1190,25 @@ code(
 from jlens.calibration.scale import evaluate_plateau, select_scale
 
 PLATEAU = evaluate_plateau(COMPARISON)
+
+# The scientific step first. select_scale() is what the confirmation vault is
+# unlocked against, so it must not depend on any field the display block reads.
+SELECTION = select_scale(COMPARISON)
+
+# `runs_automatically` is absent from the short-circuit payload evaluate_plateau
+# returns for a single scale point. Absent means the same thing the field always
+# means here: this protocol never starts a larger run by itself. Defaulting to
+# False is the scientifically correct reading, not a convenience.
 print(f"verdict                {PLATEAU['verdict']}")
 print(f"extension justified    {PLATEAU['extension_justified']}")
-print(f"runs automatically     {PLATEAU['runs_automatically']}")
+print(f"runs automatically     {PLATEAU.get('runs_automatically', False)}")
+if "runs_automatically" not in PLATEAU:
+    print("                       (field absent: fewer than two scale points)")
 print()
 for _clause in PLATEAU["clauses"]:
     print(f"  [{'pass' if _clause['passed'] else 'FAIL'}] {_clause['clause']}")
     print(f"         {_clause['detail']}")
 
-SELECTION = select_scale(COMPARISON)
 print()
 print(f"selected scale         {SELECTION['selected_scale']:,}")
 print(f"reason                 {SELECTION['reason']}")

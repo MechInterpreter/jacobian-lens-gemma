@@ -373,3 +373,107 @@ def test_the_report_records_the_publication(full_run):
     assert "MOCK RUN" in report
     assert "proves pipeline behaviour only" in report
     assert "Failed layers keep their diagnostics" in report
+
+
+# ------------------------------------------- single-scale reporting repair
+#
+# The recommended real run confirms one scale point. `evaluate_plateau` returns
+# a *reduced* payload for a single scale point — no `runs_automatically`, no
+# `plateau_checksum` — because with one point there is no step to evaluate. The
+# section-15 display block read that field positionally, so the recommended run
+# raised `KeyError` mid-cell, which also took `SELECTION = select_scale(...)`
+# down with it. Without `SELECTION` the confirmation vault cannot be unlocked
+# and no layer can be published: a display field was deciding whether the
+# scientific step ran.
+#
+# The MOCK path never reached this, because the mock always has three scale
+# points. These tests do.
+
+
+def _single_scale_comparison() -> dict:
+    """A one-scale-point comparison, in the shape `compare_scales` produces."""
+    return {
+        "scales": [100],
+        "layers": [35, 38, 40],
+        "rows": [],
+        "deltas": [],
+        "eligible_by_scale": {"100": [35, 38, 40]},
+        "compared_metrics": [],
+        "nested": True,
+        "comparison_checksum": "sha256:single-scale",
+    }
+
+
+def _plateau_cell_source(payload) -> str:
+    cells = [
+        "".join(cell["source"])
+        for cell in _code_cells(payload)
+        if "evaluate_plateau" in "".join(cell["source"])
+    ]
+    assert len(cells) == 1, "expected exactly one plateau cell"
+    return cells[0]
+
+
+def test_evaluate_plateau_omits_runs_automatically_for_one_scale_point():
+    """The precondition the repair exists for, pinned so it cannot drift away."""
+    from jlens.calibration.scale import evaluate_plateau
+
+    plateau = evaluate_plateau(_single_scale_comparison())
+    assert "runs_automatically" not in plateau
+    assert plateau["extension_justified"] is False
+    assert plateau["clauses"] == []
+
+
+def test_plateau_cell_survives_a_single_scale_point_and_still_selects(notebook):
+    """Execute the real section-15 cell against a single-scale comparison."""
+    namespace: dict = {"COMPARISON": _single_scale_comparison()}
+    exec(compile(_plateau_cell_source(notebook), "<plateau>", "exec"), namespace)  # noqa: S102
+    assert namespace["SELECTION"]["selected_scale"] == 100
+    assert namespace["SELECTION"]["confirmation_not_consulted"] is True
+    assert namespace["SELECTION"]["eligible_at_selected_scale"] == [35, 38, 40]
+    assert "runs_automatically" not in namespace["PLATEAU"]
+
+
+def test_plateau_cell_still_works_when_the_field_is_present(notebook):
+    """The multi-scale path is unchanged; the repair is additive."""
+    from jlens.calibration.mock import MOCK_SCALE_POINTS
+
+    comparison = {
+        "scales": list(MOCK_SCALE_POINTS),
+        "layers": [4],
+        "rows": [],
+        "deltas": [
+            {
+                "layer": 4,
+                "from_scale": smaller,
+                "to_scale": larger,
+                "delta_mrr": 0.0,
+                "median_midrank_relative_drop": 0.0,
+                "delta_tied_at_max_rate": 0.0,
+                "passed_before": True,
+                "passed_after": True,
+            }
+            for smaller, larger in zip(
+                MOCK_SCALE_POINTS, MOCK_SCALE_POINTS[1:], strict=False
+            )
+        ],
+        "eligible_by_scale": {str(scale): [4] for scale in MOCK_SCALE_POINTS},
+        "compared_metrics": [],
+        "nested": True,
+        "comparison_checksum": "sha256:multi-scale",
+    }
+    namespace: dict = {"COMPARISON": comparison}
+    exec(compile(_plateau_cell_source(notebook), "<plateau>", "exec"), namespace)  # noqa: S102
+    assert namespace["PLATEAU"]["runs_automatically"] is False
+    assert namespace["SELECTION"]["selected_scale"] == MOCK_SCALE_POINTS[0]
+
+
+def test_the_selection_is_computed_before_any_optional_field_is_read(notebook):
+    """Ordering is the repair; a `.get` alone would not survive a new field."""
+    source = _plateau_cell_source(notebook)
+    assert "SELECTION = select_scale(COMPARISON)" in source
+    assert source.index("SELECTION = select_scale(COMPARISON)") < source.index(
+        "print(f\"verdict"
+    )
+    assert "PLATEAU['runs_automatically']" not in source
+    assert "PLATEAU.get('runs_automatically', False)" in source
