@@ -356,9 +356,26 @@ and cannot contribute to the research GO/WEAK-GO/NO-GO verdict.
 an audio keyword argument and an audio component. If either is missing,
 `spoken_audio` is marked blocked, the text-image pilot completes, and the report
 records audio as a NO-GO with the observed interface attached. Speech is never
-transcribed as a substitute. The notebook has been executed only against the
-mock backend, so whether this checkpoint's processor accepts audio is still an
-open empirical question that section 5 answers on first real run.
+transcribed as a substitute.
+
+> **Superseded, and the correction matters.** This pilot's real run blocked
+> `spoken_audio` because the processor *"produced audio features but zero audio
+> placeholder tokens"*. That observation is reproducible, and the diagnosis
+> stopped one layer short: the cause was the **calling convention**, not the
+> checkpoint. `Gemma4Processor` only expands audio tokens that are already in
+> the text, so a bare `processor(text=..., audio=...)` call computes features
+> and scatters them into nothing, silently. The supported native path is the
+> chat-template audio content block. See
+> [native_spoken_audio.md](native_spoken_audio.md) — the protocol is now
+> implemented and probed in `jlens/mmpilot/audio.py`, and
+> `notebooks/gemma4_native_spoken_audio_feasibility_colab.ipynb` audits it.
+>
+> **This changes nothing about the completed text-and-image results.** Audio was
+> genuinely absent from them, and the probe-based support check is opt-in
+> (`build_real_backend(..., resolve_audio=True)`, default False), so no existing
+> run's behavior or fingerprint moves. That native audio is *technically usable*
+> is engineering evidence only; it is not evidence that spoken-audio J-space
+> transfer works, and that study has not been run.
 
 **The lens artifact is assumed to exist, not to be creatable.** The pilot expects
 the completed run directory `pilot_20260715T200437612150_311fd108c23a` in Drive
