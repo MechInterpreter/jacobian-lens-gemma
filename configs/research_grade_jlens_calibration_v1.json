@@ -1,0 +1,194 @@
+{
+  "protocol_version": "research-grade-multilayer-text-jlens-calibration-v1",
+  "artifact_format_version": "jlens.calibration.artifact.v1",
+  "frozen_utc": "2026-08-05",
+  "mode": "research_grade_calibration",
+
+  "model": {
+    "repo_id": "google/gemma-4-E4B-it",
+    "revision": "fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd",
+    "tokenizer_repo_id": "google/gemma-4-E4B-it",
+    "tokenizer_revision": "fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd",
+    "dtype": "bfloat16",
+    "device_map": "cuda",
+    "allow_model_load": false,
+    "expect_n_layers": 42,
+    "expect_d_model": 2560,
+    "expect_vocab_size": 262144
+  },
+
+  "sites": {
+    "source_site": "block_output",
+    "target_site": "block_output",
+    "source_layers": [8, 14, 20, 26, 32, 35, 38, 40],
+    "normalized_depth": [19, 33, 48, 62, 76, 83, 90, 95],
+    "target_layer": 41,
+    "hook": "jlens.hooks.ActivationRecorder on model.language_model.layers[l]",
+    "residual_convention": "pre-final-norm residual after attention, MLP, per-layer-embedding re-injection and layer_scalar; the exact input to block l+1",
+    "readout": "lm_head(final_norm(J_l @ h))",
+    "logit_softcap": 30.0,
+    "softcap_note": "strictly monotonic; token rankings identical pre/post cap. Scoring uses pre-softcap logits."
+  },
+
+  "positions": {
+    "skip_first": 16,
+    "source_rule": "16 <= t < seq_len - 1",
+    "target_rule": "all current-and-future valid positions t' >= t, summed; then mean over source positions t",
+    "estimator": "upstream jlens.fitting.jacobian_for_prompt, unmodified"
+  },
+
+  "corpus": {
+    "primary": {
+      "hf_dataset": "Salesforce/wikitext",
+      "config": "wikitext-103-raw-v1",
+      "split": "train",
+      "revision": "b08601e04326c79dfdd32d625aee71d232d685c3",
+      "revision_status": "REQUIRES_VERIFICATION_IN_COLAB",
+      "streaming": true,
+      "license": "CC BY-SA 3.0",
+      "min_chars": 600,
+      "record_id_template": "wikitext-103-raw-v1/train/{stream_index}",
+      "rationale": "Named, versioned, permissively licensed, deterministically ordered under streaming, pretraining-like prose, already the corpus of the completed 100-prompt pilot, and streamable without a bulk download."
+    },
+    "fallback": {
+      "hf_dataset": "allenai/c4",
+      "config": "en",
+      "split": "train",
+      "streaming": true,
+      "enabled": false,
+      "note": "Configured but never selected silently. Switching corpora changes corpus_id, changes the fingerprint, and invalidates every stored unit."
+    },
+    "prompt_format": "raw text, truncated to max_seq_len tokens, BOS prepended by Gemma4LensModel.encode",
+    "chat_template_used_for_fitting": false,
+    "modality": "text-only",
+    "spokencoco_used": false,
+    "multimodal_data_used": false
+  },
+
+  "splits": {
+    "split_protocol": "stable-hash-bucket-v1",
+    "split_seed": 20260805,
+    "n_buckets": 100,
+    "fit_buckets": [0, 79],
+    "validation_buckets": [80, 89],
+    "confirmation_buckets": [90, 99],
+    "n_validation_prompts": 128,
+    "n_confirmation_prompts": 128,
+    "confirmation_is_untouched_until_scale_chosen": true,
+    "duplicate_guard": {
+      "exact": "sha256 of normalized text (NFKC, lowercased, whitespace-collapsed, stripped)",
+      "near": "64-bit SimHash over word 3-grams, banded into 4 x 16-bit bands",
+      "max_hamming_distance": 3
+    }
+  },
+
+  "scale": {
+    "points": [1000, 5000, 10000],
+    "nested": true,
+    "nesting_note": "The estimator is a running mean over a deterministically ordered fit list, so the accumulator at prompt 1000 IS the 1k lens. Snapshots are taken from the accumulator; the three scale points cost exactly as much as the largest alone.",
+    "optional_points": [25000, 50000],
+    "optional_enabled": false,
+    "optional_requires_plateau_rule_and_explicit_budget_confirmation": true
+  },
+
+  "fitting": {
+    "objective": "not_applicable_estimator_is_a_sample_mean",
+    "optimizer": "not_applicable_estimator_is_a_sample_mean",
+    "schedule": "not_applicable_estimator_is_a_sample_mean",
+    "stopping_rule": "fixed prompt count per scale point; no convergence criterion terminates fitting",
+    "why_not_applicable": "J_l = E[dh_final/dh_l] is a population mean estimated by a plug-in running average. There is no loss function in the upstream package and nothing is minimized. Supplying an optimizer here would mean fitting a different object and calling it a J-lens.",
+    "estimator_implementation": "jlens.fitting.fit (upstream, unmodified)",
+    "sufficient_statistic": "{jacobian_sum: {layer: [d_model, d_model] fp32}, n_done}",
+    "per_layer_parameters": "one [2560, 2560] matrix per physical layer; never shared across layers",
+    "max_seq_len": 128,
+    "dim_batch": 8,
+    "checkpoint_every": 25,
+    "accumulate_dtype": "float32",
+    "serialize_dtype": "float16",
+    "diagnostics": ["prompt_norm", "mean_rel_change", "elapsed_seconds", "seq_len", "n_valid_positions"]
+  },
+
+  "validation": {
+    "gate_protocol": "research-grade-calibration-tie-aware-native-readout-v1",
+    "criterion_rank_convention": "midrank",
+    "rank_conventions_reported": ["optimistic", "pessimistic", "midrank"],
+    "n_prompts": 128,
+    "n_folds": 4,
+    "control_seed": 1234,
+    "controls": ["permuted", "random", "wrong_layer"],
+    "noise_controls": ["permuted", "random"],
+    "wrong_layer_mapping": "distant_layer_mapping",
+    "wrong_layer_mapping_note": "Not the deprecated cyclic wrong_layer_lens, which conflates adjacent and distant substitutions.",
+    "diagnostics": ["logit_lens"],
+    "thresholds": {
+      "max_tied_at_max_rate": 0.5,
+      "min_noise_control_mrr_ratio": 1.5,
+      "min_noise_control_mrr_margin": 0.1,
+      "min_wrong_layer_mrr_margin": 0.15,
+      "max_median_midrank": 5.0,
+      "min_top_k_inclusion": 0.5,
+      "top_k": 10,
+      "min_fold_mrr_fraction": 0.5,
+      "min_distinct_target_tokens": 24,
+      "max_target_token_share": 0.25
+    }
+  },
+
+  "target_diversity": {
+    "selection_protocol": "target-token-stratified-stable-rank-v1",
+    "min_distinct_target_tokens": 24,
+    "max_target_token_share": 0.25,
+    "refuse_rather_than_lower": true,
+    "selected_by_jlens_performance": false,
+    "target_rule": "the frozen model's own final-layer argmax at the last prompt position; no lens and no candidate layer is consulted",
+    "record": ["prompt_sha256", "target_token_id", "stable_order"]
+  },
+
+  "plateau_rule": {
+    "version": "conservative-earlier-layer-improvement-v1",
+    "declared_before_results": true,
+    "earlier_layers_of_interest": [8, 14, 20, 26, 32],
+    "min_mrr_improvement": 0.05,
+    "min_median_midrank_relative_drop": 0.2,
+    "min_continuation_fraction": 0.5,
+    "require_no_degeneracy_increase": true,
+    "require_no_eligible_layer_lost": true,
+    "scale_selection": "smallest scale point whose development eligible-layer set equals the largest computed scale's set; otherwise the largest computed scale"
+  },
+
+  "publication": {
+    "requires_confirmation_pass": true,
+    "one_artifact_per_passing_layer": true,
+    "failed_layers_keep_diagnostics": true,
+    "failed_layers_marked_validated": false,
+    "required_metadata": [
+      "model_repo_id", "model_revision", "tokenizer_repo_id", "tokenizer_revision",
+      "physical_layer", "normalized_depth", "d_model", "hook_site", "residual_convention",
+      "vector_orientation", "normalization_convention", "calibration_modality",
+      "corpus_id", "corpus_revision", "fit_split_checksum", "validation_split_checksum",
+      "confirmation_split_checksum", "n_fitting_prompts", "scale_point",
+      "validation_protocol", "confirmation_protocol", "gate_digest",
+      "torch_version", "transformers_version", "python_version", "upstream_commit",
+      "local_commit", "fitting_diagnostics", "validation_metrics", "confirmation_metrics",
+      "artifact_checksum", "frozen"
+    ],
+    "never_overwrite": [
+      "runs/text_jlens_early_layer_recalibration_v2/artifacts/lens.validated.pt"
+    ]
+  },
+
+  "budget_confirmation": {
+    "CONFIRM_1K_BUDGET": false,
+    "CONFIRM_5K_BUDGET": false,
+    "CONFIRM_10K_BUDGET": false,
+    "CONFIRM_OPTIONAL_LARGE_SCALE_BUDGET": false
+  },
+
+  "paths": {
+    "run_root": "runs",
+    "run_prefix": "rgcalib",
+    "checkpoint_relpath": "checkpoints/jacobian_sum.pt",
+    "snapshot_relpath_template": "artifacts/lens.scale{scale}.pt",
+    "published_relpath_template": "artifacts/published/lens.layer{layer}.scale{scale}.validated.pt"
+  }
+}
