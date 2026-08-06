@@ -185,6 +185,51 @@ def main() -> int:
                 "report_written": (
                     Path(namespace["RUN_DIR"]) / "native_audio_transfer_report.md"
                 ).is_file(),
+                # ---- the capability-admissibility filter and the amendment
+                "capability_admissibility": primary_causal.get(
+                    "capability_admissibility"
+                ),
+                "audio_cells_passing": primary_causal.get("audio_cells_passing"),
+                "audio_cells_supporting_a_claim": primary_causal.get(
+                    "audio_cells_supporting_a_claim"
+                ),
+                "audio_cells_measured_but_inadmissible": primary_causal.get(
+                    "audio_cells_measured_but_inadmissible"
+                ),
+                "n_primary_causal_cells_total": len(primary_causal.get("cells", [])),
+                "cell_admissibility_fields": sorted(
+                    {
+                        field
+                        for cell in primary_causal.get("cells", [])
+                        for field in cell
+                        if field.startswith("capability_")
+                        or field == "counted_toward_verdict"
+                    }
+                ),
+                "stage_c_focal_admissibility": namespace.get(
+                    "STAGE_C_FOCAL_ADMISSIBILITY"
+                ),
+                "stage_c_eligible_focal": namespace.get("STAGE_C_ELIGIBLE_FOCAL"),
+                "budget_c_gated": (
+                    namespace["BUDGET_C_GATED"].to_dict()
+                    if namespace.get("BUDGET_C_GATED") is not None
+                    else None
+                ),
+                "amended_binding": (namespace.get("AMENDED") or {}).get("binding"),
+                "amended_overall_verdict": (
+                    ((namespace.get("AMENDED") or {}).get("verdicts") or {}).get(
+                        "overall"
+                    )
+                    or {}
+                ).get("verdict"),
+                "amended_report_written": (
+                    Path(namespace["RUN_DIR"])
+                    / "native_audio_transfer_report_capability_filtered_v2.md"
+                ).is_file(),
+                "amended_summary_written": (
+                    Path(namespace["RUN_DIR"])
+                    / "native_audio_transfer_summary_capability_filtered_v2.json"
+                ).is_file(),
             },
             default=str,
         )

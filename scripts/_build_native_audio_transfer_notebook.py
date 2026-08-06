@@ -910,26 +910,14 @@ print(format_total_budget(BUDGETS))
     json.dumps([b.to_dict() for b in BUDGETS], indent=2, default=str), encoding="utf-8"
 )
 
-MODEL_STAGES_ENABLED = bool(RUN_MODEL_STAGES and CONFIRM_MODEL_LOAD)
-STAGE_A_ENABLED = bool(MODEL_STAGES_ENABLED and CONFIRM_REPRESENTATION_BUDGET)
-STAGE_B_REQUESTED = bool(
-    STAGE_A_ENABLED and RUN_L35_CAUSAL_STAGE and CONFIRM_L35_CAUSAL_BUDGET
-)
-STAGE_C_REQUESTED = bool(
-    STAGE_B_REQUESTED and RUN_L38_L40_REPLICATION and CONFIRM_REPLICATION_BUDGET
-)
+# The derived gates are never *carried* from here. Every cell that decides
+# whether to spend model passes calls refresh_stage_gates(globals()) again,
+# immediately before deciding, so editing section 2 and executing it is enough.
+from jlens.mmpilot.stage_gates import format_stage_gates, refresh_stage_gates
+
+STAGE_GATES = refresh_stage_gates(globals())
 print()
-print("=" * 72)
-print("STAGE GATES")
-print("=" * 72)
-print(f"  MODEL_STAGES_ENABLED  {MODEL_STAGES_ENABLED}   "
-      "(RUN_MODEL_STAGES and CONFIRM_MODEL_LOAD)")
-print(f"  STAGE_A_ENABLED       {STAGE_A_ENABLED}   "
-      "(+ CONFIRM_REPRESENTATION_BUDGET)")
-print(f"  STAGE_B_REQUESTED     {STAGE_B_REQUESTED}   "
-      "(+ RUN_L35_CAUSAL_STAGE and CONFIRM_L35_CAUSAL_BUDGET)")
-print(f"  STAGE_C_REQUESTED     {STAGE_C_REQUESTED}   "
-      "(+ RUN_L38_L40_REPLICATION and CONFIRM_REPLICATION_BUDGET)")
+print(format_stage_gates(STAGE_GATES, switches=globals()))
 if not MODEL_STAGES_ENABLED:
     print()
     print("MODEL STAGES BLOCKED — nothing below loads a model. To proceed set,")
@@ -1568,10 +1556,16 @@ else:
                 f"extra same-image {_exclusions['n_excluded_same_image_different_group']}"
             )
 
+    # Retrieval is pooled over every selected concept, so it cannot be filtered
+    # per concept without recomputing it. The capability roster is passed in so
+    # the verdict *discloses* which pooled concepts failed the behavioral gate
+    # rather than leaving that invisible; it does not remove them.
     REPRESENTATIONAL_VERDICT = representational_transfer_verdict(
         REPRESENTATIONAL,
         thresholds=THRESHOLDS,
         primary_layer=PRIMARY_CAUSAL_LAYER,
+        capability=CAPABILITY_VERDICT,
+        pooled_concepts=SELECTED_NAMES,
     )
     STORE.save("metric", "representational_transfer_verdict", REPRESENTATIONAL_VERDICT)
     print("\\n" + "=" * 72)
@@ -1583,6 +1577,10 @@ else:
           f"{REPRESENTATIONAL_VERDICT['audio_directions_beating_shuffled']}")
     print(f"text<->image replication: "
           f"{REPRESENTATIONAL_VERDICT['replication_directions_beating_shuffled']}")
+    _pool = REPRESENTATIONAL_VERDICT["capability_pool_disclosure"]
+    print(f"\\ncapability-ineligible concepts in this pooled retrieval: "
+          f"{_pool['capability_ineligible_concepts_in_pool']}")
+    print(f"  {_pool['reading']}")
 '''
 )
 
@@ -1602,6 +1600,15 @@ from section 7.
 code(
     '''
 # 15. Stop point. Print the measured Stage-A cost and the Stage-B ask.
+#
+# The gates are re-derived from the raw switches right here, so this cell can
+# never report a stage as "not requested" while section 2 says otherwise.
+from jlens.mmpilot.stage_gates import format_stage_gates, refresh_stage_gates
+
+STAGE_GATES = refresh_stage_gates(globals())
+print(format_stage_gates(STAGE_GATES, switches=globals()))
+print()
+
 STAGE_A_MEASURED = None
 if not STAGE_A_ENABLED:
     print("skipped: STAGE_A_ENABLED is False")
@@ -1659,12 +1666,32 @@ positive-minus-negative difference. Alphas `0, 0.25, 0.5, 1.0`.
 Layer 35 is primary because it is the **earliest independently confirmed**
 lens. That is a statement about which lenses passed confirmation, not about
 where in the decoder anything converges.
+
+**A measured effect is not automatically evidence.** Every predeclared cell is
+measured and printed, including cells for a concept the model could not read out
+of one of the channels. Whether a cell may *support a claim* is decided in one
+place — `jlens.mmpilot.admissibility` — and only cells whose concept passed the
+behavioral capability gate in **text, image and spoken audio** are allowed to.
+A concept that failed is `CAPABILITY_INELIGIBLE`: it stays in the raw table with
+the arithmetic that rejected it, it counts toward no supporting total, no
+bidirectional pair and no GO criterion, and it is never replaced by a substitute
+concept chosen after the capability results were visible.
 """
 )
 
 code(
     '''
 # 16. Source-only directions and the layer-35 causal cells, then verdict C.
+#
+# The gate is re-derived from the raw switches immediately before the decision.
+# A gate computed in an earlier cell and left behind in the kernel is exactly
+# how this cell used to print "skipped" with RUN_L35_CAUSAL_STAGE set to True.
+from jlens.mmpilot.stage_gates import format_stage_gates, refresh_stage_gates
+
+STAGE_GATES = refresh_stage_gates(globals())
+print(format_stage_gates(STAGE_GATES, switches=globals()))
+print()
+
 DIRECTIONS = {}
 INTERVENTIONS = {}
 INTERVENTION_RECORDS = []
@@ -1702,8 +1729,16 @@ else:
     from jlens.mmpilot.tri_modal import causal_transfer_verdict
 
 
-    def run_causal_layer(layer):
-        """Directions and interventions at one layer, with its own dictionary."""
+    def run_causal_layer(layer, focal=None):
+        """Directions and interventions at one layer, with its own dictionary.
+
+        ``focal`` narrows which focal concepts model passes are spent on. It is
+        an *execution* parameter only: CONFIG.causal_concepts and the run
+        fingerprint keep the full predeclared focal set, so narrowing it here
+        cannot make the completed Stage-A/Stage-B units unresumable, and no
+        concept is ever substituted for an excluded one.
+        """
+        focal = list(FOCAL_CONCEPTS if focal is None else focal)
         config = _replace(CONFIG, causal_layers=(layer,))
         dictionaries = build_dictionaries(
             LENS,
@@ -1737,7 +1772,7 @@ else:
             )
         causal_outcome, summary = stage_causal(
             BACKEND, STORE, SUBSET, CODES, ACTIVATIONS, DIRECTIONS, config, MEDIA,
-            concepts=FOCAL_CONCEPTS,
+            concepts=focal,
             modalities=AVAILABLE_MODALITIES,
             all_concepts=SELECTED_NAMES,
             unrelated_controls=UNRELATED_CONTROLS,
@@ -1775,6 +1810,10 @@ else:
         return image_level
 
 
+    # Stage B measures every predeclared focal concept, including any that
+    # failed the behavioral capability gate — those cells were declared as
+    # diagnostics and they are kept. The capability result is handed to the
+    # verdict so it can decide which of them may be *evidence*.
     _image_level = run_causal_layer(PRIMARY_CAUSAL_LAYER)
     PRIMARY_CAUSAL_VERDICT = causal_transfer_verdict(
         _image_level,
@@ -1782,6 +1821,7 @@ else:
         focal_concepts=FOCAL_CONCEPTS,
         thresholds=THRESHOLDS,
         name=f"L{PRIMARY_CAUSAL_LAYER}_CAUSAL_TRANSFER",
+        capability=CAPABILITY_VERDICT,
     )
     STORE.save("metric", "primary_causal_verdict", PRIMARY_CAUSAL_VERDICT)
     print("\\n" + "=" * 72)
@@ -1789,10 +1829,23 @@ else:
           f"{PRIMARY_CAUSAL_VERDICT['verdict']}")
     print("=" * 72)
     print(PRIMARY_CAUSAL_VERDICT["rationale"])
-    print(f"\\naudio cells supporting a claim: "
+    _adm = PRIMARY_CAUSAL_VERDICT["capability_admissibility"]
+    print()
+    print("MEASURED DIAGNOSTIC vs ADMISSIBLE EVIDENCE")
+    print(f"  fixed focal concepts       {_adm['fixed_concepts']}")
+    print(f"  capability-eligible        {_adm['eligible_concepts']}")
+    print(f"  CAPABILITY_INELIGIBLE      {_adm['excluded_concept_names']}")
+    for _entry in _adm["excluded_concepts"]:
+        print(f"      {_entry['concept']}: {_entry['rejection_reason']}")
+    print(f"\\naudio cells passing (measured, complete): "
+          f"{PRIMARY_CAUSAL_VERDICT['audio_cells_passing']}")
+    print(f"audio cells measured but INADMISSIBLE: "
+          f"{PRIMARY_CAUSAL_VERDICT['audio_cells_measured_but_inadmissible']}")
+    print(f"audio cells supporting a claim (admissible only): "
           f"{PRIMARY_CAUSAL_VERDICT['audio_cells_supporting_a_claim']}")
-    print(f"text<->image cells passing (replication only): "
+    print(f"text<->image cells passing (replication only, admissible): "
           f"{PRIMARY_CAUSAL_VERDICT['replication_cells_passing']}")
+    print(f"\\n{_adm['no_post_hoc_replacement']}")
     print(f"\\n{PRIMARY_CAUSAL_VERDICT['layer_choice_note']}")
 '''
 )
@@ -1808,31 +1861,93 @@ byte-identical to Stage B's — same concepts, same focal set, same controls,
 same alphas, same targets. **No layer is selected on its causal outcome**; the
 layers were fixed by which lenses passed confirmation, before any number here
 existed.
+
+**Passes are spent only on capability-eligible focal concepts.** The fixed focal
+set does not change — it is bound into the run fingerprint, and narrowing it
+would make the completed Stage-A and Stage-B units unresumable. Only the
+*execution* narrows: a focal concept that failed the behavioral gate would
+produce cells that could not be evidence, so measuring them again at two more
+layers buys nothing. Its cells still appear in the Stage-C table, marked
+`not_executed_capability_ineligible` — a different fact from "measured and
+inadmissible", and recorded as a different one. The cell below prints the fixed
+set, the eligible set, the excluded set with reasons, the maximum design budget
+and the actual gated budget **before** spending anything, and no concept is
+substituted for an excluded one.
 """
 )
 
 code(
     '''
 # 17. The replication layers, then verdict D.
+#
+# The gate is re-derived from the raw switches immediately before the decision.
+from jlens.mmpilot.stage_gates import format_stage_gates, refresh_stage_gates
+
+STAGE_GATES = refresh_stage_gates(globals())
+print(format_stage_gates(STAGE_GATES, switches=globals()))
+print()
+
 REPLICATION_VERDICT = None
 LAYER_CAUSAL_VERDICTS = {}
+STAGE_C_FOCAL_ADMISSIBILITY = None
+STAGE_C_ELIGIBLE_FOCAL = []
+BUDGET_C_GATED = None
 if PRIMARY_CAUSAL_VERDICT is not None:
     LAYER_CAUSAL_VERDICTS[PRIMARY_CAUSAL_LAYER] = PRIMARY_CAUSAL_VERDICT
+
+# The focal set is FIXED and stays fixed: the roster below only says which of
+# the predeclared concepts may carry evidence. Nothing is added to replace one
+# that cannot, and the design's maximum budget is printed beside the gated one
+# so the reduction is visible as a consequence rather than as a smaller study.
+if CAPABILITY_VERDICT is not None:
+    from jlens.mmpilot.admissibility import concept_admissibility
+    from jlens.mmpilot.tri_modal import format_focal_capability_gate
+
+    STAGE_C_FOCAL_ADMISSIBILITY = concept_admissibility(
+        list(FOCAL_CONCEPTS),
+        capability=CAPABILITY_VERDICT,
+        threshold=CAPABILITY_VERDICT.get("threshold", CAPABILITY_THRESHOLD),
+    )
+    STAGE_C_ELIGIBLE_FOCAL = list(STAGE_C_FOCAL_ADMISSIBILITY["eligible_concepts"])
+    BUDGET_C_GATED = estimate_stage_passes(
+        stage="C",
+        causal_layers=REPLICATION_LAYERS,
+        **{**_budget_kwargs, "n_focal_concepts": len(STAGE_C_ELIGIBLE_FOCAL)},
+    )
+    print(format_focal_capability_gate(
+        STAGE_C_FOCAL_ADMISSIBILITY,
+        max_budget=BUDGET_C,
+        gated_budget=BUDGET_C_GATED,
+        stage="C",
+    ))
+    print()
+
 if not STAGE_C_REQUESTED:
     print("skipped: STAGE_C_REQUESTED is False")
 elif PRIMARY_CAUSAL_VERDICT is None:
     print("skipped: Stage B did not run, so there is no frozen design to repeat")
+elif not STAGE_C_ELIGIBLE_FOCAL:
+    print(
+        "skipped: no predeclared focal concept passed the behavioral capability "
+        "gate in all three modalities, so every Stage-C cell would be a "
+        "diagnostic. No concept is substituted to make the stage runnable."
+    )
 else:
-    print(format_stage_budget(BUDGET_C))
+    print(format_stage_budget(BUDGET_C_GATED))
     print()
     for _layer in REPLICATION_LAYERS:
-        _level = run_causal_layer(_layer)
+        _level = run_causal_layer(_layer, focal=STAGE_C_ELIGIBLE_FOCAL)
         LAYER_CAUSAL_VERDICTS[_layer] = causal_transfer_verdict(
             _level,
             layer=_layer,
+            # The verdict is still told the FULL fixed focal set, so an excluded
+            # concept appears in the raw table as deliberately not executed
+            # rather than vanishing from the design.
             focal_concepts=FOCAL_CONCEPTS,
             thresholds=THRESHOLDS,
             name=f"L{_layer}_CAUSAL_TRANSFER",
+            capability=CAPABILITY_VERDICT,
+            executed_concepts=STAGE_C_ELIGIBLE_FOCAL,
         )
         STORE.save(
             "metric", f"causal_verdict_L{_layer}", LAYER_CAUSAL_VERDICTS[_layer]
@@ -1924,6 +2039,11 @@ else:
         },
         "stage_plan": STAGE_PLAN,
         "causal_layers_run": list(CAUSAL_LAYERS_RUN),
+        "capability_admissibility_rule": OVERALL_VERDICT.get(
+            "capability_admissibility_rule"
+        ),
+        "capability_admissibility": OVERALL_VERDICT.get("capability_admissibility"),
+        "stage_c_focal_admissibility": STAGE_C_FOCAL_ADMISSIBILITY,
         "fingerprint_digest": FINGERPRINT.digest,
         "selection_fingerprint": SELECTION_FINGERPRINT,
         "split_provenance": SPLIT_PROVENANCE,
@@ -1979,6 +2099,91 @@ else:
     print()
     print(f"report  {RUN_DIR / 'native_audio_transfer_report.md'}")
     print(f"summary {RUN_DIR / 'native_audio_transfer_summary.json'}")
+'''
+)
+
+markdown(
+    """
+## 18b. Amended, capability-filtered report — no model, no recomputation
+
+A completed run's *measurements* and a completed run's *interpretation* have
+different lifetimes. When the reporting rule is corrected, the expensive units
+are unaffected and must not be recomputed — so this cell re-derives verdicts C,
+D and E from the stored units alone and writes a **separately versioned**
+artifact beside the original.
+
+- the original `native_audio_transfer_report.md` is never overwritten;
+- the **raw-generation fingerprint is preserved**, so every completed capability
+  and intervention unit stays reusable and a rerun still resumes them;
+- the postprocessing rule is versioned and checksummed on its own, and the
+  amended artifact binds to the run fingerprint **and** to a digest over the
+  exact source units it read. Re-deriving it against changed units is refused.
+
+Run this on a CPU runtime against an existing run directory. It loads nothing.
+"""
+)
+
+code(
+    '''
+# 18b. Regenerate the verdicts from stored units under the admissibility rule.
+AMENDED = None
+AMENDED_PATHS = None
+if STORE is None:
+    print("skipped: there is no run state to amend")
+else:
+    from jlens.mmpilot.amend import (
+        AMENDED_REPORT_NAME,
+        POSTPROCESSING_VERSION,
+        build_amended_report,
+        verify_amended_binding,
+        write_amended_report,
+    )
+
+    AMENDED = build_amended_report(
+        STORE,
+        primary_layer=PRIMARY_CAUSAL_LAYER,
+        replication_layers=REPLICATION_LAYERS,
+        focal_concepts=FOCAL_CONCEPTS,
+        thresholds=THRESHOLDS,
+        original_report_path=RUN_DIR / "native_audio_transfer_report.md",
+        lens_report=LENS_REPORT,
+        audio_protocol=AUDIO_PROTOCOL,
+        invariance=INVARIANCE,
+        blocked_modalities=BLOCKED_MODALITIES,
+        mode=CONFIG.mode,
+    )
+    AMENDED_PATHS = write_amended_report(AMENDED, run_dir=RUN_DIR)
+    # Immediately hold the artifact to the units it was computed from, so the
+    # binding is exercised on the way out rather than only on some later reuse.
+    print(verify_amended_binding(AMENDED["summary"], STORE))
+
+    _amended_overall = AMENDED["verdicts"]["overall"]
+    _amended_primary = AMENDED["verdicts"]["primary_causal"] or {}
+    print()
+    print("=" * 72)
+    print(f"AMENDED VERDICTS — {POSTPROCESSING_VERSION}")
+    print("=" * 72)
+    print(f"  C  L{PRIMARY_CAUSAL_LAYER}_CAUSAL_TRANSFER            "
+          f"{_amended_primary.get('verdict', 'NOT_EVALUATED')}")
+    print(f"  D  L38_L40_REPLICATION            "
+          f"{AMENDED['verdicts']['replication']['verdict']}")
+    print(f"  E  OVERALL_THREE_MODALITY_VERDICT {_amended_overall['verdict']}")
+    print()
+    print(f"  admissible supporting cells: "
+          f"{_amended_primary.get('audio_cells_supporting_a_claim')}")
+    print(f"  measured but inadmissible:   "
+          f"{_amended_primary.get('audio_cells_measured_but_inadmissible')}")
+    print()
+    print(f"  raw-generation fingerprint (unchanged) "
+          f"{AMENDED['binding']['run_fingerprint_digest']}")
+    print(f"  source units digest                   "
+          f"{AMENDED['binding']['source_units']['combined_digest']}")
+    print(f"  admissibility rule checksum           "
+          f"{AMENDED['binding']['admissibility_rule_checksum']}")
+    print()
+    print(f"amended report  {AMENDED_PATHS['report']}")
+    print(f"amended summary {AMENDED_PATHS['summary']}")
+    print(f"original report kept at {RUN_DIR / 'native_audio_transfer_report.md'}")
 '''
 )
 

@@ -194,7 +194,12 @@ def test_the_notebook_fits_nothing(notebook):
 
 def test_the_model_load_is_guarded_by_both_flags(notebook):
     source = _code_source(notebook)
-    assert "MODEL_STAGES_ENABLED = bool(RUN_MODEL_STAGES and CONFIRM_MODEL_LOAD)" in source
+    # The gate is derived by the tested package function rather than by an
+    # expression written into a cell, so it cannot drift from the rule the unit
+    # tests check — and it is re-derived at every decision point, so it cannot
+    # go stale in a kernel that executed section 2 again.
+    assert "from jlens.mmpilot.stage_gates import" in source
+    assert "refresh_stage_gates(globals())" in source
     assert source.index("if not MODEL_STAGES_ENABLED") < source.index(
         "allow_model_load=True"
     )
@@ -612,3 +617,65 @@ def test_the_question_and_candidate_set_are_identical_across_modalities():
         assert text.endswith(question)
         for concept in concepts:
             assert concept in question
+
+
+# --------------------------------------- the capability-admissibility filter
+
+
+def test_the_notebook_hands_the_capability_result_to_every_causal_verdict(notebook):
+    source = _code_source(notebook)
+    # No causal verdict may be computed without the capability table: there is
+    # no admissible-by-default path through this notebook.
+    for index, chunk in enumerate(source.split("causal_transfer_verdict(")[1:]):
+        assert "capability=CAPABILITY_VERDICT" in chunk.split(")")[0], index
+    assert "concept_admissibility(" in source
+    assert "format_focal_capability_gate(" in source
+
+
+def test_stage_c_prints_its_fixed_eligible_and_excluded_focal_concepts(notebook):
+    source = _code_source(notebook)
+    assert "STAGE_C_ELIGIBLE_FOCAL" in source
+    assert "BUDGET_C_GATED" in source
+    # The design's focal set is never narrowed; only the execution is.
+    assert "focal=STAGE_C_ELIGIBLE_FOCAL" in source
+    assert "focal_concepts=FOCAL_CONCEPTS" in source
+    assert "executed_concepts=STAGE_C_ELIGIBLE_FOCAL" in source
+
+
+def test_the_full_mock_run_labels_every_cell_with_its_admissibility(full_run):
+    fields = full_run["cell_admissibility_fields"]
+    for required in (
+        "capability_admissible",
+        "capability_rejection_reason",
+        "counted_toward_verdict",
+    ):
+        assert required in fields
+    roster = full_run["capability_admissibility"]
+    assert roster["fixed_concepts"] == full_run["focal_concepts"]
+    assert set(roster["eligible_concepts"]) <= set(full_run["focal_concepts"])
+    # The MOCK world's concepts are readable in all three channels by
+    # construction, so nothing is excluded there — and every measured cell is
+    # therefore also an admissible one.
+    assert full_run["audio_cells_measured_but_inadmissible"] == []
+    assert full_run["audio_cells_passing"]
+
+
+def test_the_full_mock_run_keeps_every_predeclared_cell_in_the_raw_table(full_run):
+    # 3 focal concepts x 6 ordered directions, whatever the verdict decides.
+    assert full_run["n_primary_causal_cells_total"] == 3 * 6
+
+
+def test_the_full_mock_run_writes_the_amended_report_beside_the_original(full_run):
+    assert full_run["amended_report_written"] is True
+    assert full_run["amended_summary_written"] is True
+    assert full_run["report_written"] is True
+    binding = full_run["amended_binding"]
+    assert binding["run_fingerprint_digest"] == full_run["fingerprint_digest"]
+    assert binding["raw_generation_fingerprint_unchanged"] is True
+    assert binding["postprocessing_version"].endswith("_v2") or "v2" in binding[
+        "postprocessing_version"
+    ]
+    assert binding["source_units"]["combined_digest"].startswith("sha256:")
+    # Re-deriving the verdicts from stored units reaches the same conclusion as
+    # the live run did: the amendment is a reporting rule, not a new experiment.
+    assert full_run["amended_overall_verdict"] == full_run["overall_verdict"]
