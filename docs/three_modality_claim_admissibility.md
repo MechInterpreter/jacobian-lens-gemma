@@ -148,7 +148,10 @@ bug was fixed — the opposite of what resume is for. So:
 - the amended artifact **binds to both**, plus `source_unit_digest` — per stage,
   the unit count and a digest over the sorted `(key, unit_checksum)` pairs.
   `verify_amended_binding` refuses the artifact if the run fingerprint, the
-  postprocessing version, the rule version, or any stage's unit digest differs.
+  postprocessing version, the rule version, or any stage's unit digest differs —
+  and, when it is given one, if the rule's *checksum* differs. The version can
+  stay the same while the rule's parameters change, so a reused report has to be
+  bound to the rule as configured rather than merely to its name.
 
 Adding, removing, or editing one unit changes the digest and refuses the reuse.
 
@@ -188,16 +191,77 @@ and a test refuses any cell that assigns a derived gate by hand.
 
 ## Reruns that load nothing
 
-To regenerate the amended report against the completed run, on a CPU runtime:
+The first published version of this procedure said "set `RUN_REAL_AUDIO_TRANSFER
+= True`, leave `RUN_MODEL_STAGES = False`, run sections 1–7 and 18b". That does
+not work, and the reason is worth recording. Section 18b began with
 
-- `RUN_REAL_AUDIO_TRANSFER = True` (real run directory and real lens pins)
-- `RUN_MODEL_STAGES = False`
+```python
+if STORE is None:
+```
 
-Sections 1–7 are CPU-only; section 18b (`build_amended_report`) reads the stored
-units directly. It prints the binding, writes both `_capability_filtered_v2`
-artifacts, and leaves `native_audio_transfer_report.md` untouched.
+but `STORE` is bound only inside the Stage-A model path, so with the model stages
+off it did not exist at all and the cell died on `NameError: name 'STORE' is not
+defined`. The setup cells meanwhile derived a timestamped `RUN_ID` and created an
+empty `mmaudio_<timestamp>` directory that the amendment had no use for — the
+CPU path was implicitly assuming a live run it had just declined to perform.
 
-To run Stage C afterwards, only once the amended Stage B verdict has been read:
+`jlens/mmpilot/amend_open.py` replaces that assumption with an explicit mode.
+
+```python
+RUN_REAL_AUDIO_TRANSFER    = True
+RUN_AMENDED_REPORT_ONLY    = True
+AMEND_EXISTING_RUN_DIR     = ".../runs/mmaudio_native_audio_transfer_20260806T001229"
+AMEND_EXPECTED_FINGERPRINT = "sha256:c868999e…80896665920"
+```
+
+every other switch `False`. Run sections **1, 2, 3, 4 and 18b** on a free CPU
+runtime with Drive mounted; sections 5, 6 and 7 print a skip line, so running
+1–7 straight through is equivalent. No Hugging Face token and no model download
+are involved.
+
+The contract:
+
+- the run directory is **given**, never discovered. No newest-directory guess,
+  no scan, no silent choice among candidates. Both the directory and the
+  fingerprint are required;
+- the directory and its `fingerprint.json` must exist. A missing one is refused,
+  never created — `RUN_ID` is not derived and `mkdir` is not called in this mode;
+- the stored fingerprint is reconstructed field by field (order-independent,
+  tuple/list normalized, only `written_utc` stripped) and must **re-derive its
+  own digest**, so a file this code does not fully understand is refused rather
+  than coerced into something that merely looks right;
+- that digest must equal `AMEND_EXPECTED_FINGERPRINT`;
+- the store opens `resuming`. `starting` means there are no units to amend;
+- `LENS_REPORT`, `AUDIO_PROTOCOL`, `INVARIANCE` and `BLOCKED_MODALITIES`, plus
+  the primary layer, replication layers, focal concepts and thresholds, come
+  from the completed run's own `native_audio_transfer_summary.json` and
+  fingerprint — whose recorded digest must match the opened store. Nothing is
+  inferred from the current runtime's libraries. `INVARIANCE` in particular has
+  no honest default: `invariance_gate` is a GO requirement, so a missing one is
+  refused rather than read as absent-and-therefore-fine, and a missing
+  blocked-modality list is not read as an empty one;
+- no model module is imported. `transformers`, `jlens.gemma4` and
+  `jlens.mmpilot.real_backend` are all absent from the amendment path, and a
+  test asserts it.
+
+**The amendment is idempotent**, which matters because the real run's amended
+artifacts already exist:
+
+| on disk | what happens |
+| --- | --- |
+| both present, still bound | `reused` — neither file is rewritten |
+| both present, binding differs | **refused**, never overwritten |
+| exactly one present | refused as a torn write |
+| neither present | generated; both files staged and placed together |
+
+"Still bound" means the run fingerprint, the postprocessing version, the
+admissibility rule version *and* its checksum, and every source-unit digest all
+agree with the reopened store. `native_audio_transfer_report.md` is never
+overwritten in any of these cases.
+
+To run Stage C afterwards, only once the amended Stage B verdict has been read
+(and with `RUN_AMENDED_REPORT_ONLY = False` — it is mutually exclusive with every
+model and causal switch, and the notebook refuses the combination in section 2):
 `RUN_REAL_AUDIO_TRANSFER`, `RUN_MODEL_STAGES`, `CONFIRM_MODEL_LOAD`,
 `CONFIRM_REPRESENTATION_BUDGET`, `RUN_L35_CAUSAL_STAGE`,
 `CONFIRM_L35_CAUSAL_BUDGET`, `RUN_L38_L40_REPLICATION` and
