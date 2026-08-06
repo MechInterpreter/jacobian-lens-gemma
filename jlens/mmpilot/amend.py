@@ -30,6 +30,7 @@ report bug was fixed, which is the opposite of what resume is for. So:
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
@@ -299,6 +300,11 @@ def write_amended_report(
 ) -> dict[str, Path]:
     """Write the amended artifacts beside the original, never over it.
 
+    Both payloads are serialized before either is placed, and each is written to
+    a temporary file and renamed. A failure part-way therefore leaves the run
+    directory as it was rather than a report with no summary — the torn state
+    :func:`jlens.mmpilot.amend_open.amend_or_reuse` refuses to act on.
+
     Raises:
         FileExistsError: If the target path is the original report's. The
             original is evidence of what was concluded before the correction and
@@ -314,21 +320,48 @@ def write_amended_report(
     root.mkdir(parents=True, exist_ok=True)
     report_path = root / report_name
     summary_path = root / summary_name
-    report_path.write_text(amended["report"], encoding="utf-8")
-    summary_path.write_text(
-        json.dumps(amended["summary"], indent=2, default=str), encoding="utf-8"
-    )
+    payloads = {
+        report_path: amended["report"],
+        summary_path: json.dumps(amended["summary"], indent=2, default=str),
+    }
+    staged: list[tuple[Path, Path]] = []
+    try:
+        for path, text in payloads.items():
+            tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}")
+            tmp.write_text(text, encoding="utf-8")
+            staged.append((tmp, path))
+        for tmp, path in staged:
+            os.replace(tmp, path)
+    finally:
+        for tmp, _ in staged:
+            if tmp.exists():  # pragma: no cover - only on a failed write
+                tmp.unlink()
     return {"report": report_path, "summary": summary_path}
 
 
-def verify_amended_binding(summary: Mapping, store: UnitStore) -> dict:
+def verify_amended_binding(
+    summary: Mapping,
+    store: UnitStore,
+    *,
+    expected_rule_checksum: str | None = None,
+) -> dict:
     """Hold an existing amended report to the units it claims to describe.
+
+    Args:
+        summary: The amended summary payload, freshly built or read from disk.
+        store: The store the summary must describe.
+        expected_rule_checksum: The admissibility rule checksum this
+            installation derives right now. Passed when an *existing* artifact is
+            being considered for reuse: the rule version can stay the same while
+            its parameters (the capability threshold, the principal-modality
+            mode) change, and a reused report must be bound to the rule as
+            configured, not merely to its name.
 
     Raises:
         AmendedReportBindingError: When the run fingerprint, the postprocessing
-            version, the admissibility rule checksum, or any source-unit digest
-            differs from what the store holds now. The message names every
-            differing field.
+            version, the admissibility rule version or checksum, or any
+            source-unit digest differs from what the store holds now. The message
+            names every differing field.
     """
     binding = summary.get("binding") or {}
     observed = source_unit_digest(
@@ -350,6 +383,15 @@ def verify_amended_binding(summary: Mapping, store: UnitStore) -> dict:
             "admissibility rule version: "
             f"bound={binding.get('admissibility_rule_version')} "
             f"installed={CLAIM_ADMISSIBILITY_RULE_VERSION}"
+        )
+    if (
+        expected_rule_checksum is not None
+        and binding.get("admissibility_rule_checksum") != expected_rule_checksum
+    ):
+        problems.append(
+            "admissibility rule checksum: "
+            f"bound={binding.get('admissibility_rule_checksum')} "
+            f"derived_now={expected_rule_checksum}"
         )
     bound_units = binding.get("source_units") or {}
     if bound_units.get("combined_digest") != observed["combined_digest"]:
