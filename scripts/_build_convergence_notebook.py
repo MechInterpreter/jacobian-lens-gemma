@@ -303,6 +303,7 @@ from jlens.mmpilot.convergence import (
     build_population,
     clean_predictions_from_interventions,
     head_from_model,
+    load_verification_view,
     protected_file_checksums,
     resolve_candidate_tokens,
     run_convergence_audit,
@@ -523,20 +524,49 @@ if RUN_REAL_CONVERGENCE_AUDIT:
 '''
 )
 
+markdown(
+    """
+### 6c. Two immutable artifacts, one verification view
+
+The completed run was amended once: `..._capability_filtered_v2.json` carries the
+corrected capability-filtered verdicts, and it deliberately does **not** copy the
+run's top-level `lens_validation` block forward. Duplicating a frozen provenance
+record into an amendment is how two copies of one fact start to disagree.
+
+So the two questions are answered by the two artifacts that can answer them:
+
+| question | source |
+| --- | --- |
+| what did the run conclude? | `..._capability_filtered_v2.json` (the amendment) |
+| which lenses were confirmed? | `native_audio_transfer_summary.json` **and** `lens_validation.json` |
+
+The two provenance sources must agree; a disagreement, or either one missing, is
+a hard refusal. The view they compose exists only in memory, and neither file is
+written. The lens-confirmation check is not weakened or dropped to accommodate
+the amendment — dropping it would discard the only record that the three
+published lenses were ever confirmed.
+"""
+)
+
 code(
     '''
 # 6c. Verify every Stage-1 precondition. The first mismatch stops the audit.
 INTEGRITY = None
+VERIFICATION_VIEW = None
+ARTIFACT_PROVENANCE = None
+COMPLETED_SUMMARY_PATH = None
 
 if RUN_REAL_CONVERGENCE_AUDIT:
-    COMPLETED_SUMMARY_PATH = (
-        COMPLETED_RUN / "native_audio_transfer_summary_capability_filtered_v2.json"
-    )
-    if not COMPLETED_SUMMARY_PATH.is_file():
-        COMPLETED_SUMMARY_PATH = COMPLETED_RUN / "native_audio_transfer_summary.json"
-    COMPLETED_SUMMARY = _json.loads(
-        COMPLETED_SUMMARY_PATH.read_text(encoding="utf-8")
-    )
+    # The capability-filtered amendment holds the corrected verdicts and does
+    # not duplicate the top-level lens_validation block. Reading both from one
+    # file is therefore impossible; reading the provenance from the two
+    # immutable originals, and requiring them to agree, is the only honest
+    # option that keeps the lens-confirmation check standing. Composed in
+    # memory. Neither completed-run artifact is written.
+    VERIFICATION_VIEW = load_verification_view(COMPLETED_RUN)
+    COMPLETED_SUMMARY = VERIFICATION_VIEW["summary"]
+    ARTIFACT_PROVENANCE = VERIFICATION_VIEW["provenance"]
+    COMPLETED_SUMMARY_PATH = Path(VERIFICATION_VIEW["verdict_source_path"])
     INTEGRITY = verify_completed_run(
         run_dir=COMPLETED_RUN,
         fingerprint_payload=RUN_FINGERPRINT_PAYLOAD,
@@ -549,10 +579,15 @@ if RUN_REAL_CONVERGENCE_AUDIT:
         expected_lens_checksums=PUBLISHED_LENS_CHECKSUMS,
         expected_combined_lens_checksum=COMBINED_LENS_CHECKSUM,
         summary=COMPLETED_SUMMARY,
+        provenance=ARTIFACT_PROVENANCE,
         layers=LAYERS,
     )
     INTEGRITY["immutability"] = {"checksums": dict(CHECKSUMS_BEFORE)}
-    print(f"verdict source  {COMPLETED_SUMMARY_PATH.name}")
+    print(f"verdict source        {COMPLETED_SUMMARY_PATH.name}")
+    print("lens provenance from  "
+          + ", ".join(ARTIFACT_PROVENANCE["lens_provenance_sources"]))
+    print("                      (the two immutable originals, required to agree)")
+    print()
     for _check in INTEGRITY["checks"]:
         print(f"  {'PASS' if _check['passed'] else 'FAIL'}  {_check['check']}")
     print()
@@ -647,6 +682,25 @@ norm, compares the result against both RMSNorm conventions, records which one
 matches, and checks the whole path against the model's own `unembed`. A
 disagreement stops the audit rather than being reported as a small numerical
 difference.
+
+Three things about that comparison are load-bearing under BF16 on GPU, and each
+was learned the hard way:
+
+* **The probe is placed on the live norm's device and dtype.** Converting only
+  the dtype raises `Expected all tensors to be on the same device`.
+* **Both readout paths are evaluated one probe at a time with a leading batch
+  dimension of 1.** A batched `unembed` against a row-wise stack compares two
+  GEMM shapes rather than two readouts, and BF16 rounds them differently. The
+  tolerance is not widened to absorb that.
+* **The softcap is applied in the model's native dtype, before the float32
+  conversion** — the order `MODEL.unembed` uses. Capping after the conversion is
+  a different function, and on the real checkpoint it differs by ~0.12.
+
+The norm-convention check is likewise dtype-aware: Gemma's RMSNorm computes in
+float32 and casts back with `type_as`, so the probe is quantized to the live
+input dtype first and the analytical reconstruction is rounded to the live
+output dtype last. Without that, one BF16 rounding step is large enough to make
+a textbook Gemma RMSNorm report as `not_rmsnorm`.
 """
 )
 
@@ -696,8 +750,12 @@ if RUN_REAL_CONVERGENCE_AUDIT:
     print(f"readout            {HEAD_AUDIT['readout_expression']}")
     print(f"final norm         {HEAD_AUDIT['final_norm_class']}")
     print(f"norm convention    {HEAD_AUDIT['norm_weight_convention']}")
-    print(f"  residuals        {HEAD_AUDIT['norm_convention_residuals']}")
+    print(f"  dtype-aware      {HEAD_AUDIT['norm_convention_residuals_dtype_aware']}")
+    print(f"  raw float32      {HEAD_AUDIT['norm_convention_residuals_raw_float32']}")
+    print(f"  probe            {HEAD_AUDIT['norm_convention_probe']}")
     print(f"softcap            {HEAD_AUDIT['final_logit_softcapping']}")
+    print(f"comparison         {HEAD_AUDIT['unembed_comparison_protocol']['protocol']}"
+          f" at shape {HEAD_AUDIT['unembed_comparison_protocol']['probe_shape']}")
     print(f"matches unembed    {HEAD_AUDIT['matches_model_unembed']} "
           f"(max |diff| {HEAD_AUDIT['max_abs_difference_vs_model_unembed']})")
     print(f"head checksum      {HEAD_AUDIT['head_checksum']}")
