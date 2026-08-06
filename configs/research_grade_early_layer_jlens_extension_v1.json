@@ -1,0 +1,379 @@
+{
+  "protocol_version": "research-grade-early-layer-jlens-extension-v1",
+  "artifact_format_version": "jlens.calibration.artifact.v1",
+  "extension_artifact_schema": "jlens.calibration.early_layer_artifact.v1",
+  "frozen_utc": "2026-08-06",
+  "mode": "research_grade_early_layer_extension",
+  "extends_config": "configs/research_grade_jlens_calibration_v1.json",
+  "extends_config_is_unmodified": true,
+
+  "why_this_exists": {
+    "statement": "The completed scale-100 calibration validated physical layers 35, 38 and 40 on untouched confirmation and failed at 32 and 26. Layer 32 failed closely enough to motivate a larger calibration. The completed multimodal experiment then established controlled three-modality causal transfer at 35/38/40, and a native-output convergence audit found those layers already converged onto the clean answer. The next required scientific step is a validated EARLIER readout.",
+    "primary_earlier_layer": 32,
+    "secondary_earlier_layer": 26,
+    "descriptive_layers": [8, 14, 20],
+    "descriptive_layer_policy": "L20 and shallower are reported continuously at every scale and are DESCRIPTIVE unless they independently pass the same frozen gate on the fresh confirmation set.",
+    "already_published_layers": [35, 38, 40],
+    "already_published_policy": "The existing L35/L38/L40 published lenses remain unchanged. This extension neither overwrites, replaces nor republishes them; publish_early_layer refuses a destination outside its own run directory and refuses any layer outside the publication targets."
+  },
+
+  "evidentiary_boundary": {
+    "old_confirmation_set_status": "DEVELOPMENT_HISTORY_SPENT",
+    "old_confirmation_set_reasoning": "The scale-100 confirmation set has been opened and its result has been read. That result is what motivated this extension. A set whose verdict already influenced the decision to run a larger scale cannot be that scale's untouched endpoint.",
+    "old_confirmation_set_handling": "Excluded from every new split by exact normalized checksum and by SimHash near-duplicate distance. Never reused, never relabelled, never reset.",
+    "old_development_set_status": "DEVELOPMENT_HISTORY_SPENT",
+    "old_development_set_handling": "Excluded from every new split for the same reason.",
+    "reused_parent_state": "the scale-100 fitting accumulator only: {jacobian_sum, n_done}",
+    "why_the_accumulator_is_reusable": "J_l = E[dh_final/dh_l] is a population mean estimated by a running average over a deterministically ordered prompt list. jlens.fitting.fit reads no validation or confirmation result while accumulating it, so no held-out number could have influenced it. Continuing it is a longer fit, not a fit informed by its own evaluation.",
+    "parent_run_is_read_only": true,
+    "parent_run_written_by_this_extension": false,
+    "parent_immutability_proof": "every resolved parent file is checksummed before and after the extension and compared byte for byte"
+  },
+
+  "parent_run": {
+    "expected_root": "/content/drive/MyDrive/jacobian-lens-gemma/runs/rgcalib_real_7e3736b4de8f",
+    "baseline_scale": 100,
+    "baseline_scale_status": "DESCRIPTIVE_ONLY",
+    "baseline_scale_policy": "Scale 100 is reported as a descriptive baseline and is scored on the FRESH development set so the plateau rule has three points. It cannot be newly confirmed: the set that would confirm it has been spent.",
+    "filenames_are_resolved_not_assumed": true,
+    "required_artifacts": [
+      "fingerprint.json",
+      "units/corpus/manifest.json",
+      "units/fit_diagnostics/summary.json",
+      "units/scale_snapshot/scale100.json",
+      "checkpoints/jacobian_sum.pt",
+      "artifacts/lens.scale100.pt"
+    ],
+    "optional_artifacts_recorded_when_present": [
+      "units/validation/scale100.json",
+      "units/confirmation/scale100.json",
+      "units/publication/scale100.json",
+      "units/scale_comparison/comparison.json",
+      "artifacts/calibration_report.json",
+      "units/fit_diagnostics/rolling.json"
+    ],
+    "blocking_audit_checks": [
+      "parent_fingerprint_recomputes",
+      "parent_configuration_checksum",
+      "model_identity",
+      "tokenizer_identity",
+      "corpus_identity",
+      "corpus_revision_recorded",
+      "text_only_corpus",
+      "hook_site_and_residual_convention",
+      "d_model",
+      "capture_geometry",
+      "fit_estimator_version",
+      "artifact_format_version",
+      "accumulator_format",
+      "accumulator_layer_grid",
+      "accumulator_checksum_recorded",
+      "n_done_equals_baseline",
+      "resume_cursor_matches_n_done",
+      "baseline_snapshot_checksum",
+      "fit_prompt_ordering_protocol",
+      "parent_fit_prefix_checksum_present",
+      "no_prompt_dropped_before_fitting",
+      "old_split_checksums_present",
+      "old_duplicate_audit_present",
+      "old_confirmation_selection_recorded"
+    ],
+    "non_blocking_audit_checks": ["old_confirmation_vault_status_recorded"],
+    "missing_artifact_policy": "STOP_AND_NAME_WHAT_MUST_BE_RECOVERED. No scientific metadata is inferred, defaulted, or reconstructed from a guess.",
+    "parent_fit_prompt_manifest": {
+      "source": "units/corpus/manifest.json -> scale_nesting_audit.checksums['100']",
+      "what_it_is": "a checksum over the identities (record_id, stream_index, normalized text sha256, SimHash) of the first 100 fit records in the parent's nested order",
+      "why_it_is_sufficient": "the parent recorded n_dropped_too_short = 0, so the fitted prefix IS the split prefix; the checksum therefore authenticates the exact prompts the parent fitted on",
+      "if_n_dropped_too_short_is_nonzero": "REFUSE — the fitted prompt identity is not recoverable from stored artifacts"
+    }
+  },
+
+  "model": {
+    "repo_id": "google/gemma-4-E4B-it",
+    "revision": "fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd",
+    "tokenizer_repo_id": "google/gemma-4-E4B-it",
+    "tokenizer_revision": "fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd",
+    "dtype": "bfloat16",
+    "device_map": "cuda",
+    "allow_model_load": false,
+    "expect_n_layers": 42,
+    "expect_d_model": 2560,
+    "expect_vocab_size": 262144
+  },
+
+  "sites": {
+    "source_site": "block_output",
+    "target_site": "block_output",
+    "source_layers": [8, 14, 20, 26, 32, 35, 38, 40],
+    "normalized_depth": [19, 33, 48, 62, 76, 83, 90, 95],
+    "target_layer": 41,
+    "hook": "jlens.hooks.ActivationRecorder on model.language_model.layers[l]",
+    "residual_convention": "pre-final-norm residual after attention, MLP, per-layer-embedding re-injection and layer_scalar; the exact input to block l+1",
+    "readout": "lm_head(final_norm(J_l @ h))",
+    "logit_softcap": 30.0,
+    "unchanged_from_parent": true
+  },
+
+  "positions": {
+    "skip_first": 16,
+    "source_rule": "16 <= t < seq_len - 1",
+    "target_rule": "all current-and-future valid positions t' >= t, summed; then mean over source positions t",
+    "estimator": "upstream jlens.fitting.jacobian_for_prompt, unmodified",
+    "unchanged_from_parent": true
+  },
+
+  "corpus": {
+    "primary": {
+      "hf_dataset": "Salesforce/wikitext",
+      "config": "wikitext-103-raw-v1",
+      "split": "train",
+      "revision": "b08601e04326c79dfdd32d625aee71d232d685c3",
+      "revision_status": "MUST_MATCH_PARENT_RESOLVED_REVISION",
+      "streaming": true,
+      "license": "CC BY-SA 3.0",
+      "min_chars": 600,
+      "record_id_template": "wikitext-103-raw-v1/train/{stream_index}",
+      "must_equal_parent": true
+    },
+    "prompt_format": "raw text, truncated to max_seq_len tokens, BOS prepended by Gemma4LensModel.encode",
+    "chat_template_used_for_fitting": false,
+    "modality": "text-only",
+    "spokencoco_used": false,
+    "multimodal_data_used": false,
+    "multimodal_data_in_fitting": false,
+    "multimodal_data_in_lens_validation": false
+  },
+
+  "continuation": {
+    "fit_order_protocol": "parent-prefix-pinned-nested-order-v1",
+    "rule": [
+      "1. Reproduce the parent's collection exactly: same pinned corpus, same min_chars, same split seed and bucket layout, same quota stop rule.",
+      "2. Positions 0..99 are the parent's own fit partition in the parent's own nested order.",
+      "3. Any further positions come from records the parent's collection never reached, in ascending stream index — an ordering that cannot be perturbed by streaming further.",
+      "4. Recompute the checksum over the first 100 records and require exact agreement with the parent's fit-prompt manifest.",
+      "5. Only then seed the extension checkpoint from the parent accumulator and let upstream fit() skip those 100.",
+      "6. Consume the next 900 deterministic fit records; snapshot at 250 and at 1000."
+    ],
+    "why_not_the_nested_hash_order_over_the_longer_stream": "re-running the parent's nested-hash ordering over a LONGER record set can insert a late-streamed record ahead of an early one, which would silently break the prefix nesting the continuation depends on. The pinned-prefix ordering is stable under stream extension; the pure hash ordering is not.",
+    "prefix_mismatch_policy": "REFUSE. Appending 150 or 900 prompts to an accumulator built from a different 100 and calling the result a 250- or 1,000-prompt lens is exactly the failure this check exists for.",
+    "equivalence_claim": "continuation to N is BIT-IDENTICAL to a fresh nested fit over the same ordering at N, because the additions happen in the same sequence",
+    "equivalence_demonstrated_in": "MOCK mode and the CPU test suite, by refitting from scratch and comparing tensor by tensor",
+    "checkpoint_seeding": "byte copy of the parent accumulator into the extension run directory, checksum-verified against the parent's; the parent file is opened read-only",
+    "resume": "compatible resume continues; a checkpoint with different source_layers, target_layer or skip_first, or one behind the parent's n_done, is REFUSED",
+    "parent_checkpoint_checksum_recorded_in_every_artifact": true,
+    "estimator_unchanged": true,
+    "estimator_implementation": "jlens.fitting.fit (upstream, unmodified)",
+    "optimizer": "not_applicable_estimator_is_a_sample_mean"
+  },
+
+  "scale": {
+    "baseline_scale": 100,
+    "candidate_scales": [250, 1000],
+    "development_scored_at": [100, 250, 1000],
+    "development_baseline_is_descriptive_only": true,
+    "maximum_authorized_scale": 1000,
+    "larger_scale_policy": "not authorized by this extension",
+    "nested": true,
+    "nesting_note": "the accumulator at prompt 250 IS the 250-prompt lens; the 1,000-prompt lens is that same accumulator continued. The two snapshots cost exactly as much as reaching 1,000 alone."
+  },
+
+  "fresh_splits": {
+    "split_protocol": "extension-fresh-eval-hash-bucket-v1",
+    "split_seed": 20260807,
+    "development_prompt_seed": 20260808,
+    "confirmation_prompt_seed": 20260809,
+    "n_buckets": 100,
+    "development_buckets": [0, 49],
+    "confirmation_buckets": [50, 99],
+    "n_development_prompts": 256,
+    "n_confirmation_prompts": 256,
+    "pool": "records the parent's collection never reached (stream index beyond the parent's stop point)",
+    "exclusions": [
+      "every old fit record",
+      "every old development record",
+      "every old confirmation record",
+      "every new fit record through scale 1000"
+    ],
+    "exclusion_methods": {
+      "exact": "sha256 of normalized text (NFKC, lowercased, whitespace-collapsed, stripped)",
+      "near": "64-bit SimHash over word 3-grams, banded into 4 x 16-bit bands, Hamming distance <= 3"
+    },
+    "max_hamming_distance": 3,
+    "cross_split_leakage_audit": "run independently on the constructed sets, against each other and against every excluded set; a hit RAISES",
+    "shrink_policy": "REFUSE. Held-out sizes are never reduced because corpus coverage was inconvenient.",
+    "confirmation_selection_consults_a_jlens": false,
+    "recorded_per_prompt": ["record_id", "stream_index", "normalized_checksum", "simhash", "prompt_sha256", "target_token_id"],
+    "recorded_per_split": ["size", "checksum", "record_ids", "bucket_rule", "order_rule", "exclusion_counts"]
+  },
+
+  "validation": {
+    "gate_protocol": "research-grade-early-layer-extension-tie-aware-native-readout-v1",
+    "derived_from": "research-grade-calibration-tie-aware-native-readout-v1",
+    "criterion_rank_convention": "midrank",
+    "rank_conventions_reported": ["optimistic", "pessimistic", "midrank"],
+    "n_prompts": 256,
+    "n_folds": 4,
+    "control_seed": 1234,
+    "controls": ["permuted", "random", "wrong_layer"],
+    "noise_controls": ["permuted", "random"],
+    "wrong_layer_mapping": "distant_layer_mapping",
+    "diagnostics": ["logit_lens"],
+    "thresholds": {
+      "max_tied_at_max_rate": 0.5,
+      "min_noise_control_mrr_ratio": 1.5,
+      "min_noise_control_mrr_margin": 0.1,
+      "min_wrong_layer_mrr_margin": 0.15,
+      "max_median_midrank": 5.0,
+      "min_top_k_inclusion": 0.5,
+      "top_k": 10,
+      "min_fold_mrr_fraction": 0.5,
+      "min_distinct_target_tokens": 32,
+      "max_target_token_share": 0.25
+    },
+    "thresholds_changed_from_parent": {
+      "n_prompts": "128 -> 256 (larger sample)",
+      "min_distinct_target_tokens": "24 -> 32 (STRICTER)"
+    },
+    "thresholds_unchanged_from_parent": [
+      "max_tied_at_max_rate",
+      "min_noise_control_mrr_ratio",
+      "min_noise_control_mrr_margin",
+      "min_wrong_layer_mrr_margin",
+      "max_median_midrank",
+      "min_top_k_inclusion",
+      "top_k",
+      "n_folds",
+      "min_fold_mrr_fraction",
+      "max_target_token_share",
+      "rank_convention",
+      "controls",
+      "noise_controls",
+      "wrong_layer_mapping"
+    ],
+    "nothing_is_loosened": true,
+    "frozen_before_any_extension_result": true,
+    "continuous_metrics_reported_for_every_layer_and_scale": true
+  },
+
+  "target_diversity": {
+    "selection_protocol": "target-token-stratified-stable-rank-v1",
+    "min_distinct_target_tokens": 32,
+    "max_target_token_share": 0.25,
+    "refuse_rather_than_lower": true,
+    "selected_by_jlens_performance": false,
+    "target_rule": "the frozen model's own final-layer argmax at the last prompt position; no lens and no candidate layer is consulted",
+    "record": ["prompt_sha256", "target_token_id", "stable_order", "corpus_position"]
+  },
+
+  "scale_selection": {
+    "version": "early-layer-extension-scale-selection-v1",
+    "declared_before_results": true,
+    "earlier_layers": [26, 32],
+    "candidate_scales": [250, 1000],
+    "rule": [
+      "1. Determine the eligible earlier-layer set at scale 250 and scale 1000 on the DEVELOPMENT set, using the unchanged gate.",
+      "2. Select the smallest candidate scale whose eligible earlier-layer set equals the scale-1000 set, provided the predeclared plateau rule reports that improvement has stopped.",
+      "3. Otherwise select scale 1000.",
+      "4. If neither L32 nor L26 passes development at any candidate scale, still select scale 1000 for one honest confirmation and report the result whatever it says.",
+      "5. Record that confirmation was not consulted."
+    ],
+    "require_plateau_reached": true,
+    "plateau_rule_version": "paper-endpoint-convergence-diagnostic-v2",
+    "plateau_rule_unchanged": true,
+    "confirmation_may_be_consulted": false,
+    "multimodal_causal_outcomes_may_be_consulted": false,
+    "published_from_development_results": false,
+    "post_hoc_scale_choice": "forbidden — the confirmation vault opens only against a written selection payload that asserts confirmation_not_consulted"
+  },
+
+  "confirmation": {
+    "vault": "jlens.calibration.publication.ConfirmationVault, fresh instance holding the new 256-record confirmation set",
+    "may_be_constructed_and_sealed_before_scale_selection": true,
+    "may_be_evaluated_before_scale_selection": false,
+    "unlocked_exactly_once": true,
+    "scales_evaluated": "the selected scale only",
+    "gate": "the same frozen gate, unchanged",
+    "all_layer_results_recorded_including_failures": true,
+    "retry_after_seeing_confirmation": "forbidden",
+    "threshold_change_after_seeing_confirmation": "forbidden"
+  },
+
+  "publication": {
+    "requires_fresh_confirmation_pass": true,
+    "publication_targets": [26, 32],
+    "refuses_layers_outside_targets": true,
+    "refuses_destinations_outside_the_extension_run": true,
+    "refuses_destinations_inside_the_parent_run": true,
+    "failed_layers_keep_diagnostics": true,
+    "failed_layers_marked_validated": false,
+    "never_overwrite": [
+      "runs/text_jlens_early_layer_recalibration_v2/artifacts/lens.validated.pt",
+      "the parent run rgcalib_real_7e3736b4de8f in its entirety",
+      "the existing published L35/L38/L40 lenses"
+    ],
+    "required_metadata": [
+      "parent_run_root", "parent_run_fingerprint_digest", "parent_accumulator_checksum",
+      "parent_accumulator_n_done", "parent_audit_checksum",
+      "model_repo_id", "model_revision", "tokenizer_repo_id", "tokenizer_revision",
+      "corpus_id", "corpus_revision", "corpus_revision_status",
+      "n_fitting_prompts", "fit_order_protocol", "continuation",
+      "fit_split_checksum", "development_split_checksum", "confirmation_split_checksum",
+      "fresh_splits_manifest_checksum", "split_protocol",
+      "physical_layer", "normalized_depth", "hook_site", "residual_convention",
+      "target_layer", "estimator", "objective",
+      "development_metrics", "confirmation_metrics", "target_diversity",
+      "gate_version", "gate_digest", "selection_rule_digest", "selection_checksum",
+      "protocol_version", "protocol_digest",
+      "lens_checksum", "base_artifact_checksum", "artifact_checksum",
+      "frozen", "validated", "publication_status"
+    ],
+    "no_go_verdict": "EARLY_LAYER_CALIBRATION_NO_GO",
+    "no_go_statement": "the current estimator did not yield a validated earlier readout at the authorized endpoint"
+  },
+
+  "budget": {
+    "anchor_source": "the operator's observed scale-100 fit on one NVIDIA L4",
+    "anchor_minutes": 7.1,
+    "anchor_n_prompts": 100,
+    "extrapolation": "linear in prompts; one forward plus 320 backward passes per prompt at dim_batch=8",
+    "uncertainty_band": [0.9, 1.6],
+    "uncertainty_note": "one observation, one runtime, one prompt-length distribution. The high end is the planning number.",
+    "rows_are_incremental_not_cumulative": true,
+    "prompts_already_in_the_accumulator": 100
+  },
+
+  "switches": {
+    "RUN_REAL_EARLY_LAYER_EXTENSION": false,
+    "RUN_MODEL_STAGES": false,
+    "CONFIRM_PARENT_IMPORT": false,
+    "CONFIRM_250_BUDGET": false,
+    "CONFIRM_1K_BUDGET": false,
+    "RUN_FRESH_DEVELOPMENT": false,
+    "RUN_FINAL_CONFIRMATION": false,
+    "PUBLISH_VALIDATED_EARLY_LENSES": false,
+    "every_real_switch_defaults_to_false": true,
+    "run_all_performs_a_mock_run": true
+  },
+
+  "scope_boundaries": {
+    "spokencoco_used_for_calibration": false,
+    "images_used_for_calibration": false,
+    "audio_used_for_calibration": false,
+    "modality_specific_lenses_trained": false,
+    "cross_modal_adapters_trained": false,
+    "estimator_changed": false,
+    "gate_lowered": false,
+    "old_confirmation_evidence_reused": false,
+    "completed_multimodal_experiment_rerun": false,
+    "parent_calibration_run_modified": false
+  },
+
+  "paths": {
+    "run_root": "runs",
+    "run_prefix": "rgext",
+    "checkpoint_relpath": "checkpoints/jacobian_sum.pt",
+    "snapshot_relpath_template": "artifacts/lens.ext.scale{scale}.pt",
+    "published_relpath_template": "artifacts/published/lens.early.layer{layer}.scale{scale}.validated.pt",
+    "parent_provenance_relpath": "artifacts/parent_provenance.json"
+  }
+}
