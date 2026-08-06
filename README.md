@@ -292,6 +292,7 @@ tests, and the upstream walkthrough/README (below).
 | `notebooks/gemma_4_e4b_layer21_diagnostic.ipynb` | Layer-21 refit diagnostic (completed investigation; documented history) |
 | `notebooks/gemma_4_e4b_jspace_causal_smoke.ipynb` | Causal steering smoke run: parity-gated, checkpointed, resume-safe measured interventions |
 | `notebooks/gemma_4_e4b_multimodal_jlens_capture.ipynb` | First image/audio-conditioned captures on the frozen lens |
+| `notebooks/multimodal_jspace_output_convergence_audit_colab.ipynb` | Convergence-timing audit of the completed L35 transfer: the model's own output head applied to stored residuals at L35/38/40, read-only against the finished run ([docs/output_convergence_timing.md](docs/output_convergence_timing.md)) |
 | `tests/` | CPU-only tests (no network, no real model): adapter, controls, evaluation, pursuit, cones, ignition, metadata, scripts, exporter, interventions, notebook light paths, finite differences |
 
 ## Gemma 4 E4B specifics
