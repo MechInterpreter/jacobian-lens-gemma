@@ -245,6 +245,30 @@ class UnitStore:
                 out[key] = payload
         return out
 
+    def unit_checksums(self, stage: str) -> dict[str, str]:
+        """Each valid unit's stored payload checksum, keyed by unit key.
+
+        Read-only, and it never recomputes: this is what the unit *says* it is,
+        which is what a later artifact binds itself to. A unit that fails its own
+        checksum is absent here for the same reason :meth:`load` returns None for
+        it — an unverifiable unit is not a unit.
+        """
+        out: dict[str, str] = {}
+        for key in self.keys(stage):
+            path = self.unit_path(stage, key)
+            try:
+                record = json.loads(path.read_text(encoding="utf-8"))
+                payload = record["payload"]
+                checksum = record.get("unit_checksum")
+            except (json.JSONDecodeError, KeyError, TypeError, UnicodeDecodeError):
+                continue
+            if (
+                checksum == payload_checksum(payload)
+                and record.get("fingerprint_digest") == self.fingerprint.digest
+            ):
+                out[key] = str(checksum)
+        return out
+
     # --------------------------------------------------------------- report
 
     def status_report(self, stages: Sequence[str] = STAGES) -> dict:
