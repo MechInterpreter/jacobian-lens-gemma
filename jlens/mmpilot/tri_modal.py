@@ -28,6 +28,14 @@ from the configuration rather than guessing it.
 and for no other reason.** It is not "pre-language", not "pre-convergence", and
 not "early" in any sense this study measures. Convergence timing is unresolved
 here and every artifact says so.
+
+**A measured effect is not automatically evidence.** Every predeclared causal
+cell is measured and printed, including cells for concepts the model could not
+read out of one of the channels. Whether a cell may *support a claim* is decided
+in exactly one place — :mod:`jlens.mmpilot.admissibility` — and only cells whose
+concept passed the behavioral capability gate in every required modality are
+allowed to. See that module for why, and for what happened when the rule was
+missing.
 """
 
 from __future__ import annotations
@@ -37,6 +45,13 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from jlens.mmpilot.admissibility import (
+    CLAIM_ADMISSIBILITY_RULE_VERSION,
+    admissibility_rule_record,
+    annotate_causal_cells,
+    concept_admissibility,
+    resolve_capability_table,
+)
 from jlens.mmpilot.report import FAIL, NOT_EVALUATED, PASS, criterion
 
 #: Bound into the run fingerprint. Distinct from the pilot's, the robustness
@@ -297,6 +312,49 @@ def format_stage_budget(budget: StageBudget, *, seconds_per_pass: float = 0.5) -
         f"  estimated Drive footprint      ~{budget.estimated_drive_mb:.0f} MB",
         "  estimated units: "
         + ", ".join(f"{k}={v}" for k, v in sorted(budget.estimated_units.items())),
+    ]
+    return "\n".join(lines)
+
+
+def format_focal_capability_gate(
+    roster: Mapping,
+    *,
+    max_budget: StageBudget,
+    gated_budget: StageBudget,
+    stage: str = "C",
+    seconds_per_pass: float = 0.5,
+) -> str:
+    """What a stage would cost by design, and what it costs after the gate.
+
+    ``roster`` is :func:`jlens.mmpilot.admissibility.concept_admissibility` over
+    the **fixed** focal set. The design's maximum is printed beside the gated
+    number so the reduction is visible as a consequence of the capability
+    result, not as a quietly smaller experiment. Nothing is substituted for an
+    excluded concept.
+    """
+    excluded = roster.get("excluded_concepts") or []
+    lines = [
+        "=" * 72,
+        f"STAGE {stage} FOCAL CONCEPTS — capability-gated before anything is spent",
+        "=" * 72,
+        f"  fixed focal concepts (predeclared)  {roster.get('fixed_concepts')}",
+        f"  capability-eligible                 {roster.get('eligible_concepts')}",
+        f"  excluded (CAPABILITY_INELIGIBLE)    {roster.get('excluded_concept_names')}",
+    ]
+    for entry in excluded:
+        lines.append(f"      {entry['rejection_reason']}")
+    lines += [
+        "",
+        f"  maximum design budget               {max_budget.total_passes:>9,} passes "
+        f"(~{max_budget.hours(seconds_per_pass):.1f} h)",
+        f"  actual capability-gated budget      {gated_budget.total_passes:>9,} passes "
+        f"(~{gated_budget.hours(seconds_per_pass):.1f} h)",
+        f"  saved by not measuring ineligible   "
+        f"{max_budget.total_passes - gated_budget.total_passes:>9,} passes",
+        "",
+        "  " + str(roster.get("no_post_hoc_replacement", "")),
+        "  The fixed design is unchanged and the run fingerprint still binds the "
+        "full focal set, so the completed units stay resumable.",
     ]
     return "\n".join(lines)
 
@@ -632,6 +690,9 @@ def evaluate_causal_cells(
     focal_concepts: Sequence[str],
     pairs: Sequence[str] = ALL_PAIRS,
     thresholds: TriModalThresholds,
+    capability: Mapping,
+    executed_concepts: Sequence[str] | None = None,
+    principal_three_modality: bool = True,
 ) -> list[dict]:
     """One verdict per (concept, direction) at one layer, against its own controls.
 
@@ -644,8 +705,35 @@ def evaluate_causal_cells(
     mean but had the wrong sign on half its photographs has not transferred, and
     neither has one whose distinct images turned out to be fewer than the design
     said.
+
+    **The returned table is complete.** Every predeclared cell appears, including
+    cells whose concept failed the behavioral capability gate — those are real
+    measurements and stay visible as the diagnostics they were declared to be.
+    What the capability gate decides is whether a cell may be *evidence*:
+    :mod:`jlens.mmpilot.admissibility` stamps ``capability_admissible``,
+    ``capability_rejection_reason`` and ``counted_toward_verdict`` on every row,
+    and ``counted_toward_verdict`` is the only flag the verdicts read.
+
+    Args:
+        capability: The per-concept capability result (a summary from
+            :func:`jlens.mmpilot.capability.capability_summary` or the verdict
+            from :func:`audio_capability_verdict`). Required — there is no
+            admissible-by-default path.
+        executed_concepts: The concepts model passes were actually spent on.
+            When given, a cell with no rows whose concept is outside this set is
+            recorded as deliberately not executed rather than as missing data.
+        principal_three_modality: Require text, image **and** spoken audio for
+            every cell (the rule the three-modality verdict uses). ``False``
+            requires only the modalities each cell spans.
     """
     rows = list(interventions.get("rows", []))
+    _, recorded_threshold = resolve_capability_table(capability)
+    capability_threshold = (
+        recorded_threshold
+        if recorded_threshold is not None
+        else thresholds.capability_threshold
+    )
+    executed = None if executed_concepts is None else set(executed_concepts)
     low, high = thresholds.norm_ratio_bounds
     out: list[dict] = []
     for concept in focal_concepts:
@@ -654,6 +742,7 @@ def evaluate_causal_cells(
                 rows, layer=layer, concept=concept, pair=pair, control_kind="source_concept"
             )
             if best is None:
+                deliberately_skipped = executed is not None and concept not in executed
                 out.append(
                     {
                         "layer": int(layer),
@@ -661,8 +750,18 @@ def evaluate_causal_cells(
                         "pair": pair,
                         "audio_related": SPOKEN_AUDIO in pair,
                         "evaluated": False,
+                        "execution_status": (
+                            "not_executed_capability_ineligible"
+                            if deliberately_skipped
+                            else "no_rows"
+                        ),
                         "passes": False,
-                        "reasons": ["no source-concept row for this cell"],
+                        "reasons": [
+                            "not executed: the concept failed the behavioral "
+                            "capability gate, so no model passes were spent on it"
+                            if deliberately_skipped
+                            else "no source-concept row for this cell"
+                        ],
                     }
                 )
                 continue
@@ -729,6 +828,7 @@ def evaluate_causal_cells(
                     "pair": pair,
                     "audio_related": SPOKEN_AUDIO in pair,
                     "evaluated": True,
+                    "execution_status": "measured",
                     "alpha": float(best["alpha"]),
                     "mean_signed_target_effect": effect,
                     "fraction_expected_sign": float(best["fraction_expected_sign"]),
@@ -754,7 +854,12 @@ def evaluate_causal_cells(
                     "reasons": reasons,
                 }
             )
-    return out
+    return annotate_causal_cells(
+        out,
+        capability=capability,
+        threshold=capability_threshold,
+        principal_three_modality=principal_three_modality,
+    )
 
 
 # ---------------------------------------------------------------- verdict A
@@ -834,6 +939,8 @@ def representational_transfer_verdict(
     *,
     thresholds: TriModalThresholds,
     primary_layer: int,
+    capability: Mapping | None = None,
+    pooled_concepts: Sequence[str] = (),
 ) -> dict:
     """Do the six directional pairs beat their shuffled controls?
 
@@ -841,6 +948,12 @@ def representational_transfer_verdict(
     computed under exactly the same rule and reported beside them as an internal
     replication, so a reader can see whether the study reproduced the confirmed
     result — but reproducing it is not what this verdict is for.
+
+    Retrieval here is **pooled over every selected concept**, so unlike the
+    causal cells it cannot be split per concept without recomputing it. Passing
+    ``capability`` and ``pooled_concepts`` does not filter anything; it records
+    which concepts in the pool failed the behavioral gate, so a reader can see
+    that this verdict is an as-measured result and never sufficient on its own.
     """
     rows = representational_rows_by_layer(reports)
     audio_rows = [row for row in rows if row["audio_related"]]
@@ -893,10 +1006,37 @@ def representational_transfer_verdict(
             "J-space codes carry no cross-modal structure this test can detect "
             "between spoken audio and the other channels."
         )
+    if capability is not None and pooled_concepts:
+        roster = concept_admissibility(
+            list(pooled_concepts),
+            capability=capability,
+            threshold=thresholds.capability_threshold,
+        )
+        pool_disclosure = {
+            "pooled_concepts": list(pooled_concepts),
+            "capability_ineligible_concepts_in_pool": roster["excluded_concept_names"],
+            "filtered": False,
+            "reading": (
+                "Retrieval is pooled over all selected concepts, so a "
+                "capability-ineligible concept's activations are part of this "
+                "pool and cannot be removed without recomputing retrieval. This "
+                "verdict is reported as measured; it is representational "
+                "evidence only and is never sufficient for a three-modality "
+                "claim on its own."
+            ),
+        }
+    else:
+        pool_disclosure = {
+            "pooled_concepts": list(pooled_concepts),
+            "capability_ineligible_concepts_in_pool": None,
+            "filtered": False,
+            "reading": "no capability roster was supplied to this verdict",
+        }
     return {
-        "schema": "jlens.mmpilot.representational_transfer_verdict.v1",
+        "schema": "jlens.mmpilot.representational_transfer_verdict.v2",
         "verdict": verdict,
         "rationale": rationale,
+        "capability_pool_disclosure": pool_disclosure,
         "primary_layer": int(primary_layer),
         "layers": sorted(int(key) for key in reports),
         "pairs": list(ALL_PAIRS),
@@ -929,13 +1069,26 @@ def causal_transfer_verdict(
     focal_concepts: Sequence[str],
     thresholds: TriModalThresholds,
     name: str,
+    capability: Mapping,
+    executed_concepts: Sequence[str] | None = None,
+    principal_three_modality: bool = True,
 ) -> dict:
-    """One layer's causal result, decided on the audio-related cells.
+    """One layer's causal result, decided on the **admissible** audio cells.
 
     Text <-> image cells are evaluated identically and reported beside them, and
     they can never carry this verdict on their own: a study that concluded
     "three-modality transfer" from a text/image cell would be reporting the
     replication as the finding.
+
+    A cell whose concept failed the behavioral capability gate in any required
+    modality is measured, printed, and excluded from every list this verdict is
+    decided on. It is not deleted, not recomputed, and not replaced —
+    see :mod:`jlens.mmpilot.admissibility`.
+
+    Args:
+        capability: The per-concept capability result. Required.
+        executed_concepts: Concepts model passes were actually spent on, when
+            that is narrower than ``focal_concepts``.
     """
     cells = evaluate_causal_cells(
         interventions,
@@ -943,12 +1096,51 @@ def causal_transfer_verdict(
         focal_concepts=focal_concepts,
         pairs=ALL_PAIRS,
         thresholds=thresholds,
+        capability=capability,
+        executed_concepts=executed_concepts,
+        principal_three_modality=principal_three_modality,
     )
+    _, recorded_threshold = resolve_capability_table(capability)
+    capability_threshold = (
+        recorded_threshold
+        if recorded_threshold is not None
+        else thresholds.capability_threshold
+    )
+    admissibility = concept_admissibility(
+        list(focal_concepts),
+        capability=capability,
+        threshold=capability_threshold,
+        principal_three_modality=principal_three_modality,
+    )
+    rule = admissibility_rule_record(
+        threshold=capability_threshold,
+        principal_three_modality=principal_three_modality,
+    )
+
     audio_cells = [cell for cell in cells if cell["audio_related"]]
+    # ``passing_audio`` is the *measured* result and stays whole. Everything the
+    # verdict is decided on goes through ``counted_toward_verdict``.
     passing_audio = [cell for cell in audio_cells if cell["passes"]]
-    claim_supported = [cell for cell in passing_audio if cell.get("meets_claim_image_floor")]
+    admissible_passing_audio = [
+        cell for cell in audio_cells if cell["counted_toward_verdict"]
+    ]
+    diagnostic_only_audio = [
+        cell for cell in passing_audio if not cell["capability_admissible"]
+    ]
+    claim_supported = [
+        cell for cell in admissible_passing_audio if cell.get("meets_claim_image_floor")
+    ]
     passing_replication = [
-        cell for cell in cells if not cell["audio_related"] and cell["passes"]
+        cell
+        for cell in cells
+        if not cell["audio_related"] and cell["counted_toward_verdict"]
+    ]
+    diagnostic_only_replication = [
+        cell
+        for cell in cells
+        if not cell["audio_related"]
+        and cell["passes"]
+        and not cell["capability_admissible"]
     ]
     directions = sorted({cell["pair"] for cell in claim_supported})
     bidirectional_audio = sorted(
@@ -984,17 +1176,19 @@ def causal_transfer_verdict(
     elif len(claim_supported) >= thresholds.min_audio_causal_cells and bidirectional_audio:
         verdict = TRANSFER_SUPPORTED
         rationale = (
-            f"{len(claim_supported)} audio-related off-diagonal cell(s) at layer "
-            f"{layer} moved the target concept in the expected direction against "
-            f"their own matched random and external unrelated controls, in both "
-            f"directions for {bidirectional_audio}: {directions}."
+            f"{len(claim_supported)} capability-admissible audio-related "
+            f"off-diagonal cell(s) at layer {layer} moved the target concept in "
+            f"the expected direction against their own matched random and "
+            f"external unrelated controls, in both directions for "
+            f"{bidirectional_audio}: {directions}."
         )
     elif claim_supported:
         verdict = TRANSFER_WEAK
         rationale = (
-            f"{len(claim_supported)} audio-related cell(s) at layer {layer} passed "
-            f"({directions}), but no focal concept transferred in both directions, "
-            "so the effect is reported as one-directional."
+            f"{len(claim_supported)} capability-admissible audio-related cell(s) "
+            f"at layer {layer} passed ({directions}), but no admissible focal "
+            "concept transferred in both directions, so the effect is reported "
+            "as one-directional."
         )
     else:
         verdict = TRANSFER_UNSUPPORTED
@@ -1002,22 +1196,52 @@ def causal_transfer_verdict(
             {reason for cell in audio_cells for reason in cell.get("reasons", [])}
         )
         rationale = (
-            f"no audio-related cell at layer {layer} cleared its controls. "
-            f"Reasons seen: {failures[:5]}"
+            f"no admissible audio-related cell at layer {layer} cleared its "
+            f"controls. Reasons seen: {failures[:5]}"
         )
+        if diagnostic_only_audio and not admissible_passing_audio:
+            rationale += (
+                f" {len(diagnostic_only_audio)} audio cell(s) did clear their "
+                "controls but belong to concepts that failed the behavioral "
+                "capability gate, so they are diagnostics rather than evidence: "
+                f"{[(c['concept'], c['pair']) for c in diagnostic_only_audio]}."
+            )
     return {
-        "schema": "jlens.mmpilot.causal_transfer_verdict.v1",
+        "schema": "jlens.mmpilot.causal_transfer_verdict.v2",
         "name": name,
         "verdict": verdict,
         "rationale": rationale,
         "layer": int(layer),
         "focal_concepts": list(focal_concepts),
+        "focal_concepts_executed": (
+            list(focal_concepts) if executed_concepts is None else list(executed_concepts)
+        ),
         "cells": cells,
+        # Measured. Complete. Not filtered by anything.
         "audio_cells_passing": [
-            {"concept": cell["concept"], "pair": cell["pair"]} for cell in passing_audio
+            {
+                "concept": cell["concept"],
+                "pair": cell["pair"],
+                "capability_admissible": cell["capability_admissible"],
+            }
+            for cell in passing_audio
+        ],
+        # Admissible. This is what the verdict is decided on.
+        "audio_cells_passing_admissible": [
+            {"concept": cell["concept"], "pair": cell["pair"]}
+            for cell in admissible_passing_audio
         ],
         "audio_cells_supporting_a_claim": [
             {"concept": cell["concept"], "pair": cell["pair"]} for cell in claim_supported
+        ],
+        "audio_cells_measured_but_inadmissible": [
+            {
+                "concept": cell["concept"],
+                "pair": cell["pair"],
+                "mean_signed_target_effect": cell.get("mean_signed_target_effect"),
+                "capability_rejection_reason": cell["capability_rejection_reason"],
+            }
+            for cell in diagnostic_only_audio
         ],
         "audio_directions_passing": directions,
         "concepts_transferring_both_audio_directions": bidirectional_audio,
@@ -1025,7 +1249,20 @@ def causal_transfer_verdict(
             {"concept": cell["concept"], "pair": cell["pair"]}
             for cell in passing_replication
         ],
+        "replication_cells_measured_but_inadmissible": [
+            {"concept": cell["concept"], "pair": cell["pair"]}
+            for cell in diagnostic_only_replication
+        ],
         "raw_direction_exceptions": raw_exceptions,
+        "capability_admissibility": admissibility,
+        "capability_admissibility_rule": rule,
+        "capability_threshold": capability_threshold,
+        "evidence_reading": (
+            "A measured diagnostic effect and admissible scientific evidence are "
+            "different things. Every predeclared cell was measured and is printed "
+            "here; only cells whose concept passed the behavioral capability gate "
+            "in every required modality were allowed to support the verdict."
+        ),
         "thresholds": thresholds.to_dict(),
         "layer_choice_note": LAYER_CHOICE_NOTE,
         "scope": SPOKEN_AUDIO_SCOPE,
@@ -1049,7 +1286,7 @@ def replication_verdict(
     }
     if not evaluated:
         return {
-            "schema": "jlens.mmpilot.replication_verdict.v1",
+            "schema": "jlens.mmpilot.replication_verdict.v2",
             "verdict": TRANSFER_NOT_EVALUATED,
             "rationale": (
                 f"layers {sorted(int(x) for x in layers)} were not run. Stage C is "
@@ -1058,6 +1295,8 @@ def replication_verdict(
             "layers_requested": sorted(int(x) for x in layers),
             "layers_evaluated": [],
             "per_layer": {},
+            "capability_ineligible_concepts": [],
+            "capability_admissibility_rule_version": CLAIM_ADMISSIBILITY_RULE_VERSION,
             "primary_verdict": (primary or {}).get("verdict"),
             "layer_choice_note": LAYER_CHOICE_NOTE,
         }
@@ -1080,7 +1319,7 @@ def replication_verdict(
             "a result about those layers, not a reason to prefer another one."
         )
     return {
-        "schema": "jlens.mmpilot.replication_verdict.v1",
+        "schema": "jlens.mmpilot.replication_verdict.v2",
         "verdict": verdict,
         "rationale": rationale,
         "layers_requested": sorted(int(x) for x in layers),
@@ -1090,6 +1329,22 @@ def replication_verdict(
         "per_layer": {
             str(layer): entry["verdict"] for layer, entry in sorted(evaluated.items())
         },
+        # Each per-layer verdict already excluded capability-ineligible cells;
+        # this republishes the roster so the replication section can be read
+        # without opening the layer verdicts.
+        "capability_ineligible_concepts": sorted(
+            {
+                name
+                for entry in evaluated.values()
+                for name in (
+                    entry.get("capability_admissibility", {}).get(
+                        "excluded_concept_names"
+                    )
+                    or []
+                )
+            }
+        ),
+        "capability_admissibility_rule_version": CLAIM_ADMISSIBILITY_RULE_VERSION,
         "primary_verdict": (primary or {}).get("verdict"),
         "layer_choice_note": LAYER_CHOICE_NOTE,
     }
@@ -1178,7 +1433,28 @@ def overall_verdict(
     )
 
     cells = list(causal.get("cells", []))
-    audio_cells = [cell for cell in cells if cell["audio_related"] and cell["evaluated"]]
+    measured_audio_cells = [
+        cell for cell in cells if cell["audio_related"] and cell["evaluated"]
+    ]
+    # Every criterion below is decided on **admissible** cells only. A cell whose
+    # concept failed the behavioral capability gate cannot make a criterion pass,
+    # and — equally — cannot make one fail: it is not evidence in either
+    # direction. The measured values are kept beside each criterion as
+    # diagnostics so nothing is hidden by being excluded.
+    audio_cells = [
+        cell for cell in measured_audio_cells if cell.get("capability_admissible")
+    ]
+    inadmissible_audio_cells = [
+        {
+            "concept": cell["concept"],
+            "pair": cell["pair"],
+            "mean_signed_target_effect": cell.get("mean_signed_target_effect"),
+            "passes_controls": cell.get("passes"),
+            "capability_rejection_reason": cell.get("capability_rejection_reason"),
+        }
+        for cell in measured_audio_cells
+        if not cell.get("capability_admissible")
+    ]
     nonspecific = [
         {"concept": cell["concept"], "pair": cell["pair"]}
         for cell in audio_cells
@@ -1277,6 +1553,33 @@ def overall_verdict(
         },
     )
 
+    # A hard invariant rather than a comment: if a future change ever let a
+    # capability-ineligible cell into a supporting list, this fails and the GO
+    # is refused. It cannot pass by accident, because it reads the same
+    # ``capability_admissible`` stamp the filtering used.
+    leaked = [
+        entry
+        for entry in claimed
+        if entry.get("concept")
+        in {row["concept"] for row in inadmissible_audio_cells}
+    ]
+    criteria["only_capability_admissible_evidence_counted"] = criterion(
+        PASS if not leaked else FAIL,
+        {
+            "rule_version": CLAIM_ADMISSIBILITY_RULE_VERSION,
+            "capability_ineligible_concepts": (
+                causal.get("capability_admissibility", {}).get("excluded_concept_names")
+            ),
+            "measured_but_inadmissible_audio_cells": inadmissible_audio_cells,
+            "inadmissible_cells_that_reached_a_supporting_list": leaked,
+            "reading": (
+                "Cells whose concept failed the behavioral capability gate are "
+                "measured, printed and excluded. They are diagnostics, never "
+                "evidence, and they are not replaced by other concepts."
+            ),
+        },
+    )
+
     statuses = {name: entry["status"] for name, entry in criteria.items()}
     go_requirements = (
         "three_modality_capability",
@@ -1287,6 +1590,7 @@ def overall_verdict(
         "two_distinct_images_support_each_claim",
         "not_text_image_replication_alone",
         "invariance_gate",
+        "only_capability_admissible_evidence_counted",
     )
     all_required = all(statuses.get(name) == PASS for name in go_requirements)
 
@@ -1306,6 +1610,7 @@ def overall_verdict(
             "activation_norms_sane",
             "two_distinct_images_support_each_claim",
             "invariance_gate",
+            "only_capability_admissible_evidence_counted",
         )
         if statuses.get(name) == FAIL
     ]
@@ -1370,13 +1675,25 @@ def overall_verdict(
         ).strip()
 
     return {
-        "schema": "jlens.mmpilot.three_modality_verdict.v1",
+        "schema": "jlens.mmpilot.three_modality_verdict.v2",
         "version": TRI_MODAL_VERDICT_VERSION,
         "verdict": verdict,
         "rationale": rationale,
         "criteria": criteria,
         "criteria_status": statuses,
         "go_requirements": list(go_requirements),
+        "capability_admissibility": causal.get("capability_admissibility"),
+        "capability_admissibility_rule": causal.get("capability_admissibility_rule"),
+        "measured_but_inadmissible_audio_cells": inadmissible_audio_cells,
+        "admissibility_limitation": (
+            "The capability gate is applied per concept to the causal cells, "
+            "which are per concept. Verdict B's retrieval is pooled over all "
+            "selected concepts and cannot be split per concept without "
+            "recomputing retrieval, so a capability-ineligible concept's "
+            "activations do contribute to the representational pool. Verdict B "
+            "is therefore reported as-measured and is never sufficient for a "
+            "three-modality claim on its own."
+        ),
         "component_verdicts": {
             "A_audio_capability": capability.get("verdict"),
             "B_representational_transfer": representational.get("verdict"),
@@ -1445,6 +1762,67 @@ def render_report(
         "",
         f"**{overall['verdict']}** — {overall['rationale']}",
         "",
+    ]
+
+    # ------------------------------------------- admissible evidence vs data
+    roster = (primary_causal or {}).get("capability_admissibility") or {}
+    rule = (primary_causal or {}).get("capability_admissibility_rule") or {}
+    lines += [
+        "## Measured diagnostic effect vs admissible scientific evidence",
+        "",
+        "These are not the same thing, and this report keeps them apart "
+        "everywhere.",
+        "",
+        "- **Measured**: every predeclared cell was run and every one of them is "
+        "printed below, complete and unaltered.",
+        "- **Admissible**: a cell may support a claim only when its concept "
+        "passed the behavioral capability gate in every modality the claim "
+        "involves. For the principal three-modality verdict that means **text, "
+        "image and spoken audio, all three**.",
+        "",
+        f"- rule: `{rule.get('rule_version', CLAIM_ADMISSIBILITY_RULE_VERSION)}` "
+        f"(mode `{rule.get('rule_mode')}`, threshold "
+        f"{rule.get('capability_threshold')}, checksum "
+        f"`{rule.get('rule_checksum')}`)",
+        f"- fixed focal concepts: {roster.get('fixed_concepts')}",
+        f"- capability-eligible: {roster.get('eligible_concepts')}",
+        f"- **CAPABILITY_INELIGIBLE**: {roster.get('excluded_concept_names')}",
+        "",
+    ]
+    for entry in roster.get("excluded_concepts", []) or []:
+        # The rejection reason already names the concept.
+        lines.append(f"  - {entry['rejection_reason']}")
+    if roster.get("excluded_concepts"):
+        lines += [
+            "",
+            "Their cells remain in the raw table below as the predeclared "
+            "diagnostics they are. They do not count toward supporting-cell "
+            "totals, bidirectional transfer, or any GO or WEAK GO criterion, and "
+            "**they are not replaced by another concept** — a substitution "
+            "chosen after the capability results were visible would make the "
+            "selection depend on the outcome.",
+        ]
+    inadmissible_but_passing = (primary_causal or {}).get(
+        "audio_cells_measured_but_inadmissible"
+    ) or []
+    if inadmissible_but_passing:
+        lines += [
+            "",
+            "Cells that cleared their controls but are **not** evidence:",
+            "",
+            "| concept | direction | effect | why it is inadmissible |",
+            "| --- | --- | --- | --- |",
+        ]
+        lines += [
+            f"| {row['concept']} | {row['pair']} | "
+            f"{_number(row.get('mean_signed_target_effect'))} | "
+            f"{row.get('capability_rejection_reason')} |"
+            for row in inadmissible_but_passing
+        ]
+    lines += [
+        "",
+        f"- {overall.get('admissibility_limitation', '')}",
+        "",
         "## A. Behavioral capability in all three channels",
         "",
         f"{capability.get('rationale')}",
@@ -1504,17 +1882,28 @@ def render_report(
         lines += [
             f"Layer {entry['layer']}. {entry['rationale']}",
             "",
+            "The raw table is complete: every predeclared cell appears, "
+            "measured. `admissible` is whether the concept passed the behavioral "
+            "capability gate in every required modality, and `counted` is whether "
+            "the cell was allowed to support the verdict.",
+            "",
             "| concept | direction | audio | alpha | +img | -img | effect | sign frac | "
-            "random | unrelated | raw | norm | passes |",
+            "random | unrelated | raw | norm | passes | admissible | counted |",
             "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | "
-            "--- |",
+            "--- | --- | --- |",
         ]
         for cell in entry.get("cells", []):
+            admissible = cell.get("capability_admissible")
+            admissible_text = (
+                "n/a" if admissible is None else ("yes" if admissible else "INELIGIBLE")
+            )
+            counted_text = "yes" if cell.get("counted_toward_verdict") else "no"
             if not cell.get("evaluated"):
                 lines.append(
                     f"| {cell['concept']} | {cell['pair']} | "
                     f"{'yes' if cell['audio_related'] else 'no'} | | | | | | | | | | "
-                    "not evaluated |"
+                    f"{cell.get('execution_status', 'not evaluated')} | "
+                    f"{admissible_text} | {counted_text} |"
                 )
                 continue
             lines.append(
@@ -1527,7 +1916,8 @@ def render_report(
                 f"{_number(cell['unrelated_control'])} | "
                 f"{_number(cell['raw_residual_control'])} | "
                 f"{cell['mean_activation_norm_ratio']:.3f} | "
-                f"{'yes' if cell['passes'] else 'no'} |"
+                f"{'yes' if cell['passes'] else 'no'} | "
+                f"{admissible_text} | {counted_text} |"
             )
         failures = [
             f"- **{cell['concept']} {cell['pair']}**: " + "; ".join(cell["reasons"])
@@ -1536,6 +1926,19 @@ def render_report(
         ]
         if failures:
             lines += ["", "Why a cell did not pass:", "", *failures]
+        inadmissible = [
+            f"- **{cell['concept']} {cell['pair']}**: "
+            f"{cell['capability_rejection_reason']}"
+            for cell in entry.get("cells", [])
+            if cell.get("capability_admissible") is False
+        ]
+        if inadmissible:
+            lines += [
+                "",
+                "Why a cell is measured but inadmissible (CAPABILITY_INELIGIBLE):",
+                "",
+                *inadmissible,
+            ]
         lines.append("")
 
     lines += ["## E. Criteria", "", "| criterion | status |", "| --- | --- |"]
@@ -1599,6 +2002,11 @@ def render_report(
         "- Behavioral capability in a channel is not evidence that J-space "
         "coordinates transfer through it; the engineering readiness of the audio "
         "path is not evidence either.",
+        "- A concept that failed the behavioral capability gate in any required "
+        "modality is CAPABILITY_INELIGIBLE. Its cells were measured and are "
+        "printed in full; none of them count toward a supporting total, "
+        "bidirectional transfer, or any GO criterion, and none of them were "
+        "replaced by a substitute concept.",
         "",
     ]
     return "\n".join(lines)
@@ -1630,6 +2038,7 @@ __all__ = [
     "causal_transfer_verdict",
     "estimate_stage_passes",
     "evaluate_causal_cells",
+    "format_focal_capability_gate",
     "format_stage_budget",
     "format_total_budget",
     "modality_architecture_report",

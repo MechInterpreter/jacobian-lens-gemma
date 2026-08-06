@@ -136,18 +136,24 @@ def test_an_unknown_stage_is_refused():
 def _capability(passing_all_three, *, selected, audio_only_failures=()):
     per_concept = {}
     for concept in selected:
-        per_concept[concept] = {
-            modality: {
+        entry = {}
+        for modality in MODALITIES:
+            passed = concept in passing_all_three or (
+                modality != "spoken_audio" and concept in audio_only_failures
+            )
+            # Counts and ``passed`` agree on purpose: the admissibility rule
+            # re-derives accuracy from the counts rather than trusting a flag,
+            # and 5/8 = 62.5% is the observed spoken-audio failure it must catch.
+            n_correct = 8 if passed else 5
+            entry[modality] = {
                 "n": 8,
-                "n_correct": 8,
-                "accuracy": 1.0,
-                "passed": concept in passing_all_three
-                or (modality != "spoken_audio" and concept in audio_only_failures),
+                "n_correct": n_correct,
+                "accuracy": n_correct / 8,
+                "passed": passed,
                 "median_target_margin": 1.0,
                 "min_target_margin": 0.5,
             }
-            for modality in MODALITIES
-        }
+        per_concept[concept] = entry
     return {
         "threshold": 0.7,
         "modalities_evaluated": list(MODALITIES),
@@ -316,6 +322,16 @@ def test_audio_structure_only_away_from_the_primary_layer_is_weak():
 # ------------------------------------------------------------ verdicts C/D
 
 
+#: Every focal concept in these fixtures clears the gate in all three channels,
+#: so the capability filter is a no-op here and each test still measures the
+#: control clause it is named for. The filter itself is tested in
+#: tests/test_mmpilot_admissibility.py.
+_ALL_PASS_CAPABILITY = _capability(
+    {"bus", "cat", "clock"}, selected=["bus", "cat", "clock"]
+)
+
+
+
 def _row(
     *,
     concept,
@@ -394,6 +410,7 @@ def test_a_cell_passes_only_when_it_clears_its_own_matched_controls():
         focal_concepts=["bus", "cat"],
         pairs=AUDIO_PAIRS,
         thresholds=THRESHOLDS,
+        capability=_ALL_PASS_CAPABILITY,
     )
     assert len(cells) == 2 * len(AUDIO_PAIRS)
     assert all(cell["passes"] for cell in cells)
@@ -408,6 +425,7 @@ def test_an_effect_that_does_not_clear_the_controls_fails_the_cell():
         focal_concepts=["bus"],
         pairs=AUDIO_PAIRS,
         thresholds=THRESHOLDS,
+        capability=_ALL_PASS_CAPABILITY,
     )
     assert not any(cell["passes"] for cell in cells)
     assert any("does not clear" in reason for cell in cells for reason in cell["reasons"])
@@ -420,6 +438,7 @@ def test_a_global_edit_fails_the_cell_however_large_the_effect():
         focal_concepts=["bus"],
         pairs=AUDIO_PAIRS,
         thresholds=THRESHOLDS,
+        capability=_ALL_PASS_CAPABILITY,
     )
     assert not any(cell["passes"] for cell in cells)
     assert any("looks global" in reason for cell in cells for reason in cell["reasons"])
@@ -432,6 +451,7 @@ def test_an_insane_activation_norm_fails_the_cell():
         focal_concepts=["bus"],
         pairs=AUDIO_PAIRS,
         thresholds=THRESHOLDS,
+        capability=_ALL_PASS_CAPABILITY,
     )
     assert any(
         "activation norm ratio" in reason for cell in cells for reason in cell["reasons"]
@@ -445,6 +465,7 @@ def test_a_cell_carried_by_one_photograph_fails_the_distinct_image_floor():
         focal_concepts=["bus"],
         pairs=AUDIO_PAIRS,
         thresholds=THRESHOLDS,
+        capability=_ALL_PASS_CAPABILITY,
     )
     assert not any(cell["passes"] for cell in cells)
     assert any(
@@ -460,6 +481,7 @@ def test_the_wrong_sign_on_half_the_photographs_fails_the_cell():
         focal_concepts=["bus"],
         pairs=AUDIO_PAIRS,
         thresholds=THRESHOLDS,
+        capability=_ALL_PASS_CAPABILITY,
     )
     assert not any(cell["passes"] for cell in cells)
     assert any(
@@ -470,7 +492,12 @@ def test_the_wrong_sign_on_half_the_photographs_fails_the_cell():
 def test_cells_are_scoped_to_their_layer():
     rows = _interventions(AUDIO_PAIRS, layer=38)
     cells = evaluate_causal_cells(
-        rows, layer=35, focal_concepts=["bus"], pairs=AUDIO_PAIRS, thresholds=THRESHOLDS
+        rows,
+        layer=35,
+        focal_concepts=["bus"],
+        pairs=AUDIO_PAIRS,
+        thresholds=THRESHOLDS,
+        capability=_ALL_PASS_CAPABILITY,
     )
     assert all(cell["evaluated"] is False for cell in cells)
     assert all("no source-concept row" in cell["reasons"][0] for cell in cells)
@@ -483,6 +510,7 @@ def test_a_causal_verdict_needs_audio_cells_not_text_image_ones():
         focal_concepts=["bus", "cat"],
         thresholds=THRESHOLDS,
         name="L35_CAUSAL_TRANSFER",
+        capability=_ALL_PASS_CAPABILITY,
     )
     assert verdict["verdict"] == TRANSFER_NOT_EVALUATED
     assert verdict["audio_cells_supporting_a_claim"] == []
@@ -496,6 +524,7 @@ def test_bidirectional_audio_transfer_is_supported():
         focal_concepts=["bus", "cat"],
         thresholds=THRESHOLDS,
         name="L35_CAUSAL_TRANSFER",
+        capability=_ALL_PASS_CAPABILITY,
     )
     assert verdict["verdict"] == TRANSFER_SUPPORTED
     assert verdict["concepts_transferring_both_audio_directions"] == ["bus", "cat"]
@@ -509,6 +538,7 @@ def test_one_directional_audio_transfer_is_weak():
         focal_concepts=["bus"],
         thresholds=THRESHOLDS,
         name="L35_CAUSAL_TRANSFER",
+        capability=_ALL_PASS_CAPABILITY,
     )
     assert verdict["verdict"] == TRANSFER_WEAK
     assert verdict["concepts_transferring_both_audio_directions"] == []
@@ -566,6 +596,7 @@ def _overall(
             focal_concepts=["bus", "cat"],
             thresholds=THRESHOLDS,
             name="L35_CAUSAL_TRANSFER",
+            capability=capability,
         )
         if causal_pairs
         else None
