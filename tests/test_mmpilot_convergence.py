@@ -17,6 +17,7 @@ import torch
 
 from jlens.mmpilot.convergence import (
     AMBIGUOUS,
+    AMENDED_SUMMARY_FILE,
     AUDITED_LAYERS,
     CONVERGED,
     CONVERGENCE_CRITERION,
@@ -25,8 +26,10 @@ from jlens.mmpilot.convergence import (
     INCONCLUSIVE_CONVERGENCE_TIMING,
     INTERPRETATION_BOUNDARY,
     LENS_INVALID_LAYERS,
+    LENS_VALIDATION_FILE,
     MODALITIES,
     NOT_CONVERGED,
+    ORIGINAL_SUMMARY_FILE,
     PRE_CONVERGENCE_TRANSFER_SUPPORTED,
     PRIMARY_LAYER,
     PRIMARY_VARIANT,
@@ -49,11 +52,13 @@ from jlens.mmpilot.convergence import (
     build_population,
     classify_layer,
     clean_predictions_from_interventions,
+    compose_verification_view,
     direct_readout_row,
     figure_convergence_versus_layer,
     head_from_model,
     image_disjoint_folds,
     layer_convergence_table,
+    load_verification_view,
     permuted_activation_assignment,
     permuted_token_assignment,
     protected_file_checksums,
@@ -918,6 +923,195 @@ def test_a_mismatched_pin_refuses_the_audit(tmp_path, field, value, message):
             ),
             summary=built["summary"],
             **expectations,
+        )
+
+
+# ------------------------------------- the amendment and the frozen provenance
+
+
+def _fingerprint_payload(run_dir):
+    return json.loads((run_dir / "fingerprint.json").read_text(encoding="utf-8"))
+
+
+def _read(run_dir, name):
+    return json.loads((run_dir / name).read_text(encoding="utf-8"))
+
+
+def test_the_amendment_really_does_omit_the_lens_record(tmp_path):
+    """The precondition for everything below, taken from the real run's shape."""
+    build_mock_completed_run(tmp_path / "run")
+    amended = _read(tmp_path / "run", AMENDED_SUMMARY_FILE)
+    assert "lens_validation" not in amended
+    assert _read(tmp_path / "run", ORIGINAL_SUMMARY_FILE)["lens_validation"]
+    assert _read(tmp_path / "run", LENS_VALIDATION_FILE)
+
+
+def test_the_amended_summary_alone_cannot_satisfy_the_lens_check(tmp_path):
+    """The failure exactly as the real run reported it.
+
+    Kept as a test rather than a memory: the fix must not be to stop asking.
+    """
+    built = build_mock_completed_run(tmp_path / "run")
+    amended = _read(tmp_path / "run", AMENDED_SUMMARY_FILE)
+    with pytest.raises(
+        ConvergenceRefused, match="lens_confirmation_status_recorded"
+    ):
+        verify_completed_run(
+            run_dir=tmp_path / "run",
+            fingerprint_payload=_fingerprint_payload(tmp_path / "run"),
+            summary=amended,
+            **built["expectations"],
+        )
+
+
+def test_verdicts_come_from_the_amendment_and_provenance_from_the_originals(tmp_path):
+    """The repair: two immutable artifacts, one in-memory verification view."""
+    built = build_mock_completed_run(tmp_path / "run")
+    run = tmp_path / "run"
+    before = protected_file_checksums(run)
+
+    view = load_verification_view(run)
+    provenance = view["provenance"]
+
+    # The amendment stays authoritative for verdicts.
+    amended = _read(run, AMENDED_SUMMARY_FILE)
+    assert view["summary"]["verdicts"] == amended["verdicts"]
+    assert provenance["verdict_source"] == AMENDED_SUMMARY_FILE
+    assert Path(view["verdict_source_path"]).name == AMENDED_SUMMARY_FILE
+
+    # The lens provenance comes from the two immutable originals, which agreed.
+    assert view["summary"]["lens_validation"] == built["lens_report"]
+    assert provenance["lens_provenance_sources"] == [
+        ORIGINAL_SUMMARY_FILE,
+        LENS_VALIDATION_FILE,
+    ]
+    assert provenance["lens_provenance_sources_agree"] is True
+    assert provenance["amended_summary_carries_lens_block"] is False
+    assert provenance["composite_is_in_memory_only"] is True
+
+    integrity = verify_completed_run(
+        run_dir=run,
+        fingerprint_payload=_fingerprint_payload(run),
+        summary=view["summary"],
+        provenance=provenance,
+        **built["expectations"],
+    )
+    assert integrity["passed"] is True
+    names = [check["check"] for check in integrity["checks"]]
+    assert "lens_confirmation_status_recorded" in names
+    assert "lens_provenance_sources_agree" in names
+    assert "lens_provenance_matches_verification_view" in names
+    assert integrity["artifact_provenance"] == provenance
+
+    # Composing the view wrote nothing into the completed run.
+    assert_run_unchanged(before, protected_file_checksums(run))
+
+
+def test_disagreeing_lens_provenance_sources_are_refused(tmp_path):
+    built = build_mock_completed_run(tmp_path / "run")
+    run = tmp_path / "run"
+    tampered = {**built["lens_report"], "combined_checksum": "sha256:not-the-same"}
+    (run / LENS_VALIDATION_FILE).write_text(json.dumps(tampered), encoding="utf-8")
+
+    with pytest.raises(ConvergenceRefused, match="lens_provenance_sources_agree"):
+        load_verification_view(run)
+
+
+def test_a_disagreement_names_the_field_that_differs(tmp_path):
+    built = build_mock_completed_run(tmp_path / "run")
+    run = tmp_path / "run"
+    tampered = {
+        **built["lens_report"],
+        "confirmation_status": {"35": "PASS", "38": "PASS", "40": "FAILED"},
+    }
+    (run / LENS_VALIDATION_FILE).write_text(json.dumps(tampered), encoding="utf-8")
+
+    with pytest.raises(ConvergenceRefused, match="confirmation_status"):
+        load_verification_view(run)
+
+
+def test_a_missing_lens_validation_artifact_is_refused(tmp_path):
+    build_mock_completed_run(tmp_path / "run")
+    (tmp_path / "run" / LENS_VALIDATION_FILE).unlink()
+    with pytest.raises(
+        ConvergenceRefused, match="lens_provenance_from_lens_validation_artifact"
+    ):
+        load_verification_view(tmp_path / "run")
+
+
+def test_an_original_summary_without_a_lens_record_is_refused(tmp_path):
+    build_mock_completed_run(tmp_path / "run")
+    run = tmp_path / "run"
+    summary = _read(run, ORIGINAL_SUMMARY_FILE)
+    summary.pop("lens_validation")
+    (run / ORIGINAL_SUMMARY_FILE).write_text(json.dumps(summary), encoding="utf-8")
+
+    with pytest.raises(
+        ConvergenceRefused, match="lens_provenance_from_original_summary"
+    ):
+        load_verification_view(run)
+
+
+def test_a_missing_original_summary_is_refused(tmp_path):
+    build_mock_completed_run(tmp_path / "run")
+    (tmp_path / "run" / ORIGINAL_SUMMARY_FILE).unlink()
+    with pytest.raises(
+        ConvergenceRefused, match="lens_provenance_from_original_summary"
+    ):
+        load_verification_view(tmp_path / "run")
+
+
+def test_an_amendment_that_contradicts_the_frozen_provenance_is_refused(tmp_path):
+    """A lens block in the amendment is a claim about the same frozen fact."""
+    built = build_mock_completed_run(tmp_path / "run")
+    with pytest.raises(ConvergenceRefused, match="lens_provenance_sources_agree"):
+        compose_verification_view(
+            verdict_summary={
+                "verdicts": built["summary"]["verdicts"],
+                "lens_validation": {**built["lens_report"], "layers": [32]},
+            },
+            verdict_source=AMENDED_SUMMARY_FILE,
+            original_summary=built["summary"],
+            original_summary_source=ORIGINAL_SUMMARY_FILE,
+            lens_validation=built["lens_report"],
+            lens_validation_source=LENS_VALIDATION_FILE,
+        )
+
+
+def test_without_an_amendment_the_original_summary_supplies_both(tmp_path):
+    built = build_mock_completed_run(tmp_path / "run")
+    run = tmp_path / "run"
+    (run / AMENDED_SUMMARY_FILE).unlink()
+
+    view = load_verification_view(run)
+    assert view["provenance"]["verdict_source"] == ORIGINAL_SUMMARY_FILE
+    assert view["summary"]["lens_validation"] == built["lens_report"]
+    integrity = verify_completed_run(
+        run_dir=run,
+        fingerprint_payload=_fingerprint_payload(run),
+        summary=view["summary"],
+        provenance=view["provenance"],
+        **built["expectations"],
+    )
+    assert integrity["passed"] is True
+
+
+def test_a_provenance_record_for_a_different_lens_block_is_refused(tmp_path):
+    """The record and the view it describes cannot come apart."""
+    built = build_mock_completed_run(tmp_path / "run")
+    run = tmp_path / "run"
+    view = load_verification_view(run)
+    summary = {**view["summary"], "lens_validation": {"layers": [1], "swapped": True}}
+
+    with pytest.raises(
+        ConvergenceRefused, match="lens_provenance_matches_verification_view"
+    ):
+        verify_completed_run(
+            run_dir=run,
+            fingerprint_payload=_fingerprint_payload(run),
+            summary=summary,
+            provenance=view["provenance"],
+            **built["expectations"],
         )
 
 

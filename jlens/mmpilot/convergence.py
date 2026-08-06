@@ -170,12 +170,25 @@ INCONCLUSIVE_CONVERGENCE_TIMING = "INCONCLUSIVE_CONVERGENCE_TIMING"
 #: must never write. The audit refuses to finish if any of them moved.
 PROTECTED_RUN_FILES: tuple[str, ...] = (
     "fingerprint.json",
+    "lens_validation.json",
     "native_audio_transfer_report.md",
     "native_audio_transfer_summary.json",
     "native_audio_transfer_report_capability_filtered_v2.md",
     "native_audio_transfer_summary_capability_filtered_v2.json",
     "run_manifest.json",
 )
+
+#: The completed run's *original*, un-amended summary. It carries the lens
+#: confirmation provenance that a capability-filtered amendment deliberately
+#: does not duplicate.
+ORIGINAL_SUMMARY_FILE = "native_audio_transfer_summary.json"
+
+#: The standalone lens report the completed run wrote alongside that summary.
+LENS_VALIDATION_FILE = "lens_validation.json"
+
+#: The capability-filtered amendment. Authoritative for verdicts when present.
+AMENDED_SUMMARY_FILE = "native_audio_transfer_summary_capability_filtered_v2.json"
+
 
 class ConvergenceRefused(RuntimeError):
     """A precondition of the audit does not hold, so nothing is measured."""
@@ -2232,6 +2245,171 @@ def assert_run_unchanged(
     }
 
 
+def _lens_provenance_difference(left: Mapping, right: Mapping) -> list[str]:
+    """Which top-level lens-report keys the two immutable sources disagree on."""
+    keys = sorted(set(left) | set(right))
+    return [
+        key
+        for key in keys
+        if payload_checksum(left.get(key)) != payload_checksum(right.get(key))
+    ]
+
+
+def compose_verification_view(
+    *,
+    verdict_summary: Mapping,
+    verdict_source: str,
+    original_summary: Mapping | None,
+    original_summary_source: str,
+    lens_validation: Mapping | None,
+    lens_validation_source: str,
+) -> dict:
+    """One in-memory verification view from two immutable artifacts.
+
+    The completed run's capability-filtered amendment carries the *corrected*
+    verdicts and deliberately does not duplicate the top-level
+    ``lens_validation`` block — duplicating a frozen provenance record into an
+    amendment is how the two drift apart. Reading verdicts from the amendment
+    and provenance from the original is therefore the correct behaviour, not a
+    workaround, and the alternative on offer — deleting or weakening the
+    lens-confirmation check because the amendment lacks the block — would throw
+    away the only evidence that the three published lenses were confirmed.
+
+    Both immutable sources are required and both must agree; nothing is
+    defaulted, nothing is merged field-by-field, and neither file is written.
+    Where the amendment *does* carry a lens block, it is held to the same
+    agreement, since it is a claim about the same frozen fact.
+
+    Returns:
+        ``{"summary": <composite mapping>, "provenance": <record>}``. The
+        composite is a fresh dict; the inputs are not mutated.
+
+    Raises:
+        ConvergenceRefused: When either immutable source is missing its lens
+            record, or when the sources disagree.
+    """
+    original = dict(original_summary or {})
+    from_summary = dict(original.get("lens_validation") or {})
+    from_artifact = dict(lens_validation or {})
+
+    if not from_summary:
+        raise ConvergenceRefused(
+            "lens_provenance_from_original_summary failed: "
+            f"{original_summary_source} carries no lens_validation record. The "
+            "capability-filtered amendment does not duplicate it, so this is "
+            "the only summary-side copy and the audit cannot confirm which "
+            "lenses the completed run used. Refusing to measure."
+        )
+    if not from_artifact:
+        raise ConvergenceRefused(
+            "lens_provenance_from_lens_validation_artifact failed: "
+            f"{lens_validation_source} is missing or empty, so the original "
+            "summary's lens record stands uncorroborated. Refusing to measure."
+        )
+
+    differing = _lens_provenance_difference(from_summary, from_artifact)
+    if differing:
+        raise ConvergenceRefused(
+            "lens_provenance_sources_agree failed: "
+            f"{original_summary_source} and {lens_validation_source} disagree "
+            f"on {differing}. Two immutable records of the same frozen lens "
+            "confirmation cannot both be true. Refusing to measure."
+        )
+
+    amended_block = dict(verdict_summary.get("lens_validation") or {})
+    amended_carries_block = bool(amended_block) and verdict_source != (
+        original_summary_source
+    )
+    if amended_carries_block:
+        amended_differing = _lens_provenance_difference(amended_block, from_summary)
+        if amended_differing:
+            raise ConvergenceRefused(
+                "lens_provenance_sources_agree failed: "
+                f"{verdict_source} carries its own lens_validation block that "
+                f"disagrees with {original_summary_source} on "
+                f"{amended_differing}. Refusing to measure."
+            )
+
+    composite = dict(verdict_summary)
+    composite["lens_validation"] = from_summary
+    return {
+        "summary": composite,
+        "provenance": {
+            "schema": "jlens.mmpilot.convergence_provenance.v1",
+            "verdict_source": verdict_source,
+            "lens_provenance_sources": [
+                original_summary_source,
+                lens_validation_source,
+            ],
+            "lens_provenance_sources_agree": True,
+            "amended_summary_carries_lens_block": amended_carries_block,
+            "lens_provenance_checksum": payload_checksum(from_summary),
+            "verdicts_checksum": payload_checksum(
+                dict(verdict_summary.get("verdicts") or {})
+            ),
+            "composite_is_in_memory_only": True,
+            "note": (
+                "verdicts come from the capability-filtered amendment; the lens "
+                "confirmation provenance comes from the original summary and "
+                "lens_validation.json, which were required to agree. No "
+                "completed-run artifact was written."
+            ),
+        },
+    }
+
+
+def load_verification_view(
+    run_dir: str | os.PathLike[str],
+    *,
+    amended_summary_file: str = AMENDED_SUMMARY_FILE,
+    original_summary_file: str = ORIGINAL_SUMMARY_FILE,
+    lens_validation_file: str = LENS_VALIDATION_FILE,
+) -> dict:
+    """Read the completed run's artifacts and compose the verification view.
+
+    Read-only: every file is opened for reading and none is created, moved or
+    rewritten. The amendment is authoritative for verdicts when it exists; when
+    it does not, the original summary supplies both.
+    """
+    root = Path(run_dir)
+    original_path = root / original_summary_file
+    if not original_path.is_file():
+        raise ConvergenceRefused(
+            "lens_provenance_from_original_summary failed: the completed run "
+            f"has no {original_summary_file}, so its lens confirmation "
+            "provenance cannot be read. Refusing to measure."
+        )
+    original = json.loads(original_path.read_text(encoding="utf-8"))
+
+    amended_path = root / amended_summary_file
+    if amended_path.is_file():
+        verdict_summary = json.loads(amended_path.read_text(encoding="utf-8"))
+        verdict_source = amended_summary_file
+    else:
+        verdict_summary = original
+        verdict_source = original_summary_file
+
+    lens_path = root / lens_validation_file
+    lens_payload = (
+        json.loads(lens_path.read_text(encoding="utf-8"))
+        if lens_path.is_file()
+        else None
+    )
+
+    view = compose_verification_view(
+        verdict_summary=verdict_summary,
+        verdict_source=verdict_source,
+        original_summary=original,
+        original_summary_source=original_summary_file,
+        lens_validation=lens_payload,
+        lens_validation_source=lens_validation_file,
+    )
+    view["verdict_source_path"] = str(
+        amended_path if verdict_source == amended_summary_file else original_path
+    )
+    return view
+
+
 def verify_completed_run(
     *,
     run_dir: str | os.PathLike[str],
@@ -2245,6 +2423,7 @@ def verify_completed_run(
     expected_lens_checksums: Mapping[int, str],
     expected_combined_lens_checksum: str,
     summary: Mapping,
+    provenance: Mapping | None = None,
     layers: Sequence[int] = AUDITED_LAYERS,
 ) -> dict:
     """Check every Stage-1 precondition. Incomplete state is refused, not patched.
@@ -2337,12 +2516,30 @@ def verify_completed_run(
             f"layer {invalid} failed confirmation and may never be audited here",
         )
 
+    record = dict(provenance or {})
     lens_validation = dict(summary.get("lens_validation") or {})
     require(
         "lens_confirmation_status_recorded",
         bool(lens_validation),
-        "the completed run's summary carries no lens_validation record",
+        "the completed run's summary carries no lens_validation record. When "
+        "the verdicts come from the capability-filtered amendment, which does "
+        "not duplicate that block, compose the verification view with "
+        "load_verification_view() so the provenance is read from the original "
+        "summary and lens_validation.json",
     )
+    if record:
+        require(
+            "lens_provenance_sources_agree",
+            bool(record.get("lens_provenance_sources_agree")),
+            "the immutable lens provenance sources were not confirmed to agree",
+        )
+        require(
+            "lens_provenance_matches_verification_view",
+            record.get("lens_provenance_checksum")
+            == payload_checksum(lens_validation),
+            "the composed view's lens record is not the one whose provenance "
+            "was verified",
+        )
     verdicts = dict(summary.get("verdicts") or {})
     require(
         "capability_filtered_verdicts_present",
@@ -2369,6 +2566,7 @@ def verify_completed_run(
         "lens_checksums": {str(k): str(v) for k, v in sorted(expected_lens_checksums.items())},
         "combined_lens_checksum": expected_combined_lens_checksum,
         "completed_overall_verdict": overall.get("verdict"),
+        "artifact_provenance": record,
         "checks": checks,
     }
 
@@ -3430,6 +3628,7 @@ def run_convergence_audit(
 
 __all__ = [
     "AMBIGUOUS",
+    "AMENDED_SUMMARY_FILE",
     "AUDITED_LAYERS",
     "CONTROL_VARIANTS",
     "CONVERGED",
@@ -3439,10 +3638,12 @@ __all__ = [
     "INCONCLUSIVE_CONVERGENCE_TIMING",
     "INTERPRETATION_BOUNDARY",
     "LENS_INVALID_LAYERS",
+    "LENS_VALIDATION_FILE",
     "MODALITIES",
     "NORM_CONVENTION_FLOOR",
     "NORM_CONVENTION_ULPS",
     "NOT_CONVERGED",
+    "ORIGINAL_SUMMARY_FILE",
     "PRE_CONVERGENCE_TRANSFER_SUPPORTED",
     "PRIMARY_LAYER",
     "PRIMARY_VARIANT",
@@ -3469,6 +3670,7 @@ __all__ = [
     "classify_all_layers",
     "classify_layer",
     "clean_predictions_from_interventions",
+    "compose_verification_view",
     "convergence_report_markdown",
     "convergence_verdict",
     "derived_seed",
@@ -3480,6 +3682,7 @@ __all__ = [
     "head_from_model",
     "image_disjoint_folds",
     "layer_convergence_table",
+    "load_verification_view",
     "module_placement",
     "norm_convention_tolerance",
     "permuted_activation_assignment",

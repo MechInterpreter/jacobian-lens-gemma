@@ -523,22 +523,27 @@ def build_mock_completed_run(
             "rationale": "synthetic completed-run verdict for the MOCK audit",
         },
     }
+    # The lens report the real run wrote to both its summary and its own
+    # ``lens_validation.json``. One object, two immutable copies, exactly as on
+    # Drive — so the audit's requirement that the two agree is exercised here
+    # rather than first met in Colab.
+    lens_report = {
+        "layers": [int(x) for x in spec.layers],
+        "checksums": {str(k): v for k, v in sorted(MOCK_LENS_CHECKSUMS.items())},
+        "combined_checksum": MOCK_COMBINED_LENS_CHECKSUM,
+        "confirmation_status": {
+            "35": "PASS",
+            "38": "PASS",
+            "40": "PASS",
+            "32": "FAILED_UNTOUCHED_CONFIRMATION",
+        },
+    }
     summary = {
         "run_dir": str(root),
         "mode": "mock",
         "commit": "mock",
         "fingerprint_digest": fingerprint.digest,
-        "lens_validation": {
-            "layers": [int(x) for x in spec.layers],
-            "checksums": {str(k): v for k, v in sorted(MOCK_LENS_CHECKSUMS.items())},
-            "combined_checksum": MOCK_COMBINED_LENS_CHECKSUM,
-            "confirmation_status": {
-                "35": "PASS",
-                "38": "PASS",
-                "40": "PASS",
-                "32": "FAILED_UNTOUCHED_CONFIRMATION",
-            },
-        },
+        "lens_validation": lens_report,
         "audio_protocol": {
             "protocol_version": MOCK_AUDIO_PROTOCOL_VERSION,
             "protocol_fingerprint": MOCK_AUDIO_PROTOCOL_FINGERPRINT,
@@ -548,6 +553,10 @@ def build_mock_completed_run(
     }
     for name, payload in (
         ("native_audio_transfer_summary.json", summary),
+        ("lens_validation.json", lens_report),
+        # The amendment carries the corrected verdicts and deliberately does not
+        # duplicate ``lens_validation``, which is what the real amended run
+        # looks like and what the composed verification view exists to handle.
         ("native_audio_transfer_summary_capability_filtered_v2.json", {
             "schema": "jlens.mmpilot.amended_report_summary.v1",
             "binding": {"run_fingerprint_digest": fingerprint.digest},
@@ -588,6 +597,7 @@ def build_mock_completed_run(
         "directions": directions,
         "capability": capability,
         "summary": summary,
+        "lens_report": lens_report,
         "candidate_token_ids": mock_candidate_token_ids(spec),
         "expectations": {
             "expected_fingerprint_digest": fingerprint.digest,
@@ -629,6 +639,7 @@ def run_mock_convergence_audit(
         audit_native_head,
         build_population,
         clean_predictions_from_interventions,
+        load_verification_view,
         protected_file_checksums,
         resolve_candidate_tokens,
         run_convergence_audit,
@@ -643,12 +654,18 @@ def run_mock_convergence_audit(
     store = built["store"]
 
     before = protected_file_checksums(completed_run_dir)
+    # Verdicts from the amendment, lens provenance from the two immutable
+    # originals — the same composition the real audit performs, so the MOCK
+    # actually covers it.
+    view = load_verification_view(completed_run_dir)
+    completed_summary = view["summary"]
     integrity = verify_completed_run(
         run_dir=completed_run_dir,
         fingerprint_payload=json.loads(
             (completed_run_dir / "fingerprint.json").read_text(encoding="utf-8")
         ),
-        summary=built["summary"],
+        summary=completed_summary,
+        provenance=view["provenance"],
         layers=spec.layers,
         **built["expectations"],
     )
@@ -702,7 +719,7 @@ def run_mock_convergence_audit(
         tokenization=tokenization,
         head_audit=head_audit,
         integrity=integrity,
-        completed_summary=built["summary"],
+        completed_summary=completed_summary,
         store=audit_store,
         criterion=criterion,
         layers=spec.layers,
@@ -715,6 +732,7 @@ def run_mock_convergence_audit(
     result["population"] = population
     result["tokenization"] = tokenization
     result["head_audit"] = head_audit
+    result["verification_view"] = view
     result["store"] = audit_store
     result["completed_run_dir"] = str(completed_run_dir)
     return result
