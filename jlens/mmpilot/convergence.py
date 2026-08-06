@@ -177,7 +177,6 @@ PROTECTED_RUN_FILES: tuple[str, ...] = (
     "run_manifest.json",
 )
 
-
 class ConvergenceRefused(RuntimeError):
     """A precondition of the audit does not hold, so nothing is measured."""
 
@@ -539,23 +538,45 @@ class NativeHead:
 
     @torch.no_grad()
     def logits(self, activation: torch.Tensor) -> torch.Tensor:
-        """Full-vocabulary logits for one residual, on the model's own path."""
+        """Full-vocabulary logits for one residual, on the model's own path.
+
+        The operation order is the model's, not a convenient one. Under BF16 the
+        two are not interchangeable: applying the softcap after a float32
+        conversion is a *different function* from applying it in the model's
+        native dtype, and the difference is large enough (0.12 on the real
+        checkpoint) to look like a broken readout. So:
+
+        1. cast to the lm-head dtype, then move to the lm-head device — the same
+           two steps in the same order as
+           :meth:`jlens.hf.HFLensModel.unembed`;
+        2. ``final_norm`` and ``lm_head``, the live modules, in native dtype;
+        3. the softcap in native dtype;
+        4. only then float32, for the audit's own arithmetic.
+        """
         weight = self.lm_head.weight
-        hidden = activation.to(dtype=weight.dtype, device=weight.device)
+        hidden = activation.to(weight.dtype).to(weight.device)
         if hidden.ndim == 1:
             hidden = hidden.unsqueeze(0)
-        out = self.lm_head(self.final_norm(hidden)).float().squeeze(0)
+        out = self.lm_head(self.final_norm(hidden))
         if self.softcap is not None:
-            out = float(self.softcap) * torch.tanh(out / float(self.softcap))
-        return out
+            cap = float(self.softcap)
+            out = cap * torch.tanh(out / cap)
+        return out.float().squeeze(0)
 
     @torch.no_grad()
     def candidate_logits(
         self, activation: torch.Tensor, token_ids: Sequence[int]
     ) -> torch.Tensor:
-        """Logits restricted to ``token_ids``, in the given order."""
+        """Logits restricted to ``token_ids``, in the given order.
+
+        The index lives on the logits' device: a CPU index against CUDA logits
+        raises, and nothing upstream guarantees the activation arrived on the
+        model's device.
+        """
         full = self.logits(activation)
-        index = torch.tensor([int(i) for i in token_ids], dtype=torch.long)
+        index = torch.tensor(
+            [int(i) for i in token_ids], dtype=torch.long, device=full.device
+        )
         return full.index_select(0, index)
 
 
@@ -575,6 +596,84 @@ def head_from_model(model: Any) -> NativeHead:
         d_model=int(lm_head.weight.shape[1]),
         vocab_size=int(lm_head.weight.shape[0]),
     )
+
+
+#: Slack, in output-dtype resolution steps, allowed between the live norm and a
+#: correct reconstruction of it. One step is the cast itself; the rest absorbs
+#: the float32 arithmetic upstream of that cast landing on a neighbouring
+#: representable value. It is deliberately far below the ``|x_hat|``-sized gap
+#: that separates the two RMSNorm conventions from each other.
+NORM_CONVENTION_ULPS = 4.0
+
+#: Floor for the norm-convention tolerance, so a float32 module keeps exactly
+#: the threshold this audit has always used.
+NORM_CONVENTION_FLOOR = 1e-2
+
+
+def norm_convention_tolerance(dtype: torch.dtype, observed: torch.Tensor) -> float:
+    """How close a reconstruction must be to count as *the same* convention.
+
+    Scaled by the output dtype's resolution and the observed magnitude, because
+    an absolute threshold cannot mean the same thing in BF16 and in float32.
+    BF16 carries eight mantissa bits: a value near 3 is representable only to
+    about 0.023, so a fixed ``1e-2`` bar declares a correct RMSNorm to be *not
+    an RMSNorm at all*. In float32 the scaled term is negligible and the floor
+    governs, which leaves the historical behaviour untouched.
+    """
+    try:
+        resolution = float(torch.finfo(dtype).eps)
+    except TypeError:  # pragma: no cover - integer dtypes never reach here
+        resolution = 0.0
+    scale = float(observed.abs().max()) if observed.numel() else 1.0
+    if not math.isfinite(scale):
+        scale = 1.0
+    return max(NORM_CONVENTION_FLOOR, NORM_CONVENTION_ULPS * resolution * scale)
+
+
+def module_placement(
+    module: Any, *, required: bool = True
+) -> tuple[torch.device | None, torch.dtype | None]:
+    """Where a live module's tensors actually are, and in what dtype.
+
+    Resolved from the module's own parameters and buffers rather than assumed.
+    A probe built for ``final_norm`` has to land on the norm's device *and* in
+    its dtype: converting only the dtype is what produced ``Expected all
+    tensors to be on the same device, but found cuda:0 and cpu`` on the real
+    run, where every CPU test had silently agreed with itself.
+
+    The dtype is taken from the first floating-point tensor, since an integer
+    buffer says nothing about the arithmetic the module performs.
+
+    Args:
+        required: Refuse rather than return ``None`` when the module carries no
+            tensor at all and the caller needs a placement.
+
+    Raises:
+        ConvergenceRefused: When ``required`` and the module has no resolvable
+            device.
+    """
+    device: torch.device | None = None
+    dtype: torch.dtype | None = None
+    named = list(getattr(module, "named_parameters", lambda: [])()) + list(
+        getattr(module, "named_buffers", lambda: [])()
+    )
+    for _name, tensor in named:
+        if tensor is None:
+            continue
+        if device is None:
+            device = tensor.device
+        if dtype is None and tensor.is_floating_point():
+            dtype = tensor.dtype
+            device = tensor.device
+            break
+    if device is None and required:
+        raise ConvergenceRefused(
+            f"{type(module).__name__} carries no parameter or buffer, so the "
+            "audit cannot tell which device to place its probe on. Refusing to "
+            "guess CPU: that guess is exactly the bug this check exists to "
+            "catch."
+        )
+    return device, dtype
 
 
 def _module_checksum(module: Any) -> str:
@@ -603,12 +702,30 @@ def audit_native_head(head: NativeHead, *, model: Any = None, probes: int = 4) -
        matches is *recorded*; neither is used to compute anything. If the module
        is not an RMSNorm at all (a ``LayerNorm``, as in the CPU mock), that is
        recorded too and nothing fails.
+
+       The comparison is dtype-aware, because on the real checkpoint it is not
+       optional. Gemma's RMSNorm computes in float32 and casts back with
+       ``type_as(x)``, so a live BF16 module returns BF16. Comparing that
+       against an unquantized float32 reconstruction with an absolute threshold
+       reads one BF16 rounding step — up to ~0.4% of the output magnitude — as
+       evidence of a *different normalization family*, and the real run duly
+       reported ``not_rmsnorm`` for a norm that is plainly Gemma's RMSNorm. So
+       the probe is quantized to the live input dtype first, the reconstruction
+       is rounded to the live output dtype last, and the classification is made
+       on that dtype-aware residual. The raw float32 residual is recorded beside
+       it, since the two together are what show the gap was rounding.
     2. **The softcap.** Present or absent, and its value.
     3. **Agreement with the model's own ``unembed``.** When ``model`` is given,
        the audited path is compared against
        :meth:`jlens.hf.HFLensModel.unembed` on the same probes. They must agree
        to within float tolerance, which is what makes "native" a fact rather
        than a claim.
+
+       Both sides are evaluated **one probe at a time as a singleton batch**.
+       Comparing a batched ``unembed`` against a row-wise stack is not a
+       comparison of two readouts; it is a comparison of two GEMM shapes, and
+       under BF16 on CUDA those round differently — the real run measured 0.1952
+       that way. The fix is to equalize the shape, never to widen the tolerance.
 
     Raises:
         ConvergenceRefused: If the audited path and the model's own ``unembed``
@@ -621,26 +738,51 @@ def audit_native_head(head: NativeHead, *, model: Any = None, probes: int = 4) -
     weight = getattr(head.final_norm, "weight", None)
     convention = "unknown"
     max_gap: dict[str, float] = {}
+    dtype_aware_gap: dict[str, float] = {}
+    norm_placement: dict[str, Any] = {}
     if weight is not None:
+        norm_device, norm_dtype = module_placement(head.final_norm)
+        live_dtype = norm_dtype or weight.dtype
+        # Quantize *before* the live call and before the reconstruction, so both
+        # sides see bit-identical input. Rounding the probe afterwards would
+        # compare two different inputs.
+        probe_live = probe.to(live_dtype).to(norm_device)
+        observed_native = head.final_norm(probe_live).detach()
+        out_dtype = observed_native.dtype
+        observed = observed_native.float().cpu()
+
         w = weight.detach().float().cpu()
-        x = probe.float()
+        x = probe_live.float().cpu()
         eps = float(
             getattr(head.final_norm, "eps", None)
             or getattr(head.final_norm, "variance_epsilon", None)
             or 1e-6
         )
         x_hat = x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + eps)
-        observed = (
-            head.final_norm(probe.to(w.dtype)).detach().float().cpu()
-        )
         for name, predicted in (
             ("rmsnorm_weight", x_hat * w),
             ("rmsnorm_one_plus_weight", x_hat * (1.0 + w)),
         ):
             max_gap[name] = float((observed - predicted).abs().max())
-        convention = min(max_gap, key=max_gap.get)
-        if max_gap[convention] > 1e-2:
+            # The live module cast its result to ``out_dtype``; an honest
+            # reconstruction has to survive the same cast before being judged.
+            dtype_aware_gap[name] = float(
+                (observed - predicted.to(out_dtype).float()).abs().max()
+            )
+        convention = min(dtype_aware_gap, key=dtype_aware_gap.get)
+        tolerance = norm_convention_tolerance(out_dtype, observed)
+        if dtype_aware_gap[convention] > tolerance:
             convention = "not_rmsnorm"
+        norm_placement = {
+            "probe_device": str(probe_live.device),
+            "probe_dtype": str(probe_live.dtype).removeprefix("torch."),
+            "output_dtype": str(out_dtype).removeprefix("torch."),
+            "weight_device": str(norm_device),
+            "epsilon": eps,
+            "tolerance": tolerance,
+            "quantized_probe_before_reconstruction": True,
+            "reconstruction_cast_to_output_dtype": True,
+        }
 
     report = {
         "schema": "jlens.mmpilot.native_head_audit.v1",
@@ -650,7 +792,10 @@ def audit_native_head(head: NativeHead, *, model: Any = None, probes: int = 4) -
         "vocab_size": int(head.vocab_size),
         "has_norm_weight": weight is not None,
         "norm_weight_convention": convention,
-        "norm_convention_residuals": max_gap,
+        "norm_convention_residuals": dtype_aware_gap,
+        "norm_convention_residuals_dtype_aware": dtype_aware_gap,
+        "norm_convention_residuals_raw_float32": max_gap,
+        "norm_convention_probe": norm_placement,
         "final_logit_softcapping": (
             None if head.softcap is None else float(head.softcap)
         ),
@@ -669,6 +814,20 @@ def audit_native_head(head: NativeHead, *, model: Any = None, probes: int = 4) -
         "lm_head_checksum": _module_checksum(head.lm_head),
         "matches_model_unembed": None,
         "max_abs_difference_vs_model_unembed": None,
+        "unembed_comparison_protocol": {
+            "shape_matched": True,
+            "protocol": "per_probe_singleton_batch",
+            "probe_shape": [1, int(head.d_model)],
+            "probes": int(probes),
+            "note": (
+                "both paths are evaluated one probe at a time with a leading "
+                "batch dimension of 1. A batched unembed against a row-wise "
+                "stack compares two GEMM shapes, not two readouts, and BF16 "
+                "rounds them differently; the tolerance is never widened to "
+                "absorb that."
+            ),
+            "tolerance": 1e-2,
+        },
     }
     report["head_checksum"] = payload_checksum(
         {
@@ -679,9 +838,12 @@ def audit_native_head(head: NativeHead, *, model: Any = None, probes: int = 4) -
     )
 
     if model is not None and hasattr(model, "unembed"):
-        theirs = model.unembed(probe).detach().float().cpu()
-        ours = torch.stack([head.logits(row) for row in probe]).cpu()
-        gap = float((ours - theirs).abs().max())
+        gap = 0.0
+        for index in range(probe.shape[0]):
+            row = probe[index : index + 1]
+            theirs = model.unembed(row).detach().float().cpu().reshape(-1)
+            ours = head.logits(row).detach().float().cpu().reshape(-1)
+            gap = max(gap, float((ours - theirs).abs().max()))
         report["matches_model_unembed"] = bool(gap <= 1e-2)
         report["max_abs_difference_vs_model_unembed"] = gap
         if not report["matches_model_unembed"]:
@@ -3278,6 +3440,8 @@ __all__ = [
     "INTERPRETATION_BOUNDARY",
     "LENS_INVALID_LAYERS",
     "MODALITIES",
+    "NORM_CONVENTION_FLOOR",
+    "NORM_CONVENTION_ULPS",
     "NOT_CONVERGED",
     "PRE_CONVERGENCE_TRANSFER_SUPPORTED",
     "PRIMARY_LAYER",
@@ -3305,9 +3469,9 @@ __all__ = [
     "classify_all_layers",
     "classify_layer",
     "clean_predictions_from_interventions",
-    "derived_seed",
     "convergence_report_markdown",
     "convergence_verdict",
+    "derived_seed",
     "direct_readout_row",
     "figure_causal_versus_convergence",
     "figure_convergence_versus_layer",
@@ -3316,6 +3480,8 @@ __all__ = [
     "head_from_model",
     "image_disjoint_folds",
     "layer_convergence_table",
+    "module_placement",
+    "norm_convention_tolerance",
     "permuted_activation_assignment",
     "permuted_token_assignment",
     "protected_file_checksums",
