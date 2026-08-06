@@ -1050,6 +1050,18 @@ def bootstrap_rate(
     }
 
 
+def derived_seed(base: int, *parts: object) -> int:
+    """A stable seed from ``base`` and any identifying parts.
+
+    Derived from a checksum rather than from lengths or Python's salted
+    ``hash()``: two modality names of equal length must not silently share a
+    resampling seed, and the same inputs must give the same seed on every
+    machine and in every process.
+    """
+    digest = payload_checksum([int(base), *[str(part) for part in parts]])
+    return int(digest.split(":")[1][:8], 16)
+
+
 def summarize_rows(
     rows: Sequence[Mapping],
     *,
@@ -1091,14 +1103,14 @@ def summarize_rows(
             summary["bootstrap_clean_agreement_unique"] = bootstrap_rate(
                 modality_rows,
                 "agrees_with_clean_final_prediction_unique",
-                seed=criterion.bootstrap_seed + 1000 * int(layer) + len(modality),
+                seed=derived_seed(criterion.bootstrap_seed, "clean", layer, modality),
                 resamples=criterion.bootstrap_resamples,
                 confidence=criterion.bootstrap_confidence,
             )
             summary["bootstrap_target_accuracy_argmax"] = bootstrap_rate(
                 modality_rows,
                 "agrees_with_ground_truth_argmax",
-                seed=criterion.bootstrap_seed + 2000 * int(layer) + len(modality),
+                seed=derived_seed(criterion.bootstrap_seed, "accuracy", layer, modality),
                 resamples=criterion.bootstrap_resamples,
                 confidence=criterion.bootstrap_confidence,
             )
@@ -1114,7 +1126,7 @@ def summarize_rows(
         pooled["bootstrap_clean_agreement_unique"] = bootstrap_rate(
             layer_rows,
             "agrees_with_clean_final_prediction_unique",
-            seed=criterion.bootstrap_seed + 3000 * int(layer),
+            seed=derived_seed(criterion.bootstrap_seed, "pooled", layer),
             resamples=criterion.bootstrap_resamples,
             confidence=criterion.bootstrap_confidence,
         )
@@ -3093,7 +3105,7 @@ def run_convergence_audit(
     for unit in units:
         cells.setdefault((int(unit["layer"]), str(unit["modality"])), []).append(unit)
     for (layer, modality), cell_units in sorted(cells.items()):
-        seed = control_seed + 1000 * layer + 7 * len(modality)
+        seed = derived_seed(control_seed, "control", layer, modality)
         for variant, kwargs in _control_rows(
             cell_units,
             head=head,
@@ -3293,6 +3305,7 @@ __all__ = [
     "classify_all_layers",
     "classify_layer",
     "clean_predictions_from_interventions",
+    "derived_seed",
     "convergence_report_markdown",
     "convergence_verdict",
     "direct_readout_row",
