@@ -24,6 +24,7 @@ default (:class:`~jlens.autoencoder.config.PolicyGradientConfig`).
 from __future__ import annotations
 
 import copy
+import os
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -31,6 +32,7 @@ import torch
 from torch import nn
 
 from jlens.autoencoder.adapter import ConeAdapter
+from jlens.autoencoder.checkpoints import state_dict_sha256
 from jlens.autoencoder.conditioning import (
     ConditioningBackend,
     assert_gemma_frozen,
@@ -40,17 +42,139 @@ from jlens.autoencoder.config import PreferenceConfig
 from jlens.autoencoder.errors import AutoencoderError
 from jlens.autoencoder.geometry import nonnegative_scale_fit, unit
 from jlens.autoencoder.prompting import VerbalizerPrompt
+from jlens.autoencoder.state import (
+    atomic_write_json,
+    iter_valid_files,
+    read_json_if_valid,
+    sha256_of_json,
+)
 from jlens.autoencoder.verbalizer import (
     Candidate,
     assert_no_gemma_gradients,
     beam_search,
     sequence_logprobs,
 )
+from jlens.generative import tensor_sha256
+
+BEAM_CACHE_SCHEMA = "jlens.autoencoder.preference.beam_cache.v1"
 
 
 def normalize_candidate_text(text: str) -> str:
     """Comparison form for duplicate detection and exact match."""
     return " ".join(str(text).split()).casefold()
+
+
+def beam_cache_key(
+    *,
+    q: torch.Tensor,
+    adapter_sha256: str,
+    prompt_id: str,
+    beam_width: int,
+    max_new_tokens: int,
+    stop_token_ids: Sequence[int],
+) -> str:
+    """Identity of one beam generation.
+
+    Beam search is deterministic given ``(q, adapter weights, prompt, decoding
+    settings)``, so those four things — and nothing else — are the key. The
+    adapter hash is the load-bearing part: it changes on every optimizer step, so
+    a cache hit is proof the weights are the ones that produced the entry, not an
+    assumption that they are.
+    """
+    return sha256_of_json(
+        {
+            "schema": BEAM_CACHE_SCHEMA,
+            "q_sha256": tensor_sha256(q.detach().float().cpu()),
+            "adapter_sha256": adapter_sha256,
+            "prompt_id": prompt_id,
+            "beam_width": int(beam_width),
+            "max_new_tokens": int(max_new_tokens),
+            "stop_token_ids": [int(t) for t in stop_token_ids],
+        }
+    )
+
+
+class BeamCache:
+    """Disk-backed cache of generated beams, keyed by :func:`beam_cache_key`.
+
+    Exists for one specific loss: an interruption *during* the candidate
+    generation of a batch. Those beams were the expensive part, the adapter has
+    not moved since the last checkpoint, and regenerating them on resume is pure
+    waste. Between batches the adapter changes and the keys miss, which is
+    correct — a stale beam would be a beam from a different policy.
+
+    ``capacity`` bounds the directory: entries are dropped oldest-first by write
+    order, because the useful ones are always the most recent adapter's.
+    """
+
+    def __init__(self, directory: str | None, *, capacity: int = 512, enabled: bool = True):
+        self.directory = directory
+        self.capacity = int(capacity)
+        self.enabled = bool(enabled and directory)
+        self.hits = 0
+        self.misses = 0
+        self.writes = 0
+        if self.enabled:
+            os.makedirs(self.directory, exist_ok=True)
+
+    def _path(self, key: str) -> str:
+        return os.path.join(self.directory, f"beams_{key.split(':')[-1][:32]}.json")
+
+    def get(self, key: str) -> list[Candidate] | None:
+        if not self.enabled:
+            return None
+        payload = read_json_if_valid(self._path(key))
+        if not payload or payload.get("key") != key or payload.get("schema") != BEAM_CACHE_SCHEMA:
+            self.misses += 1
+            return None
+        self.hits += 1
+        return [
+            Candidate(
+                token_ids=tuple(int(t) for t in entry["token_ids"]),
+                text=str(entry["text"]),
+                logprob=float(entry["sequence_logprob"]),
+                mean_logprob=float(entry["mean_token_logprob"]),
+                n_tokens=int(entry["n_tokens"]),
+                finished=bool(entry["finished"]),
+                beam_rank=int(entry["beam_rank"]),
+            )
+            for entry in payload.get("candidates", [])
+        ]
+
+    def put(self, key: str, candidates: Sequence[Candidate]) -> None:
+        if not self.enabled:
+            return
+        atomic_write_json(
+            self._path(key),
+            {
+                "schema": BEAM_CACHE_SCHEMA,
+                "key": key,
+                "candidates": [c.to_dict() for c in candidates],
+            },
+        )
+        self.writes += 1
+        self._trim()
+
+    def _trim(self) -> None:
+        paths = iter_valid_files(self.directory, suffix=".json")
+        if len(paths) <= self.capacity:
+            return
+        paths.sort(key=lambda p: os.path.getmtime(p))
+        for path in paths[: len(paths) - self.capacity]:
+            try:
+                os.remove(path)
+            except OSError:  # pragma: no cover - a racing reader is harmless
+                pass
+
+    def stats(self) -> dict:
+        return {
+            "enabled": self.enabled,
+            "directory": self.directory,
+            "hits": self.hits,
+            "misses": self.misses,
+            "writes": self.writes,
+            "capacity": self.capacity,
+        }
 
 
 @dataclass(frozen=True)
@@ -251,14 +375,32 @@ def train_preference(
     log: object = None,
     on_epoch=None,
     start_epoch: int = 0,
+    start_batch: int = 0,
+    global_step: int = 0,
     optimizer: torch.optim.Optimizer | None = None,
+    generator: torch.Generator | None = None,
+    history: list[dict] | None = None,
+    resume_order: list[int] | None = None,
+    resume_partial: dict | None = None,
+    reference_state: dict | None = None,
+    beam_cache: BeamCache | None = None,
+    checkpoint=None,
+    checkpoint_every_steps: int = 0,
+    guard=None,
 ) -> tuple[ConeAdapter, dict]:
     """DPO-style preference optimization of the adapter against the frozen
     reconstructor's reward.
 
-    The reference policy is a frozen deep copy of the adapter as it enters this
-    function (i.e. the warm-started adapter), so the KL anchor is the supervised
-    model rather than a moving target.
+    The reference policy is the **warm-started** adapter, so the KL anchor is the
+    supervised model rather than a moving target. On a fresh run that is a deep
+    copy of ``adapter`` as it enters here; on a resume it must come from
+    ``reference_state`` (the preserved ``adapter_warm.pt``), because by then
+    ``adapter`` has already taken preference steps and copying it would anchor
+    the run to a policy the uninterrupted run never had.
+
+    **Resume.** As in the warm start: position, sampler order, generator state,
+    and the interrupted epoch's running sums. ``beam_cache`` reuses candidate
+    beams that were generated before the interruption but never trained on.
     """
     assert_gemma_frozen(model, where="preference training (before)")
     for parameter in reconstructor.parameters():
@@ -269,6 +411,8 @@ def train_preference(
             )
     adapter = adapter.to(device)
     reference = copy.deepcopy(adapter).to(device).eval()
+    if reference_state is not None:
+        reference.load_state_dict({k: v.to(device) for k, v in reference_state.items()})
     for parameter in reference.parameters():
         parameter.requires_grad_(False)
     adapter.train()
@@ -278,34 +422,91 @@ def train_preference(
         optimizer, frozen_modules=[model, reconstructor, reference], trainable=adapter
     )
     indices = dataset.indices_for_split(split)
-    generator = torch.Generator().manual_seed(int(config.seed))
-    history: list[dict] = []
+    if generator is None:
+        generator = torch.Generator().manual_seed(int(config.seed))
+    history = list(history or [])
+    cache = beam_cache or BeamCache(None, enabled=False)
+    interrupted_at: str | None = None
+
+    def write_checkpoint(reason, epoch, batch_index, order, partial, metrics):
+        if checkpoint is None:
+            return None
+        return checkpoint(
+            reason=reason,
+            epoch=int(epoch),
+            batch_index=int(batch_index),
+            global_step=int(global_step),
+            order=list(order),
+            partial=dict(partial),
+            metrics=dict(metrics or {}),
+            history=list(history),
+        )
+
     for epoch in range(int(start_epoch), int(config.epochs)):
-        order = [indices[i] for i in torch.randperm(len(indices), generator=generator).tolist()]
-        epoch_loss = 0.0
-        n_updates = 0
-        n_pairs_total = 0
-        n_abstained = 0
-        mean_reward: list[float] = []
-        for start in range(0, len(order), int(config.batch_size)):
+        if epoch == int(start_epoch) and resume_order is not None:
+            order = list(resume_order)
+        else:
+            order = [
+                indices[i] for i in torch.randperm(len(indices), generator=generator).tolist()
+            ]
+        first_batch = int(start_batch) if epoch == int(start_epoch) else 0
+        carried = dict(resume_partial or {}) if epoch == int(start_epoch) else {}
+        epoch_loss = float(carried.get("epoch_loss", 0.0))
+        n_updates = int(carried.get("n_updates", 0))
+        n_pairs_total = int(carried.get("n_pairs_total", 0))
+        n_abstained = int(carried.get("n_abstained", 0))
+        mean_reward: list[float] = list(carried.get("mean_reward", []))
+        starts = list(range(0, len(order), int(config.batch_size)))
+        for batch_index, start in enumerate(starts):
+            if batch_index < first_batch:
+                continue
+            partial = {
+                "epoch_loss": epoch_loss,
+                "n_updates": n_updates,
+                "n_pairs_total": n_pairs_total,
+                "n_abstained": n_abstained,
+                "mean_reward": list(mean_reward),
+            }
+            if guard is not None and guard.should_stop():
+                interrupted_at = write_checkpoint(
+                    "keyboard_interrupt", epoch, batch_index, order, partial, {}
+                )
+                break
             batch_indices = order[start : start + int(config.batch_size)]
             sequences: list[list[int]] = []
             memory_rows: list[torch.Tensor] = []
             pair_slots: list[tuple[int, int]] = []
+            adapter_sha = state_dict_sha256(adapter) if cache.enabled else ""
             with torch.no_grad():
                 for record_index in batch_indices:
                     q = dataset.cones[record_index]
-                    memory = adapter(q.unsqueeze(0).to(device))
-                    candidates = beam_search(
-                        model,
-                        prompt,
-                        memory.detach(),
-                        conditioner=conditioner,
-                        beam_width=int(beam_width),
-                        max_new_tokens=int(max_new_tokens),
-                        stop_token_ids=stop_token_ids,
-                        pad_token_id=pad_token_id,
+                    key = (
+                        beam_cache_key(
+                            q=q,
+                            adapter_sha256=adapter_sha,
+                            prompt_id=prompt.prompt_id,
+                            beam_width=int(beam_width),
+                            max_new_tokens=int(max_new_tokens),
+                            stop_token_ids=stop_token_ids,
+                        )
+                        if cache.enabled
+                        else ""
                     )
+                    candidates = cache.get(key) if cache.enabled else None
+                    if candidates is None:
+                        memory = adapter(q.unsqueeze(0).to(device))
+                        candidates = beam_search(
+                            model,
+                            prompt,
+                            memory.detach(),
+                            conditioner=conditioner,
+                            beam_width=int(beam_width),
+                            max_new_tokens=int(max_new_tokens),
+                            stop_token_ids=stop_token_ids,
+                            pad_token_id=pad_token_id,
+                        )
+                        if cache.enabled:
+                            cache.put(key, candidates)
                     q_hats = reconstruct_candidates(
                         reconstructor,
                         embedder,
@@ -381,6 +582,28 @@ def train_preference(
             optimizer.step()
             epoch_loss += float(loss.detach())
             n_updates += 1
+            global_step += 1
+            if (
+                checkpoint_every_steps
+                and global_step % int(checkpoint_every_steps) == 0
+                and batch_index + 1 < len(starts)
+            ):
+                write_checkpoint(
+                    "periodic",
+                    epoch,
+                    batch_index + 1,
+                    order,
+                    {
+                        "epoch_loss": epoch_loss,
+                        "n_updates": n_updates,
+                        "n_pairs_total": n_pairs_total,
+                        "n_abstained": n_abstained,
+                        "mean_reward": list(mean_reward),
+                    },
+                    {},
+                )
+        if interrupted_at is not None:
+            break
         metrics = {
             "epoch": epoch,
             "loss": epoch_loss / max(1, n_updates),
@@ -399,8 +622,17 @@ def train_preference(
                 n_pairs_total,
                 metrics["mean_best_reward"],
             )
+        write_checkpoint("epoch_complete", epoch, 0, order, {}, metrics)
         if on_epoch is not None:
             on_epoch(epoch, metrics, optimizer)
+    if interrupted_at is not None or (guard is not None and guard.should_stop()):
+        from jlens.autoencoder.state import StageInterrupted
+
+        raise StageInterrupted(
+            "adapter_preference: stopped at a batch boundary",
+            stage="adapter_preference",
+            checkpoint_path=interrupted_at,
+        )
     adapter.eval()
     assert_gemma_frozen(model, where="preference training (after)")
     summary = {
@@ -409,6 +641,12 @@ def train_preference(
         "policy_gradient_enabled": bool(config.policy_gradient.enabled),
         "history": history,
         "optimizer": optimizer_report,
+        "global_step": int(global_step),
+        "resume_granularity": "batch",
+        "beam_cache": cache.stats(),
+        "reference_policy": (
+            "restored warm-start adapter" if reference_state is not None else "adapter at entry"
+        ),
     }
     if config.policy_gradient.enabled:
         summary["policy_gradient"] = train_policy_gradient(

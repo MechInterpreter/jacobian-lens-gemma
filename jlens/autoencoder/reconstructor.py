@@ -184,6 +184,34 @@ def _prototype_targets(
     return dataset.prototypes(split)
 
 
+def build_reconstructor_training(
+    dataset: JSpaceLanguageDataset,
+    *,
+    config: ReconstructorConfig,
+    device: torch.device | str = "cpu",
+    seed_global: bool = True,
+) -> tuple[PhraseReconstructor, torch.optim.Optimizer, torch.Generator]:
+    """The model, optimizer, and sampler generator a training run starts from.
+
+    Split out of :func:`train_reconstructor` so a resuming caller can create the
+    objects, restore a checkpoint into them, and hand them back — the alternative
+    (letting the trainer construct them, then overwriting) puts a fresh
+    ``manual_seed`` between construction and restoration and quietly moves the
+    RNG the resumed epoch depends on.
+
+    ``seed_global=False`` is what a resume passes: the global stream comes from
+    the checkpoint, not from the config.
+    """
+    if seed_global:
+        torch.manual_seed(int(config.seed))
+    model = PhraseReconstructor(d_model=dataset.d_model, config=config).to(device)
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=float(config.learning_rate), weight_decay=float(config.weight_decay)
+    )
+    generator = torch.Generator().manual_seed(int(config.seed) + 1)
+    return model, optimizer, generator
+
+
 def train_reconstructor(
     dataset: JSpaceLanguageDataset,
     embedder: PhraseEmbedder,
@@ -194,6 +222,18 @@ def train_reconstructor(
     device: torch.device | str = "cpu",
     log: object = None,
     on_epoch=None,
+    model: PhraseReconstructor | None = None,
+    optimizer: torch.optim.Optimizer | None = None,
+    generator: torch.Generator | None = None,
+    start_epoch: int = 0,
+    start_batch: int = 0,
+    global_step: int = 0,
+    history: list[dict] | None = None,
+    resume_order: list[int] | None = None,
+    resume_partial: dict | None = None,
+    checkpoint=None,
+    checkpoint_every_steps: int = 0,
+    guard=None,
 ) -> tuple[PhraseReconstructor, dict]:
     """Train the reconstructor on **training-split prototypes only**.
 
@@ -203,31 +243,86 @@ def train_reconstructor(
     mean, which scores well on cosine and at chance on retrieval.
 
     ``on_epoch(epoch, metrics)`` is called after every epoch — the hook the
-    Colab notebook uses for live monitoring and periodic checkpoints.
+    Colab notebook uses for live monitoring.
+
+    **Resume.** Called with no ``model``/``optimizer``/``generator`` this trains
+    from scratch exactly as before. A resuming caller passes restored objects
+    plus the position ``(start_epoch, start_batch, global_step)`` and
+    ``resume_order`` — the shuffle the interrupted epoch was already using.
+    Re-deriving that order from the generator would be wrong: by the time the
+    checkpoint was written the generator had already produced it and moved on.
+
+    ``checkpoint(reason, epoch, batch_index, global_step, order, partial,
+    metrics, history)`` writes a resume point and returns its path;
+    ``checkpoint_every_steps`` sets the periodic cadence (0 disables). ``guard``
+    is an :class:`~jlens.autoencoder.state.InterruptGuard`: when it reports a
+    stop, this writes one final ``keyboard_interrupt`` checkpoint and raises
+    :class:`~jlens.autoencoder.state.StageInterrupted` at a batch boundary.
+
+    ``resume_partial`` carries the interrupted epoch's running loss sums. Without
+    it the resumed epoch would divide by its own (smaller) batch count and report
+    a mean over the tail only — parameters identical to an uninterrupted run,
+    history quietly not.
     """
-    torch.manual_seed(int(config.seed))
+    resuming = model is not None or optimizer is not None or generator is not None
     phrases, prototypes, dispersion = _prototype_targets(dataset, "train")
     if len(phrases) < 2:
         raise AutoencoderError(
             f"training split has {len(phrases)} phrase(s); the contrastive term "
             f"needs at least 2"
         )
-    model = PhraseReconstructor(d_model=dataset.d_model, config=config).to(device)
-    optimizer = torch.optim.AdamW(
-        model.parameters(), lr=float(config.learning_rate), weight_decay=float(config.weight_decay)
-    )
+    if model is None or optimizer is None or generator is None:
+        built_model, built_optimizer, built_generator = build_reconstructor_training(
+            dataset, config=config, device=device, seed_global=not resuming
+        )
+        model = model or built_model
+        optimizer = optimizer or built_optimizer
+        generator = generator or built_generator
     targets = prototypes.to(device)
     token_lists = [phrase_token_ids[p] for p in phrases]
     n = len(phrases)
-    history: list[dict] = []
-    generator = torch.Generator().manual_seed(int(config.seed) + 1)
-    for epoch in range(int(config.epochs)):
+    history = list(history or [])
+    interrupted_at: str | None = None
+
+    def write_checkpoint(reason, epoch, batch_index, order, partial, metrics):
+        if checkpoint is None:
+            return None
+        return checkpoint(
+            reason=reason,
+            epoch=int(epoch),
+            batch_index=int(batch_index),
+            global_step=int(global_step),
+            order=list(order),
+            partial=dict(partial),
+            metrics=dict(metrics or {}),
+            history=list(history),
+        )
+
+    for epoch in range(int(start_epoch), int(config.epochs)):
         model.train()
-        order = torch.randperm(n, generator=generator).tolist()
-        epoch_loss = 0.0
-        epoch_cosine = 0.0
-        n_batches = 0
-        for start in range(0, n, int(config.batch_size)):
+        if epoch == int(start_epoch) and resume_order is not None:
+            order = list(resume_order)
+        else:
+            order = torch.randperm(n, generator=generator).tolist()
+        first_batch = int(start_batch) if epoch == int(start_epoch) else 0
+        carried = dict(resume_partial or {}) if epoch == int(start_epoch) else {}
+        epoch_loss = float(carried.get("epoch_loss", 0.0))
+        epoch_cosine = float(carried.get("epoch_cosine", 0.0))
+        n_batches = int(carried.get("n_batches", 0))
+        starts = list(range(0, n, int(config.batch_size)))
+        for batch_index, start in enumerate(starts):
+            if batch_index < first_batch:
+                continue
+            partial = {
+                "epoch_loss": epoch_loss,
+                "epoch_cosine": epoch_cosine,
+                "n_batches": n_batches,
+            }
+            if guard is not None and guard.should_stop():
+                interrupted_at = write_checkpoint(
+                    "keyboard_interrupt", epoch, batch_index, order, partial, {}
+                )
+                break
             batch_indices = order[start : start + int(config.batch_size)]
             if len(batch_indices) < 2:
                 continue
@@ -251,6 +346,26 @@ def train_reconstructor(
             epoch_loss += float(loss.detach())
             epoch_cosine += float(cosine_term.detach().mean())
             n_batches += 1
+            global_step += 1
+            if (
+                checkpoint_every_steps
+                and global_step % int(checkpoint_every_steps) == 0
+                and batch_index + 1 < len(starts)
+            ):
+                write_checkpoint(
+                    "periodic",
+                    epoch,
+                    batch_index + 1,
+                    order,
+                    {
+                        "epoch_loss": epoch_loss,
+                        "epoch_cosine": epoch_cosine,
+                        "n_batches": n_batches,
+                    },
+                    {},
+                )
+        if interrupted_at is not None:
+            break
         metrics = {
             "epoch": epoch,
             "loss": epoch_loss / max(1, n_batches),
@@ -264,8 +379,17 @@ def train_reconstructor(
                 metrics["loss"],
                 metrics["train_prototype_cosine"],
             )
+        write_checkpoint("epoch_complete", epoch, 0, order, {}, metrics)
         if on_epoch is not None:
             on_epoch(epoch, metrics)
+    if interrupted_at is not None or (guard is not None and guard.should_stop()):
+        from jlens.autoencoder.state import StageInterrupted
+
+        raise StageInterrupted(
+            "reconstructor: stopped at a batch boundary",
+            stage="reconstructor",
+            checkpoint_path=interrupted_at,
+        )
     # Counts are taken *before* freezing: after ``requires_grad_(False)`` every
     # parameter reads as frozen, and a summary saying "trainable: 0" for the
     # module that was just trained is a report nobody can use.
@@ -278,6 +402,8 @@ def train_reconstructor(
         "history": history,
         "train_prototype_dispersion": dispersion,
         "frozen_after_training": True,
+        "global_step": int(global_step),
+        "resume_granularity": "batch",
         **counts,
     }
     return model, summary

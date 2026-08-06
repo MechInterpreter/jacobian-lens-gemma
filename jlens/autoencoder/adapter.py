@@ -146,7 +146,16 @@ def train_adapter_warm_start(
     log: object = None,
     on_epoch=None,
     start_epoch: int = 0,
+    start_batch: int = 0,
+    global_step: int = 0,
     optimizer: torch.optim.Optimizer | None = None,
+    generator: torch.Generator | None = None,
+    history: list[dict] | None = None,
+    resume_order: list[int] | None = None,
+    resume_partial: dict | None = None,
+    checkpoint=None,
+    checkpoint_every_steps: int = 0,
+    guard=None,
 ) -> tuple[ConeAdapter, dict]:
     """Supervised warm start: teacher-forced phrase cross-entropy through frozen
     Gemma.
@@ -154,6 +163,14 @@ def train_adapter_warm_start(
     Only ``adapter``'s parameters are optimized; this is asserted against the
     optimizer's actual parameter identities before the first step, and Gemma is
     re-checked for gradients after every backward pass.
+
+    **Resume.** ``start_epoch``/``start_batch``/``global_step`` say where to pick
+    up; ``generator``, ``resume_order``, and ``resume_partial`` say what the
+    interrupted run was in the middle of. Passing ``generator`` is what makes a
+    resumed epoch see the shuffle it would have seen: constructing one here from
+    ``config.seed`` — which is what this function used to do — restarts the
+    sequence, so resuming at epoch 3 replayed epoch 0's order. Parameters stayed
+    deterministic; they were the wrong deterministic ones.
     """
     assert_gemma_frozen(model, where="adapter warm start (before)")
     adapter = adapter.to(device)
@@ -171,14 +188,51 @@ def train_adapter_warm_start(
     if not indices:
         raise AutoencoderError(f"split {split!r} has no records to warm start on")
     cones = dataset.cones
-    generator = torch.Generator().manual_seed(int(config.seed))
-    history: list[dict] = []
+    if generator is None:
+        generator = torch.Generator().manual_seed(int(config.seed))
+    history = list(history or [])
+    interrupted_at: str | None = None
+
+    def write_checkpoint(reason, epoch, batch_index, order, partial, metrics):
+        if checkpoint is None:
+            return None
+        return checkpoint(
+            reason=reason,
+            epoch=int(epoch),
+            batch_index=int(batch_index),
+            global_step=int(global_step),
+            order=list(order),
+            partial=dict(partial),
+            metrics=dict(metrics or {}),
+            history=list(history),
+        )
+
     for epoch in range(int(start_epoch), int(config.epochs)):
-        order = [indices[i] for i in torch.randperm(len(indices), generator=generator).tolist()]
-        epoch_loss = 0.0
-        epoch_tokens = 0
-        n_batches = 0
-        for start in range(0, len(order), int(config.batch_size)):
+        if epoch == int(start_epoch) and resume_order is not None:
+            order = list(resume_order)
+        else:
+            order = [
+                indices[i] for i in torch.randperm(len(indices), generator=generator).tolist()
+            ]
+        first_batch = int(start_batch) if epoch == int(start_epoch) else 0
+        carried = dict(resume_partial or {}) if epoch == int(start_epoch) else {}
+        epoch_loss = float(carried.get("epoch_loss", 0.0))
+        epoch_tokens = int(carried.get("epoch_tokens", 0))
+        n_batches = int(carried.get("n_batches", 0))
+        starts = list(range(0, len(order), int(config.batch_size)))
+        for batch_index, start in enumerate(starts):
+            if batch_index < first_batch:
+                continue
+            partial = {
+                "epoch_loss": epoch_loss,
+                "epoch_tokens": epoch_tokens,
+                "n_batches": n_batches,
+            }
+            if guard is not None and guard.should_stop():
+                interrupted_at = write_checkpoint(
+                    "keyboard_interrupt", epoch, batch_index, order, partial, {}
+                )
+                break
             batch_indices = order[start : start + int(config.batch_size)]
             q = cones[batch_indices].to(device)
             memory = adapter(q)
@@ -201,6 +255,26 @@ def train_adapter_warm_start(
             epoch_loss += float(loss.detach())
             epoch_tokens += int(scored["n_tokens"].sum())
             n_batches += 1
+            global_step += 1
+            if (
+                checkpoint_every_steps
+                and global_step % int(checkpoint_every_steps) == 0
+                and batch_index + 1 < len(starts)
+            ):
+                write_checkpoint(
+                    "periodic",
+                    epoch,
+                    batch_index + 1,
+                    order,
+                    {
+                        "epoch_loss": epoch_loss,
+                        "epoch_tokens": epoch_tokens,
+                        "n_batches": n_batches,
+                    },
+                    {},
+                )
+        if interrupted_at is not None:
+            break
         metrics = {
             "epoch": epoch,
             "loss": epoch_loss / max(1, n_batches),
@@ -211,8 +285,17 @@ def train_adapter_warm_start(
         history.append(metrics)
         if log is not None:
             log.info("adapter warm start epoch %d loss=%.4f", epoch, metrics["loss"])
+        write_checkpoint("epoch_complete", epoch, 0, order, {}, metrics)
         if on_epoch is not None:
             on_epoch(epoch, metrics, optimizer)
+    if interrupted_at is not None or (guard is not None and guard.should_stop()):
+        from jlens.autoencoder.state import StageInterrupted
+
+        raise StageInterrupted(
+            "adapter_warm: stopped at a batch boundary",
+            stage="adapter_warm",
+            checkpoint_path=interrupted_at,
+        )
     adapter.eval()
     assert_gemma_frozen(model, where="adapter warm start (after)")
     summary = {
@@ -221,5 +304,7 @@ def train_adapter_warm_start(
         "history": history,
         "optimizer": optimizer_report,
         "adapter": adapter.describe(),
+        "global_step": int(global_step),
+        "resume_granularity": "batch",
     }
     return adapter, summary

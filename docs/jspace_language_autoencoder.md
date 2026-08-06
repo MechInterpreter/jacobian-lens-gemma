@@ -493,7 +493,163 @@ python -u scripts/evaluate_jspace_language.py --config configs/jspace_language_a
 ```
 
 Exit codes: `0` GO, `2` aborted precondition, `3` reconstructor gate failed,
-`4` NO-GO. Any stage can be rerun; the adapter resumes from `adapter_epoch*.pt`.
+`4` NO-GO, `130` interrupted at a safe boundary (rerun to continue).
+
+## Interruption and resume
+
+A Colab runtime can be taken away mid-sentence. Every expensive stage is
+therefore resumable from the same Drive-backed run directory: stop it, reconnect
+later, rerun the setup cells, and rerun the stage. Nothing that finished is
+recomputed and nothing incomplete is mistaken for finished.
+
+### Resume support by stage
+
+| stage | granularity | resume point | scientifically identical to an uninterrupted run? | test |
+|---|---|---|---|---|
+| dataset construction | one pursuit chunk (`dataset.capture_batch_size` occurrences) | `dataset/shards/shard_*.pt` + checksum sidecar | yes — byte-identical `records.jsonl`, bitwise-identical tensors | `test_dataset_resume_skips_completed_records_and_matches_clean_build` |
+| reconstructor training | **batch** (every epoch, plus every `--checkpoint-every-steps`) | `checkpoints/reconstructor_*.pt` | yes — identical parameter sha256 and per-epoch history | `test_reconstructor_resume_matches_uninterrupted_training` |
+| adapter warm start | **batch** (as above) | `checkpoints/adapter_warm_*.pt`, plus the legacy `adapter_epoch*.pt` | yes — identical parameter sha256 and history | `test_adapter_warm_start_resume_is_deterministic` |
+| preference training | **batch** (as above) | `checkpoints/adapter_preference_*.pt` | yes — identical parameter sha256 and history | `test_preference_resume_matches_uninterrupted_training` |
+| evaluation | one result shard: `(record, baseline)`, `(paraphrase, record)`, the attractor probe | `evaluation_shards/{baseline,robustness,confabulation}/*.json` | yes for every result; `resources` records the cost actually incurred | `test_evaluation_reuses_shards_and_aggregates_identically` |
+
+Each row's "yes" is the assertion the named test makes, not a design intention.
+
+### What a checkpoint contains
+
+Training resume points (`jlens.autoencoder.checkpoint.v2` via
+[`save_training_checkpoint`](../jlens/autoencoder/checkpoints.py)) carry:
+
+- module parameters, with a sha256 verified on load;
+- optimizer state, and scheduler / AMP `GradScaler` state when present;
+- Python, NumPy, torch CPU, and all CUDA RNG states;
+- the sampler generator's state **and** the interrupted epoch's shuffle order;
+- the interrupted epoch's running loss sums, so its reported mean is the mean
+  the uninterrupted run would have reported rather than a mean over the tail;
+- epoch, batch index, and global step;
+- the full stage identity block (below), the timestamp, and the reason:
+  `periodic`, `epoch_complete`, `keyboard_interrupt`, or `stage_complete`.
+
+### Configuration compatibility
+
+Resume is refused unless the stored identity matches the current one. Two
+classes, and the distinction is not negotiable:
+
+**Semantic — never resumable, no flag overrides.** Model repo and revision, lens
+checksum and run directory, source layer, pursuit settings, phrase-split policy
+(salt and fractions), dataset identity, architecture dimensions, and the
+upstream artifact hashes a stage depends on (dataset manifest, reconstructor,
+warm-start adapter). Changing one of these produces a different experiment;
+resuming across it would produce artifacts describing a configuration that never
+made them.
+
+**Non-semantic — refused by default, waivable with `--allow-config-drift`.**
+Epoch counts, batch sizes, checkpoint cadence, run id, run directory path.
+
+A refusal names the fields that moved and writes nothing.
+
+### Stage state layout
+
+```
+RUN_DIR/
+  state/
+    dataset/            state.json  progress.json  complete.json
+    reconstructor/
+    adapter_warm/
+    adapter_preference/
+    evaluation/
+  checkpoints/          <stage>_{epoch,step,interrupt}_*.pt + .json sidecars
+                        beam_cache/   preference beams, keyed and bounded
+  dataset/
+    shards/             per-chunk build shards
+    records.jsonl  tensors.pt  manifest.json
+  evaluation_shards/    baseline/  robustness/  confabulation/
+  artifacts/            evaluation.json  gonogo.json  gates  leakage
+  summary.md
+```
+
+Each stage reports one of `not_started`, `in_progress`, `interrupted`,
+`complete`, `incompatible`, `failed`. `complete` is backed by `complete.json`
+alone: `state.json` is written before the marker, so a process killed between
+the two reports `interrupted`, which is what it is.
+
+A completed stage is skipped on rerun unless `--force` is given or its recorded
+artifacts fail their checksum check. Nothing is ever silently overwritten.
+
+### Safe stop
+
+1. In the notebook: `stop_stage("<stage>")` (cell 1m). From a shell:
+   `kill -INT <pid>` or `kill -TERM <pid>`.
+2. The signal handler only sets a flag — it does no serialization, because a
+   handler that writes torch state can corrupt the checkpoint it is writing.
+3. The loop notices at its next safe boundary, finishes or discards the unit it
+   is on, writes a checkpoint atomically, prints the stage, the checkpoint path,
+   and an exact resume command, and exits `130`.
+4. No completion marker is written, so the stage stays resumable.
+
+Colab's stop button interrupts the *monitoring* cell, not the stage subprocess;
+the stage keeps running until `stop_stage()` asks it to stop.
+
+### Resume
+
+```bash
+python -u scripts/train_cone_adapter.py --config configs/jspace_language_autoencoder.yaml --run-dir "$DRIVE/jlang_runs/jlang_pilot" --resume --allow-model-load --device-map cuda --runs-root "$DRIVE/runs"
+```
+
+`--resume` is the default. Before resuming, `--status-only` prints every stage's
+status, progress, and last checkpoint, and `--validate-state` checks every
+checkpoint and shard on disk without doing any work. In the notebook these are
+cells 1j and 1k.
+
+### Restarting one stage
+
+```bash
+python -u scripts/evaluate_jspace_language.py --config configs/jspace_language_autoencoder.yaml --run-dir "$DRIVE/jlang_runs/jlang_pilot" --force
+```
+
+`--force` restarts the stage the script owns. `train_cone_adapter.py` owns two,
+so it also takes `--force-stage adapter_warm|adapter_preference` to restart
+exactly one — useful when preference training needs redoing and the warm start,
+the expensive half, does not. In the notebook: `restart_stage("<stage>")`.
+
+A restart sets the completion marker aside (renamed `complete.json.superseded`)
+and recomputes. It does **not** delete checkpoints or shards; they are simply not
+reused. Deleting them is a separate, manual decision.
+
+### What survives, and what does not
+
+**A clean stop or a runtime disconnect** costs at most the unit in flight: the
+current dataset shard, the optimizer steps since the last checkpoint, or the
+evaluation shard being generated.
+
+**A hard kill — `SIGKILL`, an OOM kill, Colab reclaiming the VM — is not
+handled, and nothing running inside the VM can handle it.** What bounds the
+damage is cadence: work since the last checkpoint or shard is lost. Set
+`--checkpoint-every-steps` (notebook: `CHECKPOINT_EVERY_STEPS`) to decide how
+much that can be. Every write is a temp file followed by `os.replace`, so a hard
+kill can lose recent work but cannot leave a half-written file that loads as a
+valid one — a `.pt` without its checksum sidecar is treated as absent.
+
+Two residual exposures are worth stating plainly:
+
+- **A single long unit is not interruptible partway.** One pursuit chunk, one
+  optimizer step, or one record's beam generation runs to completion before the
+  stop flag is checked. On the pilot config that is seconds, not minutes.
+- **Preference beams are cached only while the adapter is unchanged.** An
+  interruption during a batch's generation is not repaid on resume; once the
+  adapter takes a step the cache legitimately misses, because beams from a
+  different policy are not reusable.
+
+### Checkpoint cleanup
+
+Nothing here deletes checkpoints; a run directory grows by one resume point per
+epoch per training stage, plus any periodic ones. After a stage completes, its
+`checkpoints/<stage>_*` files are only needed to re-derive an interrupted
+trajectory and can be removed by hand once `reconstructor.pt` / `adapter.pt`
+are archived. The beam cache under `checkpoints/beam_cache/` is bounded
+(`--beam-cache-capacity`, default 512 entries, oldest dropped first) and is safe
+to delete at any time — it is a cache, and a miss only costs regeneration.
+Dataset shards and evaluation shards are what make those stages resumable; keep
+them until the run's artifacts are archived.
 
 ## Expected runtime and storage
 
