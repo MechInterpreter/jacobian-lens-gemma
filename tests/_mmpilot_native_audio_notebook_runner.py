@@ -20,12 +20,24 @@ Prints one JSON object on stdout; exits non-zero on the first failing cell.
 The leading underscore keeps pytest from collecting this file as a test module.
 """
 
+import hashlib
 import json
 import os
 import re
 import sys
 import traceback
 from pathlib import Path
+
+
+def _checksum(path: Path) -> str | None:
+    """``sha256:`` of a file's bytes, or None when it is not there.
+
+    Reported so a test can prove a file was left byte-for-byte alone across two
+    executions rather than merely still present.
+    """
+    if not path.is_file():
+        return None
+    return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def main() -> int:
@@ -65,8 +77,21 @@ def main() -> int:
 
     import jlens
 
-    store = namespace.get("STORE")
+    store = namespace.get("STORE") or namespace.get("AMEND_STORE")
     status = store.status_report() if store else {}
+    fingerprint = namespace.get("FINGERPRINT")
+    budgets = namespace.get("BUDGETS") or []
+    subset_payload = namespace.get("SUBSET") or {}
+    # Amendment-only mode leaves the selection and budget sections unrun, so
+    # every field below is read defensively rather than indexed.
+    forbidden_modules = sorted(
+        name
+        for name in sys.modules
+        if name == "transformers"
+        or name.startswith("transformers.")
+        or name.startswith("jlens.gemma4")
+        or name.startswith("jlens.mmpilot.real_backend")
+    )
     representational = namespace.get("REPRESENTATIONAL") or {}
     capability_verdict = namespace.get("CAPABILITY_VERDICT") or {}
     representational_verdict = namespace.get("REPRESENTATIONAL_VERDICT") or {}
@@ -77,8 +102,7 @@ def main() -> int:
     architecture = namespace.get("ARCHITECTURE") or {}
     invariance = namespace.get("INVARIANCE") or {}
     interventions = namespace.get("INTERVENTION_RECORDS") or []
-    subset = namespace.get("SUBSET") or {}
-    rows = [row for split in subset.get("splits", {}).values() for row in split]
+    rows = [row for split in subset_payload.get("splits", {}).values() for row in split]
 
     print(
         json.dumps(
@@ -101,32 +125,36 @@ def main() -> int:
                 "confirm_l35_causal_budget": namespace["CONFIRM_L35_CAUSAL_BUDGET"],
                 "run_l38_l40_replication": namespace["RUN_L38_L40_REPLICATION"],
                 "confirm_replication_budget": namespace["CONFIRM_REPLICATION_BUDGET"],
+                "run_amended_report_only": namespace["RUN_AMENDED_REPORT_ONLY"],
                 "model_stages_enabled": namespace["MODEL_STAGES_ENABLED"],
                 "stage_a_enabled": namespace["STAGE_A_ENABLED"],
                 "stage_b_requested": namespace["STAGE_B_REQUESTED"],
                 "stage_c_requested": namespace["STAGE_C_REQUESTED"],
-                "model_is_none": namespace["MODEL"] is None,
+                "model_is_none": namespace.get("MODEL") is None,
                 "run_dir": str(namespace["RUN_DIR"]),
+                "run_id": namespace.get("RUN_ID"),
+                "transformers_version": namespace.get("TRANSFORMERS_VERSION"),
+                "forbidden_modules_imported": forbidden_modules,
                 # ---- selection, all decided before any model ran
-                "ranked_concepts": namespace["RANKED_CONCEPTS"],
-                "selected_concepts": namespace["SELECTED_NAMES"],
-                "focal_concepts": namespace["FOCAL_CONCEPTS"],
-                "non_focal_concepts": namespace["NON_FOCAL_CONCEPTS"],
-                "unrelated_controls": namespace["UNRELATED_CONTROLS"],
+                "ranked_concepts": namespace.get("RANKED_CONCEPTS"),
+                "selected_concepts": namespace.get("SELECTED_NAMES"),
+                "focal_concepts": namespace.get("FOCAL_CONCEPTS"),
+                "non_focal_concepts": namespace.get("NON_FOCAL_CONCEPTS"),
+                "unrelated_controls": namespace.get("UNRELATED_CONTROLS"),
                 "modalities": list(namespace["MODALITIES"]),
                 "layers": list(namespace["LAYERS"]),
                 "primary_causal_layer": namespace["PRIMARY_CAUSAL_LAYER"],
                 "replication_layers": list(namespace["REPLICATION_LAYERS"]),
-                "n_groups": namespace["N_TOTAL_GROUPS"],
-                "n_distinct_images": namespace["N_DISTINCT_IMAGES"],
-                "n_distinct_recordings": namespace["N_DISTINCT_RECORDINGS"],
-                "n_siblings_excluded": namespace["N_SIBLINGS_EXCLUDED"],
-                "train_heldout_image_overlap": namespace["IMAGE_OVERLAP"],
-                "leakage_ok": namespace["LEAKAGE"]["ok"],
-                "budgets": [b.to_dict() for b in namespace["BUDGETS"]],
+                "n_groups": namespace.get("N_TOTAL_GROUPS"),
+                "n_distinct_images": namespace.get("N_DISTINCT_IMAGES"),
+                "n_distinct_recordings": namespace.get("N_DISTINCT_RECORDINGS"),
+                "n_siblings_excluded": namespace.get("N_SIBLINGS_EXCLUDED"),
+                "train_heldout_image_overlap": namespace.get("IMAGE_OVERLAP"),
+                "leakage_ok": (namespace.get("LEAKAGE") or {}).get("ok"),
+                "budgets": [b.to_dict() for b in budgets],
                 # ---- results
-                "available_modalities": namespace["AVAILABLE_MODALITIES"],
-                "blocked_modalities": namespace["BLOCKED_MODALITIES"],
+                "available_modalities": namespace.get("AVAILABLE_MODALITIES"),
+                "blocked_modalities": namespace.get("BLOCKED_MODALITIES"),
                 "lens_layers": lens_report.get("layers"),
                 "lens_checksums": lens_report.get("checksums"),
                 "lens_combined_checksum": lens_report.get("combined_checksum"),
@@ -153,7 +181,7 @@ def main() -> int:
                 "primary_causal_verdict": primary_causal.get("verdict"),
                 "primary_causal_layer_in_verdict": primary_causal.get("layer"),
                 "primary_causal_cells": len(primary_causal.get("cells", [])),
-                "causal_layers_run": namespace["CAUSAL_LAYERS_RUN"],
+                "causal_layers_run": namespace.get("CAUSAL_LAYERS_RUN"),
                 "replication_verdict": replication.get("verdict"),
                 "replication_per_layer": replication.get("per_layer"),
                 "overall_verdict": overall.get("verdict"),
@@ -174,7 +202,9 @@ def main() -> int:
                 "resume_status": status.get("status"),
                 "completed_units": status.get("completed_units"),
                 "fingerprint_digest": (
-                    namespace["FINGERPRINT"].digest if store else None
+                    fingerprint.digest
+                    if fingerprint is not None
+                    else (store.fingerprint.digest if store else None)
                 ),
                 "selection_fingerprint": namespace.get("SELECTION_FINGERPRINT"),
                 "subset_rows_with_sibling_provenance": sum(
@@ -185,6 +215,9 @@ def main() -> int:
                 "report_written": (
                     Path(namespace["RUN_DIR"]) / "native_audio_transfer_report.md"
                 ).is_file(),
+                "original_report_checksum": _checksum(
+                    Path(namespace["RUN_DIR"]) / "native_audio_transfer_report.md"
+                ),
                 # ---- the capability-admissibility filter and the amendment
                 "capability_admissibility": primary_causal.get(
                     "capability_admissibility"
@@ -215,11 +248,21 @@ def main() -> int:
                     if namespace.get("BUDGET_C_GATED") is not None
                     else None
                 ),
+                "amendment_status": namespace.get("AMENDED_STATUS"),
+                "amend_run_dir": (
+                    str(namespace["AMEND_STORE"].root)
+                    if namespace.get("AMEND_STORE") is not None
+                    else None
+                ),
                 "amended_binding": (namespace.get("AMENDED") or {}).get("binding"),
                 "amended_overall_verdict": (
                     ((namespace.get("AMENDED") or {}).get("verdicts") or {}).get(
                         "overall"
                     )
+                    or (namespace.get("AMENDED") or {})
+                    .get("summary", {})
+                    .get("verdicts", {})
+                    .get("E_overall")
                     or {}
                 ).get("verdict"),
                 "amended_report_written": (
@@ -230,6 +273,27 @@ def main() -> int:
                     Path(namespace["RUN_DIR"])
                     / "native_audio_transfer_summary_capability_filtered_v2.json"
                 ).is_file(),
+                "amended_report_checksum": _checksum(
+                    Path(namespace["RUN_DIR"])
+                    / "native_audio_transfer_report_capability_filtered_v2.md"
+                ),
+                "amended_summary_checksum": _checksum(
+                    Path(namespace["RUN_DIR"])
+                    / "native_audio_transfer_summary_capability_filtered_v2.json"
+                ),
+                "unit_checksums": (
+                    {
+                        stage: store.unit_checksums(stage)
+                        for stage in ("capability", "intervention", "metric")
+                    }
+                    if store
+                    else None
+                ),
+                "run_dir_entries": sorted(
+                    path.name for path in Path(namespace["RUN_DIR"]).iterdir()
+                )
+                if Path(namespace["RUN_DIR"]).is_dir()
+                else [],
             },
             default=str,
         )

@@ -224,7 +224,7 @@ def test_the_scope_note_appears_in_the_notebook_prose(notebook):
 # ------------------------------------------------------------- MOCK execution
 
 
-def _run(tmp_path, *overrides):
+def _run(tmp_path, *overrides, extra_env=None, expect_failure=False):
     tmp_path = Path(tmp_path)
     tmp_path.mkdir(parents=True, exist_ok=True)
     environment = dict(os.environ)
@@ -232,6 +232,7 @@ def _run(tmp_path, *overrides):
     environment["MMPILOT_REPO_DIR"] = str(REPO_ROOT)
     environment["MMPILOT_SCRATCH"] = str(tmp_path / "scratch")
     environment["MMPILOT_RUNS_ROOT"] = str(tmp_path / "runs")
+    environment.update(extra_env or {})
     result = subprocess.run(
         [sys.executable, str(RUNNER), str(NOTEBOOK_PATH), *overrides],
         capture_output=True,
@@ -239,10 +240,15 @@ def _run(tmp_path, *overrides):
         cwd=str(tmp_path),
         env=environment,
     )
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    if expect_failure:
+        assert result.returncode != 0, f"expected a refusal:\n{result.stdout[-4000:]}"
+        assert payload["ok"] is False
+        return payload
     assert result.returncode == 0, (
         f"stdout:\n{result.stdout[-4000:]}\n\nstderr:\n{result.stderr[-2000:]}"
     )
-    return json.loads(result.stdout.strip().splitlines()[-1])
+    return payload
 
 
 @pytest.fixture(scope="module")
@@ -679,3 +685,245 @@ def test_the_full_mock_run_writes_the_amended_report_beside_the_original(full_ru
     # Re-deriving the verdicts from stored units reaches the same conclusion as
     # the live run did: the amendment is a reporting rule, not a new experiment.
     assert full_run["amended_overall_verdict"] == full_run["overall_verdict"]
+
+
+# ------------------------------- amendment-only mode, end to end on "CPU"
+
+
+AMENDMENT_ONLY = "RUN_AMENDED_REPORT_ONLY=True"
+
+
+@pytest.fixture(scope="module")
+def amendment_world(tmp_path_factory):
+    """A completed MOCK run, then the documented CPU amendment against it.
+
+    Three executions of the same notebook in three fresh interpreters:
+
+    1. every stage on — the completed run, with its own report and summary;
+    2. amendment-only, with the amended artifacts removed first, so the
+       generating branch is the one exercised;
+    3. amendment-only again, unchanged — which must reuse rather than rewrite.
+
+    The amendment executions set no model or causal switch and are pointed at
+    the completed run by directory and by fingerprint, exactly as section 2
+    documents.
+    """
+    root = tmp_path_factory.mktemp("amend")
+    run_dir = root / "runs" / "mmaudio_completed"
+    completed = _run(root, *ALL_STAGES_ON, extra_env={"MMPILOT_RUN_DIR": str(run_dir)})
+    for name in (
+        "native_audio_transfer_report_capability_filtered_v2.md",
+        "native_audio_transfer_summary_capability_filtered_v2.json",
+    ):
+        (run_dir / name).unlink()
+
+    amend_env = {
+        "MMPILOT_AMEND_RUN_DIR": str(run_dir),
+        "MMPILOT_AMEND_FINGERPRINT": completed["fingerprint_digest"],
+    }
+    # A different working root on purpose: the amendment must reach the run by
+    # the directory it was given, not by the runs root it happens to sit under.
+    first = _run(root / "cpu-a", AMENDMENT_ONLY, extra_env=amend_env)
+    second = _run(root / "cpu-b", AMENDMENT_ONLY, extra_env=amend_env)
+    return {
+        "root": root,
+        "run_dir": run_dir,
+        "completed": completed,
+        "first": first,
+        "second": second,
+    }
+
+
+def test_the_cpu_amendment_runs_with_no_model_stage_in_the_kernel(amendment_world):
+    first = amendment_world["first"]
+    assert first["ok"] is True
+    assert first["run_amended_report_only"] is True
+    assert first["model_stages_enabled"] is False
+    assert first["stage_a_enabled"] is False
+    assert first["stage_b_requested"] is False
+    assert first["stage_c_requested"] is False
+    assert first["model_is_none"] is True
+    # Section 11 never ran, so STORE was never bound — which is the NameError
+    # this whole path exists to remove.
+    assert first["capability_verdict"] is None
+    assert first["overall_verdict"] is None
+    assert first["resume_status"] == "resuming"
+    assert first["amendment_status"] == "written"
+    assert first["amended_report_written"] is True
+    assert first["amended_summary_written"] is True
+
+
+def test_the_cpu_amendment_opens_the_named_run_and_derives_no_new_one(amendment_world):
+    first = amendment_world["first"]
+    run_dir = amendment_world["run_dir"]
+    assert Path(first["amend_run_dir"]) == run_dir
+    assert Path(first["run_dir"]) == run_dir
+    assert first["run_id"] is None
+    assert (
+        first["fingerprint_digest"]
+        == amendment_world["completed"]["fingerprint_digest"]
+    )
+
+    # Nothing timestamped was created anywhere an amendment session could reach.
+    for candidate in (
+        amendment_world["root"] / "cpu-a",
+        amendment_world["root"] / "cpu-b",
+    ):
+        created = [path.name for path in candidate.rglob("mmaudio_*") if path.is_dir()]
+        assert created == [], created
+    siblings = sorted(path.name for path in run_dir.parent.iterdir())
+    assert siblings == ["mmaudio_completed"], siblings
+
+
+def test_the_cpu_amendment_imports_no_model_machinery(amendment_world):
+    for key in ("first", "second"):
+        assert amendment_world[key]["forbidden_modules_imported"] == []
+        assert "not-imported" in amendment_world[key]["transformers_version"]
+
+
+def test_the_cpu_amendment_reaches_the_completed_run_s_verdict(amendment_world):
+    completed = amendment_world["completed"]
+    first = amendment_world["first"]
+    assert first["amended_overall_verdict"] == completed["amended_overall_verdict"]
+    binding = first["amended_binding"]
+    assert binding["run_fingerprint_digest"] == completed["fingerprint_digest"]
+    assert binding["model_loaded"] is False
+    assert binding["units_written"] is False
+
+
+def test_a_second_cpu_amendment_reuses_and_rewrites_nothing(amendment_world):
+    first, second = amendment_world["first"], amendment_world["second"]
+    assert second["amendment_status"] == "reused"
+    assert second["amended_report_checksum"] == first["amended_report_checksum"]
+    assert second["amended_summary_checksum"] == first["amended_summary_checksum"]
+
+
+def test_the_cpu_amendment_changes_no_unit_and_no_original_report(amendment_world):
+    completed = amendment_world["completed"]
+    for key in ("first", "second"):
+        run = amendment_world[key]
+        assert run["unit_checksums"] == completed["unit_checksums"]
+        assert run["original_report_checksum"] == completed["original_report_checksum"]
+        assert run["completed_units"] == completed["completed_units"]
+
+
+def test_amendment_mode_refuses_every_model_and_causal_switch(tmp_path, amendment_world):
+    amend_env = {
+        "MMPILOT_AMEND_RUN_DIR": str(amendment_world["run_dir"]),
+        "MMPILOT_AMEND_FINGERPRINT": amendment_world["completed"]["fingerprint_digest"],
+    }
+    for index, switch in enumerate(COMMITTED_SWITCHES[1:]):
+        failure = _run(
+            tmp_path / f"conflict-{index}",
+            AMENDMENT_ONLY,
+            f"{switch}=True",
+            extra_env=amend_env,
+            expect_failure=True,
+        )
+        assert "AmendmentModeError" in failure["error"], failure["error"]
+        assert switch in failure["error"]
+        # It fails in section 2, before anything is mounted, read or created.
+        assert failure["cell"] == 3, failure
+
+
+def test_amendment_mode_refuses_a_wrong_fingerprint(tmp_path, amendment_world):
+    failure = _run(
+        tmp_path / "wrong-fp",
+        AMENDMENT_ONLY,
+        extra_env={
+            "MMPILOT_AMEND_RUN_DIR": str(amendment_world["run_dir"]),
+            "MMPILOT_AMEND_FINGERPRINT": "sha256:" + "0" * 64,
+        },
+        expect_failure=True,
+    )
+    assert "FingerprintMismatch" in failure["error"]
+
+
+def test_amendment_mode_refuses_a_missing_run_directory(tmp_path, amendment_world):
+    absent = tmp_path / "no-such-run"
+    failure = _run(
+        tmp_path / "missing-dir",
+        AMENDMENT_ONLY,
+        extra_env={
+            "MMPILOT_AMEND_RUN_DIR": str(absent),
+            "MMPILOT_AMEND_FINGERPRINT": amendment_world["completed"][
+                "fingerprint_digest"
+            ],
+        },
+        expect_failure=True,
+    )
+    assert "ExistingRunNotFound" in failure["error"]
+    assert not absent.exists()
+
+
+def test_stage_c_capability_gating_is_untouched_by_the_amendment_path(notebook):
+    """The amendment must not have reached into how Stage C decides anything."""
+    stage_c = next(
+        "".join(cell["source"])
+        for cell in _code_cells(notebook)
+        if "".join(cell["source"]).startswith("# 17.")
+    )
+    assert "RUN_AMENDED_REPORT_ONLY" not in stage_c
+    assert "AMEND" not in stage_c
+    assert "focal=STAGE_C_ELIGIBLE_FOCAL" in stage_c
+    assert "executed_concepts=STAGE_C_ELIGIBLE_FOCAL" in stage_c
+    assert "capability=CAPABILITY_VERDICT" in stage_c
+    assert "refresh_stage_gates(globals())" in stage_c
+    # Stage B is likewise untouched.
+    stage_b = next(
+        "".join(cell["source"])
+        for cell in _code_cells(notebook)
+        if "".join(cell["source"]).startswith("# 16.")
+    )
+    assert "AMEND" not in stage_b
+    assert "capability=CAPABILITY_VERDICT" in stage_b
+
+
+def test_the_amendment_switches_are_committed_off_and_unset(notebook):
+    source = _code_source(notebook)
+    assert re.findall(
+        r"^RUN_AMENDED_REPORT_ONLY = (True|False)$", source, re.MULTILINE
+    ) == ["False"]
+    assert 'AMEND_EXISTING_RUN_DIR = ""' in source
+    assert 'AMEND_EXPECTED_FINGERPRINT = ""' in source
+
+
+def test_the_amendment_cell_depends_on_no_model_stage_global(notebook):
+    """18b establishes its own inputs rather than reading section 11 leftovers."""
+    cell = next(
+        "".join(cell["source"])
+        for cell in _code_cells(notebook)
+        if "".join(cell["source"]).startswith("# 18b.")
+    )
+    amendment_branch = cell.split("else:")[0]
+    # Whole names only: AMEND_STORE and AMEND_INPUTS are this cell's own.
+    for name in (
+        "STORE",
+        "FINGERPRINT",
+        "LENS_REPORT",
+        "AUDIO_PROTOCOL",
+        "INVARIANCE",
+        "BLOCKED_MODALITIES",
+    ):
+        found = re.findall(rf"(?<![A-Z_]){re.escape(name)}\b", amendment_branch)
+        assert found == [], (name, found)
+    assert "open_existing_store(" in amendment_branch
+    assert "restore_report_metadata(" in amendment_branch
+    # The live branch reads STORE defensively rather than by bare name.
+    assert 'globals().get("STORE")' in cell
+
+
+def test_the_amendment_instructions_name_the_exact_cpu_procedure(notebook):
+    """Prose is wrapped in the committed notebook, so match on collapsed text."""
+    source = " ".join(_source(notebook).split())
+    for phrase in (
+        "free CPU runtime",
+        "AMEND_EXISTING_RUN_DIR",
+        "AMEND_EXPECTED_FINGERPRINT",
+        "needs no Hugging Face token",
+        "creates no run directory",
+        "run sections **1, 2, 3, 4 and 18b**",
+        'no "newest run" is guessed',
+        "it prints `reused` and rewrites nothing",
+    ):
+        assert phrase in source, phrase

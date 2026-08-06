@@ -75,6 +75,13 @@ Eight switches, all `False` in the committed notebook, all set by hand. The
 committed notebook runs **MOCK only**, and every expensive stage sits behind its
 own printed budget and its own separate confirmation flag. Clicking "Run all"
 spends nothing.
+
+A ninth switch, `RUN_AMENDED_REPORT_ONLY`, does the opposite of spending: it
+reopens **one explicitly named completed run** on a free CPU runtime and writes
+its capability-filtered report from the units already on disk. It is mutually
+exclusive with every model and causal switch, loads no model, needs no Hugging
+Face token, creates no run directory, and rewrites nothing that already binds to
+those units. See section 2 for the exact settings.
 """
 )
 
@@ -209,6 +216,7 @@ markdown(
 | `CONFIRM_REPRESENTATION_BUDGET` | **Stage A**: capability, activations, J-space codes, six representational pairs at layers 35/38/40 |
 | `RUN_L35_CAUSAL_STAGE` + `CONFIRM_L35_CAUSAL_BUDGET` | **Stage B**: the primary causal test at layer 35 |
 | `RUN_L38_L40_REPLICATION` + `CONFIRM_REPLICATION_BUDGET` | **Stage C**: the same *frozen* design at layers 38 and 40 |
+| `RUN_AMENDED_REPORT_ONLY` | **amendment only**: reopen one named completed run on CPU and write its capability-filtered report. Mutually exclusive with every model and causal switch above |
 
 Every stage prints its exact forward-pass count, runtime estimate, unit count
 and Drive footprint **before** its confirmation flag can do anything. No stage
@@ -218,6 +226,38 @@ The design is fixed here and is not adjustable from results: six capability
 concepts, three focal causal concepts taken from the top of the pre-model
 ranking, one synchronized group per photograph, off-diagonal cells only, and
 the alpha sweep `0, 0.25, 0.5, 1.0`.
+
+### Amendment-only mode, in full
+
+`RUN_AMENDED_REPORT_ONLY` exists because a completed run's *measurements* and a
+completed run's *interpretation* have different lifetimes. It re-derives verdicts
+C, D and E from the stored units of **one explicitly named** completed run and
+writes the separately versioned capability-filtered artifacts beside the
+original. It loads no model, computes no unit, needs no GPU, needs no Hugging
+Face token, and **creates no run directory** — the timestamped `mmaudio_*`
+namespace is not derived at all in this mode.
+
+On a free CPU runtime, mount Drive and set
+
+```
+RUN_REAL_AUDIO_TRANSFER    = True
+RUN_AMENDED_REPORT_ONLY    = True
+AMEND_EXISTING_RUN_DIR     = "<the completed run directory>"
+AMEND_EXPECTED_FINGERPRINT = "<its raw-generation fingerprint>"
+```
+
+leaving every model and budget switch `False`. Both the directory and the
+fingerprint are **required**: nothing is discovered, no "newest run" is guessed,
+and a directory whose fingerprint is not the pinned one is refused rather than
+amended. Then run sections **1, 2, 3, 4 and 18b**; sections 5, 6 and 7 print a
+skip line in this mode, so running 1–7 and 18b straight through is equivalent.
+
+Section 18b is standalone. It does not need `STORE`, `FINGERPRINT`,
+`LENS_REPORT`, `AUDIO_PROTOCOL`, `INVARIANCE` or `BLOCKED_MODALITIES` to be in
+the kernel — it establishes every one of them from the completed run it opened,
+and never from the current runtime's libraries. It is also idempotent: when the
+amended artifacts already exist and still bind to the units, it prints `reused`
+and rewrites nothing.
 """
 )
 
@@ -233,6 +273,17 @@ RUN_L35_CAUSAL_STAGE = False
 CONFIRM_L35_CAUSAL_BUDGET = False
 RUN_L38_L40_REPLICATION = False
 CONFIRM_REPLICATION_BUDGET = False
+
+# ------------------------------------------------- amendment-only mode (CPU)
+# Reopen ONE named completed run and write its capability-filtered report. No
+# model, no unit computed, no run directory created. Mutually exclusive with
+# every switch above except RUN_REAL_AUDIO_TRANSFER; the check below refuses the
+# combination rather than letting it half-run.
+RUN_AMENDED_REPORT_ONLY = False
+# Both are required when the switch is True. Neither is ever inferred: the
+# amendment describes the run you name, not the newest directory on Drive.
+AMEND_EXISTING_RUN_DIR = ""
+AMEND_EXPECTED_FINGERPRINT = ""
 
 # ------------------------------------------------------------------ design
 N_CONCEPTS = 6
@@ -314,6 +365,7 @@ PROTECTED_RUN_PREFIXES = (
 
 import json
 
+from jlens.mmpilot.amend_open import assert_amendment_mode_exclusive
 from jlens.mmpilot.pipeline import PilotConfig
 from jlens.mmpilot.selection import IMAGE_UNIQUE_MOCK_PROFILE, IMAGE_UNIQUE_PROFILE
 from jlens.mmpilot.tri_modal import (
@@ -321,6 +373,16 @@ from jlens.mmpilot.tri_modal import (
     AUDIO_PAIRS,
     TRI_MODAL_VERDICT_VERSION,
     TriModalThresholds,
+)
+
+# Refused here, at the moment the switches are set, and re-checked in 18b: a
+# half-honored amendment mode would be worse than either mode on its own.
+AMENDMENT_MODE = assert_amendment_mode_exclusive(globals())
+AMEND_EXISTING_RUN_DIR = (
+    os.environ.get("MMPILOT_AMEND_RUN_DIR") or AMEND_EXISTING_RUN_DIR
+)
+AMEND_EXPECTED_FINGERPRINT = (
+    os.environ.get("MMPILOT_AMEND_FINGERPRINT") or AMEND_EXPECTED_FINGERPRINT
 )
 
 SCRATCH = Path(os.environ.get("MMPILOT_SCRATCH") or "/content/mmaudio_scratch")
@@ -399,6 +461,13 @@ print(f"RUN_L35_CAUSAL_STAGE          = {RUN_L35_CAUSAL_STAGE}")
 print(f"CONFIRM_L35_CAUSAL_BUDGET     = {CONFIRM_L35_CAUSAL_BUDGET}")
 print(f"RUN_L38_L40_REPLICATION       = {RUN_L38_L40_REPLICATION}")
 print(f"CONFIRM_REPLICATION_BUDGET    = {CONFIRM_REPLICATION_BUDGET}")
+print(f"RUN_AMENDED_REPORT_ONLY       = {RUN_AMENDED_REPORT_ONLY}")
+if RUN_AMENDED_REPORT_ONLY:
+    print()
+    print("AMENDMENT-ONLY MODE — no model, no unit computed, no run created.")
+    print(f"  run directory  {AMEND_EXISTING_RUN_DIR or '(not set)'}")
+    print(f"  expected fp    {AMEND_EXPECTED_FINGERPRINT or '(not set)'}")
+    print("  sections 5, 6 and 7 skip; run section 18b.")
 print()
 print(f"mode        {CONFIG.mode}")
 print(f"modalities  {list(MODALITIES)}")
@@ -435,7 +504,17 @@ if RUN_REAL_AUDIO_TRANSFER and IN_COLAB:
 
     drive.mount("/content/drive", force_remount=False)
 
-if RUN_REAL_AUDIO_TRANSFER:
+if RUN_AMENDED_REPORT_ONLY:
+    # The amendment reads one completed run. The dataset, the media roots and
+    # the published lens files are irrelevant to it — requiring them would make
+    # a pure reporting fix depend on things it never opens.
+    from jlens.mmpilot.amend_open import amendment_mode_run_dir
+
+    AMEND_RUN_DIR = amendment_mode_run_dir(AMEND_EXISTING_RUN_DIR)
+    print(f"amendment-only mode: {AMEND_RUN_DIR}")
+    print(f"  fingerprint.json present: {(AMEND_RUN_DIR / 'fingerprint.json').is_file()}")
+    print("  no dataset, no lens file and no model is opened by this path")
+elif RUN_REAL_AUDIO_TRANSFER:
     _required = [
         SPOKENCOCO_BASE_ROOT,
         IMAGE_MEDIA_ROOT,
@@ -469,7 +548,7 @@ Media codecs only. The repository itself was installed in 1c.
 code(
     '''
 # 4. Media dependencies and the runtime report. Never touches the dataset.
-if IN_COLAB:
+if IN_COLAB and not RUN_AMENDED_REPORT_ONLY:
     command = [sys.executable, "-m", "pip", "install", "-q",
                "pillow", "soundfile", "librosa"]
     result = subprocess.run(command, capture_output=True, text=True)
@@ -479,19 +558,27 @@ if IN_COLAB:
 import torch
 
 print(f"torch {torch.__version__}")
-try:
-    import transformers
+if RUN_AMENDED_REPORT_ONLY:
+    # Deliberately not imported. The amendment reads stored JSON; the version
+    # that produced the run is recorded in its fingerprint, and whatever this
+    # runtime happens to have installed says nothing about it.
+    TRANSFORMERS_VERSION = "not-imported (amendment-only mode)"
+    print(f"transformers {TRANSFORMERS_VERSION}")
+    print("no model, no processor and no media codec is loaded by this path")
+else:
+    try:
+        import transformers
 
-    TRANSFORMERS_VERSION = str(transformers.__version__)
-except ModuleNotFoundError:
-    TRANSFORMERS_VERSION = "not-installed"
-print(f"transformers {TRANSFORMERS_VERSION}")
-if RUN_REAL_AUDIO_TRANSFER and TRANSFORMERS_VERSION != TRANSFORMERS_VERSION_EXPECTED:
-    raise RuntimeError(
-        f"this run is bound to transformers=={TRANSFORMERS_VERSION_EXPECTED}, "
-        f"but the runtime imported {TRANSFORMERS_VERSION}. Restart the session "
-        "and rerun the pinned bootstrap before loading Gemma"
-    )
+        TRANSFORMERS_VERSION = str(transformers.__version__)
+    except ModuleNotFoundError:
+        TRANSFORMERS_VERSION = "not-installed"
+    print(f"transformers {TRANSFORMERS_VERSION}")
+    if RUN_REAL_AUDIO_TRANSFER and TRANSFORMERS_VERSION != TRANSFORMERS_VERSION_EXPECTED:
+        raise RuntimeError(
+            f"this run is bound to transformers=={TRANSFORMERS_VERSION_EXPECTED}, "
+            f"but the runtime imported {TRANSFORMERS_VERSION}. Restart the session "
+            "and rerun the pinned bootstrap before loading Gemma"
+        )
 print(f"cuda available: {torch.cuda.is_available()}")
 if torch.cuda.is_available():
     _properties = torch.cuda.get_device_properties(0)
@@ -519,6 +606,10 @@ dataset.
 The run directory is created in a **new namespace** and is refused if it would
 land inside a completed pilot, robustness, localization, calibration or
 audio-audit run.
+
+**In amendment-only mode this whole section is skipped.** `RUN_DIR` becomes the
+completed run named in section 2 — no timestamped `RUN_ID` is derived and no
+directory is created, because an amendment has nothing to put in a new one.
 """
 )
 
@@ -530,149 +621,182 @@ from datetime import datetime, timezone
 from jlens.mmpilot import evidence as evidence_module
 from jlens.mmpilot import expansion as expansion_module
 from jlens.mmpilot import manifest as manifest_module
+from jlens.mmpilot.amend_open import amendment_mode_run_dir
 from jlens.mmpilot.concepts import discover_category_universe
 
-if not RUN_REAL_AUDIO_TRANSFER:
-    # The synthetic world. Six concepts, two captions per image, so the
-    # one-group-per-image rule has real sibling groups to exclude, and the same
-    # concept direction enters through text, "image" bytes and "audio" bytes.
-    from jlens.mmpilot.mock import MockWorld, build_mock_dataset
+# Everything this section derives, declared absent first. Amendment-only mode
+# leaves them absent rather than half-filled, and sections 6 and 7 skip on the
+# same switch instead of reading a None.
+RUN_ID = None
+MANIFEST_CHECKSUM = None
+IMAGE_ROOTS = []
+AUDIO_ROOTS = []
+SEARCH_ROOTS = []
+UNIVERSE = None
+EVIDENCE_CONFIG = None
+CONCEPT_CANDIDATES = None
+PILOT_GROUPS = None
+DERIVED_CACHE_FINGERPRINT = None
+EXPANSION_STATUS = None
 
-    MOCK_CONCEPTS_6 = {
-        "bus": ("bus", "buses"),
-        "cat": ("cat", "cats"),
-        "clock": ("clock", "clocks"),
-        "dog": ("dog", "dogs"),
-        "pizza": ("pizza", "pizzas"),
-        "zebra": ("zebra", "zebras"),
-    }
-    MOCK_WORLD = MockWorld(MOCK_CONCEPTS_6)
-    if not (SCRATCH / "data" / "spokencoco_manifest.json").is_file():
-        build_mock_dataset(
-            SCRATCH / "data",
-            world=MOCK_WORLD,
-            images_per_concept=N_TRAIN_POSITIVE_IMAGES + N_TEST_POSITIVE_IMAGES,
-            negative_images=(N_TRAIN_NEGATIVE_IMAGES + N_TEST_NEGATIVE_IMAGES) * 2,
-            captions_per_image=2,
-            layout="sibling",
-            visual_only_images=1,
-        )
-    MANIFEST_PATH = str(SCRATCH / "data" / "spokencoco_manifest.json")
-    IMAGE_MEDIA_ROOT = str(SCRATCH / "data" / "coco")
-    AUDIO_MEDIA_ROOT = str(SCRATCH / "data" / "SpokenCOCO")
-    print(f"MOCK dataset ready at {SCRATCH / 'data'}")
-
-MANIFEST_CHECKSUM = manifest_module.manifest_checksum(MANIFEST_PATH)
-IMAGE_ROOTS = [Path(IMAGE_MEDIA_ROOT)]
-AUDIO_ROOTS = [Path(AUDIO_MEDIA_ROOT)]
-
-RUN_ID = (
-    f"mmaudio_{CONFIG.mode}_"
-    f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
-)
-RUN_DIR = Path(os.environ.get("MMPILOT_RUN_DIR") or (RESOLVED_RUNS_ROOT / RUN_ID))
-_offending = [
-    prefix for prefix in PROTECTED_RUN_PREFIXES if RUN_DIR.name.startswith(prefix)
-] + [
-    prefix
-    for prefix in PROTECTED_RUN_PREFIXES
-    for part in RUN_DIR.parts[:-1]
-    if part.startswith(prefix)
-]
-if _offending:
-    raise RuntimeError(
-        f"{RUN_DIR} is inside a completed run namespace ({sorted(set(_offending))}). "
-        "Completed runs are evidence and are never written into; this study "
-        "creates its own mmaudio_* directory."
-    )
-RUN_DIR.mkdir(parents=True, exist_ok=True)
-print(f"run directory {RUN_DIR}")
-
-SEARCH_ROOTS = sorted({str(root) for root in IMAGE_ROOTS + AUDIO_ROOTS if root.is_dir()})
-if RUN_REAL_AUDIO_TRANSFER:
-    SEARCH_ROOTS = sorted(
-        {
-            str(candidate)
-            for candidate in (
-                SPOKENCOCO_BASE_ROOT, IMAGE_MEDIA_ROOT, AUDIO_MEDIA_ROOT, DOWNLOAD_CACHE
-            )
-            if Path(candidate).is_dir()
-        }
-    )
-DISCOVERED = expansion_module.discover_metadata_sources(
-    SEARCH_ROOTS, exclude=[MANIFEST_PATH], max_files=40, max_depth=3
-)
-ANNOTATION_SOURCES = [s for s in DISCOVERED if s.source_kind == "coco_object_annotation"]
-SYNC_SOURCES = [s for s in DISCOVERED if s.usable]
-UNIVERSE = discover_category_universe(ANNOTATION_SOURCES)
-EVIDENCE_CONFIG = evidence_module.config_from_specs(UNIVERSE.specs)
-CONCEPT_CANDIDATES = UNIVERSE.lexicon()
-print(
-    f"\\n{len(UNIVERSE.categories)} categories discovered, "
-    f"{len(UNIVERSE.eligible)} eligible as concepts"
-)
-print(f"lexicon hash {EVIDENCE_CONFIG.lexicon_hash}")
-
-REUSED_EXPANDED_MANIFEST = None
-PILOT_EXPANDED = Path(COMPLETED_PILOT_RUN_DIR) / "expanded_manifest.json"
-if PILOT_EXPANDED.is_file():
-    _stored = json.loads(PILOT_EXPANDED.read_text(encoding="utf-8"))
-    if _stored.get("original_manifest_checksum") == MANIFEST_CHECKSUM and _stored.get(
-        "groups"
-    ):
-        REUSED_EXPANDED_MANIFEST = _stored
-        print(f"\\nreusing the completed pilot's expanded manifest: {PILOT_EXPANDED}")
-        print(f"  original manifest checksum verified: {MANIFEST_CHECKSUM}")
-    else:
-        print(
-            f"\\n{PILOT_EXPANDED} does not match the current original manifest "
-            "checksum — re-deriving rather than trusting it."
-        )
-
-if REUSED_EXPANDED_MANIFEST is not None:
-    PILOT_GROUPS = REUSED_EXPANDED_MANIFEST["groups"]
-    DERIVED_CACHE_FINGERPRINT = REUSED_EXPANDED_MANIFEST.get(
-        "expanded_manifest_checksum"
-    ) or MANIFEST_CHECKSUM
-    EXPANSION_STATUS = "reused: derived join loaded from the completed pilot"
+if RUN_AMENDED_REPORT_ONLY:
+    # The one and only run directory this mode touches, opened read-only. No
+    # RUN_ID, no mkdir, no runs-root scan, no "newest directory".
+    RUN_DIR = amendment_mode_run_dir(AMEND_EXISTING_RUN_DIR)
+    print("skipped: RUN_AMENDED_REPORT_ONLY is True")
+    print(f"run directory {RUN_DIR}  (existing; not created)")
+    print("no dataset is read and no run namespace is derived in this mode")
 else:
-    BASELINE = manifest_module.normalize_manifest(
-        json.loads(Path(MANIFEST_PATH).read_text(encoding="utf-8")),
-        manifest_module.inspect_manifest(
-            json.loads(Path(MANIFEST_PATH).read_text(encoding="utf-8"))
-        ),
-        image_roots=IMAGE_ROOTS,
-        audio_roots=AUDIO_ROOTS,
-        source_checksum=MANIFEST_CHECKSUM,
-        min_complete_groups=1,
+    if not RUN_REAL_AUDIO_TRANSFER:
+        # The synthetic world. Six concepts, two captions per image, so the
+        # one-group-per-image rule has real sibling groups to exclude, and the
+        # same concept direction enters through text, "image" and "audio" bytes.
+        from jlens.mmpilot.mock import MockWorld, build_mock_dataset
+
+        MOCK_CONCEPTS_6 = {
+            "bus": ("bus", "buses"),
+            "cat": ("cat", "cats"),
+            "clock": ("clock", "clocks"),
+            "dog": ("dog", "dogs"),
+            "pizza": ("pizza", "pizzas"),
+            "zebra": ("zebra", "zebras"),
+        }
+        MOCK_WORLD = MockWorld(MOCK_CONCEPTS_6)
+        if not (SCRATCH / "data" / "spokencoco_manifest.json").is_file():
+            build_mock_dataset(
+                SCRATCH / "data",
+                world=MOCK_WORLD,
+                images_per_concept=N_TRAIN_POSITIVE_IMAGES + N_TEST_POSITIVE_IMAGES,
+                negative_images=(N_TRAIN_NEGATIVE_IMAGES + N_TEST_NEGATIVE_IMAGES) * 2,
+                captions_per_image=2,
+                layout="sibling",
+                visual_only_images=1,
+            )
+        MANIFEST_PATH = str(SCRATCH / "data" / "spokencoco_manifest.json")
+        IMAGE_MEDIA_ROOT = str(SCRATCH / "data" / "coco")
+        AUDIO_MEDIA_ROOT = str(SCRATCH / "data" / "SpokenCOCO")
+        print(f"MOCK dataset ready at {SCRATCH / 'data'}")
+
+    MANIFEST_CHECKSUM = manifest_module.manifest_checksum(MANIFEST_PATH)
+    IMAGE_ROOTS = [Path(IMAGE_MEDIA_ROOT)]
+    AUDIO_ROOTS = [Path(AUDIO_MEDIA_ROOT)]
+
+    RUN_ID = (
+        f"mmaudio_{CONFIG.mode}_"
+        f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
     )
-    EXPANSION = expansion_module.build_expanded_manifest(
-        SYNC_SOURCES,
-        image_roots=IMAGE_ROOTS,
-        annotation_sources=ANNOTATION_SOURCES,
-        candidate_concepts=CONCEPT_CANDIDATES,
-        max_metadata_records=20000,
-        audio_roots=AUDIO_ROOTS,
-        baseline_groups=BASELINE.groups,
+    RUN_DIR = Path(os.environ.get("MMPILOT_RUN_DIR") or (RESOLVED_RUNS_ROOT / RUN_ID))
+    _offending = [
+        prefix for prefix in PROTECTED_RUN_PREFIXES if RUN_DIR.name.startswith(prefix)
+    ] + [
+        prefix
+        for prefix in PROTECTED_RUN_PREFIXES
+        for part in RUN_DIR.parts[:-1]
+        if part.startswith(prefix)
+    ]
+    if _offending:
+        raise RuntimeError(
+            f"{RUN_DIR} is inside a completed run namespace "
+            f"({sorted(set(_offending))}). "
+            "Completed runs are evidence and are never written into; "
+            "this study creates its own mmaudio_* directory."
+        )
+    RUN_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"run directory {RUN_DIR}")
+
+    SEARCH_ROOTS = sorted(
+        {str(root) for root in IMAGE_ROOTS + AUDIO_ROOTS if root.is_dir()}
     )
-    PILOT_GROUPS = EXPANSION.groups
-    _payload, EXPANSION_STATUS = expansion_module.persist_expanded_manifest(
-        RUN_DIR / "expanded_manifest.json",
-        EXPANSION,
-        original_checksum=MANIFEST_CHECKSUM,
-        conversion={
-            "converter": "jlens.mmpilot.expansion.build_expanded_manifest",
-            "search_roots": SEARCH_ROOTS,
-            "evidence_rule": "visual_annotation_AND_caption_lexicon",
-            "evidence_lexicon_hash": EVIDENCE_CONFIG.lexicon_hash,
-            "reads_only": True, "media_redownloaded": False, "audio_transcribed": False,
-        },
+    if RUN_REAL_AUDIO_TRANSFER:
+        SEARCH_ROOTS = sorted(
+            {
+                str(candidate)
+                for candidate in (
+                    SPOKENCOCO_BASE_ROOT, IMAGE_MEDIA_ROOT, AUDIO_MEDIA_ROOT,
+                    DOWNLOAD_CACHE,
+                )
+                if Path(candidate).is_dir()
+            }
+        )
+    DISCOVERED = expansion_module.discover_metadata_sources(
+        SEARCH_ROOTS, exclude=[MANIFEST_PATH], max_files=40, max_depth=3
     )
-    DERIVED_CACHE_FINGERPRINT = _payload.get("expanded_manifest_checksum", MANIFEST_CHECKSUM)
-print(EXPANSION_STATUS)
-print(f"synchronized groups available: {len(PILOT_GROUPS)}")
-print(f"distinct images available:     {len({g['image_id'] for g in PILOT_GROUPS})}")
-print(f"derived cache fingerprint:     {DERIVED_CACHE_FINGERPRINT}")
+    ANNOTATION_SOURCES = [
+        s for s in DISCOVERED if s.source_kind == "coco_object_annotation"
+    ]
+    SYNC_SOURCES = [s for s in DISCOVERED if s.usable]
+    UNIVERSE = discover_category_universe(ANNOTATION_SOURCES)
+    EVIDENCE_CONFIG = evidence_module.config_from_specs(UNIVERSE.specs)
+    CONCEPT_CANDIDATES = UNIVERSE.lexicon()
+    print(
+        f"\\n{len(UNIVERSE.categories)} categories discovered, "
+        f"{len(UNIVERSE.eligible)} eligible as concepts"
+    )
+    print(f"lexicon hash {EVIDENCE_CONFIG.lexicon_hash}")
+
+    REUSED_EXPANDED_MANIFEST = None
+    PILOT_EXPANDED = Path(COMPLETED_PILOT_RUN_DIR) / "expanded_manifest.json"
+    if PILOT_EXPANDED.is_file():
+        _stored = json.loads(PILOT_EXPANDED.read_text(encoding="utf-8"))
+        if _stored.get(
+            "original_manifest_checksum"
+        ) == MANIFEST_CHECKSUM and _stored.get("groups"):
+            REUSED_EXPANDED_MANIFEST = _stored
+            print(f"\\nreusing the completed pilot's expanded manifest: {PILOT_EXPANDED}")
+            print(f"  original manifest checksum verified: {MANIFEST_CHECKSUM}")
+        else:
+            print(
+                f"\\n{PILOT_EXPANDED} does not match the current original manifest "
+                "checksum — re-deriving rather than trusting it."
+            )
+
+    if REUSED_EXPANDED_MANIFEST is not None:
+        PILOT_GROUPS = REUSED_EXPANDED_MANIFEST["groups"]
+        DERIVED_CACHE_FINGERPRINT = REUSED_EXPANDED_MANIFEST.get(
+            "expanded_manifest_checksum"
+        ) or MANIFEST_CHECKSUM
+        EXPANSION_STATUS = "reused: derived join loaded from the completed pilot"
+    else:
+        BASELINE = manifest_module.normalize_manifest(
+            json.loads(Path(MANIFEST_PATH).read_text(encoding="utf-8")),
+            manifest_module.inspect_manifest(
+                json.loads(Path(MANIFEST_PATH).read_text(encoding="utf-8"))
+            ),
+            image_roots=IMAGE_ROOTS,
+            audio_roots=AUDIO_ROOTS,
+            source_checksum=MANIFEST_CHECKSUM,
+            min_complete_groups=1,
+        )
+        EXPANSION = expansion_module.build_expanded_manifest(
+            SYNC_SOURCES,
+            image_roots=IMAGE_ROOTS,
+            annotation_sources=ANNOTATION_SOURCES,
+            candidate_concepts=CONCEPT_CANDIDATES,
+            max_metadata_records=20000,
+            audio_roots=AUDIO_ROOTS,
+            baseline_groups=BASELINE.groups,
+        )
+        PILOT_GROUPS = EXPANSION.groups
+        _payload, EXPANSION_STATUS = expansion_module.persist_expanded_manifest(
+            RUN_DIR / "expanded_manifest.json",
+            EXPANSION,
+            original_checksum=MANIFEST_CHECKSUM,
+            conversion={
+                "converter": "jlens.mmpilot.expansion.build_expanded_manifest",
+                "search_roots": SEARCH_ROOTS,
+                "evidence_rule": "visual_annotation_AND_caption_lexicon",
+                "evidence_lexicon_hash": EVIDENCE_CONFIG.lexicon_hash,
+                "reads_only": True, "media_redownloaded": False,
+                "audio_transcribed": False,
+            },
+        )
+        DERIVED_CACHE_FINGERPRINT = _payload.get(
+            "expanded_manifest_checksum", MANIFEST_CHECKSUM
+        )
+    print(EXPANSION_STATUS)
+    print(f"synchronized groups available: {len(PILOT_GROUPS)}")
+    print(f"distinct images available:     {len({g['image_id'] for g in PILOT_GROUPS})}")
+    print(f"derived cache fingerprint:     {DERIVED_CACHE_FINGERPRINT}")
 '''
 )
 
@@ -713,144 +837,169 @@ from jlens.mmpilot.selection import (
     unrelated_control_assignment,
 )
 
-_selection_t0 = time.perf_counter()
-print(f"indexing {len(PILOT_GROUPS):,} synchronized groups once ...")
-EVIDENCE_INDEX = evidence_module.build_evidence_index(
-    PILOT_GROUPS, tuple(CONCEPT_CANDIDATES), EVIDENCE_CONFIG
-)
+RANKING = None
+RANKED_CONCEPTS = None
+SELECTED_NAMES = None
+FOCAL_CONCEPTS = None
+NON_FOCAL_CONCEPTS = None
+UNRELATED_CONTROLS = None
+SUBSET = None
+LEAKAGE = None
+SPLIT_PROVENANCE = None
+SPLIT_PROVENANCE_CHECKSUM = None
+N_TOTAL_GROUPS = None
+N_DISTINCT_IMAGES = None
+N_DISTINCT_RECORDINGS = None
+N_SIBLINGS_EXCLUDED = None
+IMAGE_OVERLAP = None
+_all_rows = []
 
-REQUIREMENTS = expansion_module.ConceptRequirements(
-    min_distinct_images=N_TRAIN_POSITIVE_IMAGES + N_TEST_POSITIVE_IMAGES,
-    min_groups=N_TRAIN_POSITIVE_IMAGES + N_TEST_POSITIVE_IMAGES,
-    min_train_positives=N_TRAIN_POSITIVE_IMAGES,
-    min_test_positives=N_TEST_POSITIVE_IMAGES,
-)
-RANKING = expansion_module.rank_concepts(
-    PILOT_GROUPS,
-    CONCEPT_CANDIDATES,
-    requirements=REQUIREMENTS,
-    groups_per_concept=N_TRAIN_POSITIVE_IMAGES + N_TEST_POSITIVE_IMAGES,
-    max_groups_per_image=PROFILE.max_groups_per_image,
-    seed=SPLIT_SEED,
-    evidence_config=EVIDENCE_CONFIG,
-    profile=PROFILE,
-    evidence_index=EVIDENCE_INDEX,
-)
-print("=" * 72)
-print("RANKED COVERAGE AT THIS STUDY'S CELL SIZES (complete, with rejections)")
-print("=" * 72)
-print(expansion_module.format_ranking_table(RANKING, limit=20))
-
-RANKED_CONCEPTS = [row["concept"] for row in RANKING]
-SELECTED_NAMES = expansion_module.select_concepts(
-    RANKING,
-    n_concepts=N_CONCEPTS,
-    max_concepts=N_CONCEPTS,
-    requirements=REQUIREMENTS,
-)
-FOCAL_CONCEPTS, NON_FOCAL_CONCEPTS = select_focal_concepts(
-    SELECTED_NAMES, n_focal=N_FOCAL_CONCEPTS
-)
-UNRELATED_CONTROLS = unrelated_control_assignment(FOCAL_CONCEPTS, NON_FOCAL_CONCEPTS)
-
-print("\\n" + "=" * 72)
-print("SELECTION — fixed before any model result exists")
-print("=" * 72)
-print(f"  selected (ranking order): {SELECTED_NAMES}")
-print(f"  focal causal concepts:    {FOCAL_CONCEPTS}")
-print(f"  non-focal (controls):     {NON_FOCAL_CONCEPTS}")
-print("  external unrelated control assignment:")
-for _focal, _control in sorted(UNRELATED_CONTROLS.items()):
-    print(f"    {_focal:12s} -> {_control}")
-print(
-    "  rule: the i-th focal concept takes the (i mod n)-th non-focal concept, "
-    "both in ranking order. No capability result, activation, or target-test "
-    "example takes part."
-)
-
-CONFIG.concepts = tuple(SELECTED_NAMES)
-CONFIG.causal_concepts = tuple(FOCAL_CONCEPTS)
-
-SELECTED_CONCEPTS = {name: CONCEPT_CANDIDATES[name] for name in SELECTED_NAMES}
-SUBSET = manifest_module.build_subset(
-    PILOT_GROUPS,
-    SELECTED_CONCEPTS,
-    groups_per_concept=N_TRAIN_POSITIVE_IMAGES + N_TEST_POSITIVE_IMAGES,
-    negatives_per_concept=N_TRAIN_NEGATIVE_IMAGES + N_TEST_NEGATIVE_IMAGES,
-    seed=SPLIT_SEED,
-    evidence_config=EVIDENCE_CONFIG,
-    profile=PROFILE,
-    evidence_index=EVIDENCE_INDEX,
-)
-LEAKAGE = manifest_module.check_split_leakage(SUBSET)
-if not LEAKAGE["ok"]:
-    raise RuntimeError(f"split leakage detected, refusing to continue: {LEAKAGE}")
-
-_train = SUBSET["splits"]["train"]
-_test = SUBSET["splits"]["test"]
-_all_rows = _train + _test
-N_TOTAL_GROUPS = len(_all_rows)
-N_DISTINCT_IMAGES = len({row["image_id"] for row in _all_rows})
-N_DISTINCT_RECORDINGS = len({str(row["audio_path"]) for row in _all_rows})
-N_SIBLINGS_EXCLUDED = sum(
-    (row.get("split_provenance") or {}).get("n_sibling_groups_excluded", 0)
-    for row in _all_rows
-)
-TRAIN_IMAGES = {row["image_id"] for row in _train}
-TEST_IMAGES = {row["image_id"] for row in _test}
-IMAGE_OVERLAP = sorted(TRAIN_IMAGES & TEST_IMAGES)
-if IMAGE_OVERLAP:
-    raise RuntimeError(
-        f"{len(IMAGE_OVERLAP)} image(s) appear in both the source-training and "
-        f"held-out splits: {IMAGE_OVERLAP[:5]}. Source-derived directions would "
-        "be estimated partly from the images they are then tested on."
-    )
-if N_DISTINCT_RECORDINGS != N_TOTAL_GROUPS:
-    raise RuntimeError(
-        f"{N_TOTAL_GROUPS} groups carry only {N_DISTINCT_RECORDINGS} distinct "
-        "recordings; the audio arm would reuse a recording across cells"
+if RUN_AMENDED_REPORT_ONLY:
+    # The selection this run used is already recorded in its fingerprint, and
+    # that record — not a fresh re-derivation on a different day — is what
+    # section 18b reads. Re-selecting here would also write into a completed
+    # run directory, which never happens.
+    print("skipped: RUN_AMENDED_REPORT_ONLY is True")
+    print("the completed run's selection is read from its own fingerprint in 18b")
+else:
+    _selection_t0 = time.perf_counter()
+    print(f"indexing {len(PILOT_GROUPS):,} synchronized groups once ...")
+    EVIDENCE_INDEX = evidence_module.build_evidence_index(
+        PILOT_GROUPS, tuple(CONCEPT_CANDIDATES), EVIDENCE_CONFIG
     )
 
-print("\\n" + "=" * 72)
-print("UNIQUE-IMAGE SUBSET")
-print("=" * 72)
-print(f"  synchronized groups   {N_TOTAL_GROUPS}")
-print(f"  distinct images       {N_DISTINCT_IMAGES}")
-print(f"  distinct recordings   {N_DISTINCT_RECORDINGS}")
-print(f"  groups per image      {N_TOTAL_GROUPS / max(1, N_DISTINCT_IMAGES):.2f}")
-print(f"  sibling groups excluded at selection: {N_SIBLINGS_EXCLUDED}")
-print(f"  split leakage check:  {LEAKAGE['ok']}")
-print(f"  train/held-out image overlap: {len(IMAGE_OVERLAP)}")
-for _concept in SELECTED_NAMES:
-    _tr = len({r["image_id"] for r in _train if r["concept"] == _concept})
-    _te = len({r["image_id"] for r in _test if r["concept"] == _concept})
-    print(f"    {_concept:12s} train images {_tr}  held-out images {_te}")
-print(
-    f"    negatives     train images "
-    f"{len({r['image_id'] for r in _train if not r['concept']})}  "
-    f"held-out images {len({r['image_id'] for r in _test if not r['concept']})}"
-)
+    REQUIREMENTS = expansion_module.ConceptRequirements(
+        min_distinct_images=N_TRAIN_POSITIVE_IMAGES + N_TEST_POSITIVE_IMAGES,
+        min_groups=N_TRAIN_POSITIVE_IMAGES + N_TEST_POSITIVE_IMAGES,
+        min_train_positives=N_TRAIN_POSITIVE_IMAGES,
+        min_test_positives=N_TEST_POSITIVE_IMAGES,
+    )
+    RANKING = expansion_module.rank_concepts(
+        PILOT_GROUPS,
+        CONCEPT_CANDIDATES,
+        requirements=REQUIREMENTS,
+        groups_per_concept=N_TRAIN_POSITIVE_IMAGES + N_TEST_POSITIVE_IMAGES,
+        max_groups_per_image=PROFILE.max_groups_per_image,
+        seed=SPLIT_SEED,
+        evidence_config=EVIDENCE_CONFIG,
+        profile=PROFILE,
+        evidence_index=EVIDENCE_INDEX,
+    )
+    print("=" * 72)
+    print("RANKED COVERAGE AT THIS STUDY'S CELL SIZES (complete, with rejections)")
+    print("=" * 72)
+    print(expansion_module.format_ranking_table(RANKING, limit=20))
 
-SPLIT_PROVENANCE = {
-    "seed": SPLIT_SEED,
-    "profile": PROFILE.to_dict(),
-    "selected_concepts": list(SELECTED_NAMES),
-    "focal_concepts": list(FOCAL_CONCEPTS),
-    "unrelated_controls": dict(sorted(UNRELATED_CONTROLS.items())),
-    "n_groups": N_TOTAL_GROUPS,
-    "n_distinct_images": N_DISTINCT_IMAGES,
-    "n_distinct_recordings": N_DISTINCT_RECORDINGS,
-    "train_heldout_image_overlap": IMAGE_OVERLAP,
-    "leakage": LEAKAGE,
-}
-(RUN_DIR / "split_provenance.json").write_text(
-    json.dumps(SPLIT_PROVENANCE, indent=2, default=str), encoding="utf-8"
-)
-from jlens.mmpilot.store import payload_checksum
+    RANKED_CONCEPTS = [row["concept"] for row in RANKING]
+    SELECTED_NAMES = expansion_module.select_concepts(
+        RANKING,
+        n_concepts=N_CONCEPTS,
+        max_concepts=N_CONCEPTS,
+        requirements=REQUIREMENTS,
+    )
+    FOCAL_CONCEPTS, NON_FOCAL_CONCEPTS = select_focal_concepts(
+        SELECTED_NAMES, n_focal=N_FOCAL_CONCEPTS
+    )
+    UNRELATED_CONTROLS = unrelated_control_assignment(FOCAL_CONCEPTS, NON_FOCAL_CONCEPTS)
 
-SPLIT_PROVENANCE_CHECKSUM = payload_checksum(SPLIT_PROVENANCE)
-print(f"\\nsplit provenance checksum {SPLIT_PROVENANCE_CHECKSUM}")
-print(f"section 6 completed in {time.perf_counter() - _selection_t0:.1f} seconds")
+    print("\\n" + "=" * 72)
+    print("SELECTION — fixed before any model result exists")
+    print("=" * 72)
+    print(f"  selected (ranking order): {SELECTED_NAMES}")
+    print(f"  focal causal concepts:    {FOCAL_CONCEPTS}")
+    print(f"  non-focal (controls):     {NON_FOCAL_CONCEPTS}")
+    print("  external unrelated control assignment:")
+    for _focal, _control in sorted(UNRELATED_CONTROLS.items()):
+        print(f"    {_focal:12s} -> {_control}")
+    print(
+        "  rule: the i-th focal concept takes the (i mod n)-th non-focal concept, "
+        "both in ranking order. No capability result, activation, or target-test "
+        "example takes part."
+    )
+
+    CONFIG.concepts = tuple(SELECTED_NAMES)
+    CONFIG.causal_concepts = tuple(FOCAL_CONCEPTS)
+
+    SELECTED_CONCEPTS = {name: CONCEPT_CANDIDATES[name] for name in SELECTED_NAMES}
+    SUBSET = manifest_module.build_subset(
+        PILOT_GROUPS,
+        SELECTED_CONCEPTS,
+        groups_per_concept=N_TRAIN_POSITIVE_IMAGES + N_TEST_POSITIVE_IMAGES,
+        negatives_per_concept=N_TRAIN_NEGATIVE_IMAGES + N_TEST_NEGATIVE_IMAGES,
+        seed=SPLIT_SEED,
+        evidence_config=EVIDENCE_CONFIG,
+        profile=PROFILE,
+        evidence_index=EVIDENCE_INDEX,
+    )
+    LEAKAGE = manifest_module.check_split_leakage(SUBSET)
+    if not LEAKAGE["ok"]:
+        raise RuntimeError(f"split leakage detected, refusing to continue: {LEAKAGE}")
+
+    _train = SUBSET["splits"]["train"]
+    _test = SUBSET["splits"]["test"]
+    _all_rows = _train + _test
+    N_TOTAL_GROUPS = len(_all_rows)
+    N_DISTINCT_IMAGES = len({row["image_id"] for row in _all_rows})
+    N_DISTINCT_RECORDINGS = len({str(row["audio_path"]) for row in _all_rows})
+    N_SIBLINGS_EXCLUDED = sum(
+        (row.get("split_provenance") or {}).get("n_sibling_groups_excluded", 0)
+        for row in _all_rows
+    )
+    TRAIN_IMAGES = {row["image_id"] for row in _train}
+    TEST_IMAGES = {row["image_id"] for row in _test}
+    IMAGE_OVERLAP = sorted(TRAIN_IMAGES & TEST_IMAGES)
+    if IMAGE_OVERLAP:
+        raise RuntimeError(
+            f"{len(IMAGE_OVERLAP)} image(s) appear in both the source-training and "
+            f"held-out splits: {IMAGE_OVERLAP[:5]}. Source-derived directions would "
+            "be estimated partly from the images they are then tested on."
+        )
+    if N_DISTINCT_RECORDINGS != N_TOTAL_GROUPS:
+        raise RuntimeError(
+            f"{N_TOTAL_GROUPS} groups carry only {N_DISTINCT_RECORDINGS} distinct "
+            "recordings; the audio arm would reuse a recording across cells"
+        )
+
+    print("\\n" + "=" * 72)
+    print("UNIQUE-IMAGE SUBSET")
+    print("=" * 72)
+    print(f"  synchronized groups   {N_TOTAL_GROUPS}")
+    print(f"  distinct images       {N_DISTINCT_IMAGES}")
+    print(f"  distinct recordings   {N_DISTINCT_RECORDINGS}")
+    print(f"  groups per image      {N_TOTAL_GROUPS / max(1, N_DISTINCT_IMAGES):.2f}")
+    print(f"  sibling groups excluded at selection: {N_SIBLINGS_EXCLUDED}")
+    print(f"  split leakage check:  {LEAKAGE['ok']}")
+    print(f"  train/held-out image overlap: {len(IMAGE_OVERLAP)}")
+    for _concept in SELECTED_NAMES:
+        _tr = len({r["image_id"] for r in _train if r["concept"] == _concept})
+        _te = len({r["image_id"] for r in _test if r["concept"] == _concept})
+        print(f"    {_concept:12s} train images {_tr}  held-out images {_te}")
+    print(
+        f"    negatives     train images "
+        f"{len({r['image_id'] for r in _train if not r['concept']})}  "
+        f"held-out images {len({r['image_id'] for r in _test if not r['concept']})}"
+    )
+
+    SPLIT_PROVENANCE = {
+        "seed": SPLIT_SEED,
+        "profile": PROFILE.to_dict(),
+        "selected_concepts": list(SELECTED_NAMES),
+        "focal_concepts": list(FOCAL_CONCEPTS),
+        "unrelated_controls": dict(sorted(UNRELATED_CONTROLS.items())),
+        "n_groups": N_TOTAL_GROUPS,
+        "n_distinct_images": N_DISTINCT_IMAGES,
+        "n_distinct_recordings": N_DISTINCT_RECORDINGS,
+        "train_heldout_image_overlap": IMAGE_OVERLAP,
+        "leakage": LEAKAGE,
+    }
+    (RUN_DIR / "split_provenance.json").write_text(
+        json.dumps(SPLIT_PROVENANCE, indent=2, default=str), encoding="utf-8"
+    )
+    from jlens.mmpilot.store import payload_checksum
+
+    SPLIT_PROVENANCE_CHECKSUM = payload_checksum(SPLIT_PROVENANCE)
+    print(f"\\nsplit provenance checksum {SPLIT_PROVENANCE_CHECKSUM}")
+    print(f"section 6 completed in {time.perf_counter() - _selection_t0:.1f} seconds")
 '''
 )
 
@@ -877,38 +1026,49 @@ from jlens.mmpilot.tri_modal import (
     format_total_budget,
 )
 
-N_CAPABILITY_GROUPS = min(
-    len(SELECTED_NAMES) * CONFIG.max_capability_groups_per_concept,
-    len([row for row in _all_rows if row["concept"]]),
-)
-_budget_kwargs = dict(
-    n_concepts=len(SELECTED_NAMES),
-    n_focal_concepts=len(FOCAL_CONCEPTS),
-    modalities=MODALITIES,
-    layers=LAYERS,
-    n_total_groups=N_TOTAL_GROUPS,
-    n_capability_groups=N_CAPABILITY_GROUPS,
-    n_targets_per_cell=N_TEST_POSITIVE_IMAGES + N_TEST_NEGATIVE_IMAGES,
-    alphas=CONFIG.alphas,
-    d_model=EXPECT_D_MODEL if RUN_REAL_AUDIO_TRANSFER else 24,
-)
-BUDGET_A = estimate_stage_passes(
-    stage="A", causal_layers=(), **_budget_kwargs
-)
-BUDGET_B = estimate_stage_passes(
-    stage="B", causal_layers=(PRIMARY_CAUSAL_LAYER,), **_budget_kwargs
-)
-BUDGET_C = estimate_stage_passes(
-    stage="C", causal_layers=REPLICATION_LAYERS, **_budget_kwargs
-)
-BUDGETS = [BUDGET_A, BUDGET_B, BUDGET_C]
-for _budget in BUDGETS:
-    print(format_stage_budget(_budget))
-    print()
-print(format_total_budget(BUDGETS))
-(RUN_DIR / "pass_budget.json").write_text(
-    json.dumps([b.to_dict() for b in BUDGETS], indent=2, default=str), encoding="utf-8"
-)
+BUDGET_A = BUDGET_B = BUDGET_C = None
+BUDGETS = []
+N_CAPABILITY_GROUPS = None
+
+if RUN_AMENDED_REPORT_ONLY:
+    # No stage may spend anything in this mode, so there is no budget to
+    # confirm — and pass_budget.json is a run artifact, which the completed run
+    # already has and this path never rewrites.
+    print("skipped: RUN_AMENDED_REPORT_ONLY is True — no stage can spend a pass")
+else:
+    N_CAPABILITY_GROUPS = min(
+        len(SELECTED_NAMES) * CONFIG.max_capability_groups_per_concept,
+        len([row for row in _all_rows if row["concept"]]),
+    )
+    _budget_kwargs = dict(
+        n_concepts=len(SELECTED_NAMES),
+        n_focal_concepts=len(FOCAL_CONCEPTS),
+        modalities=MODALITIES,
+        layers=LAYERS,
+        n_total_groups=N_TOTAL_GROUPS,
+        n_capability_groups=N_CAPABILITY_GROUPS,
+        n_targets_per_cell=N_TEST_POSITIVE_IMAGES + N_TEST_NEGATIVE_IMAGES,
+        alphas=CONFIG.alphas,
+        d_model=EXPECT_D_MODEL if RUN_REAL_AUDIO_TRANSFER else 24,
+    )
+    BUDGET_A = estimate_stage_passes(
+        stage="A", causal_layers=(), **_budget_kwargs
+    )
+    BUDGET_B = estimate_stage_passes(
+        stage="B", causal_layers=(PRIMARY_CAUSAL_LAYER,), **_budget_kwargs
+    )
+    BUDGET_C = estimate_stage_passes(
+        stage="C", causal_layers=REPLICATION_LAYERS, **_budget_kwargs
+    )
+    BUDGETS = [BUDGET_A, BUDGET_B, BUDGET_C]
+    for _budget in BUDGETS:
+        print(format_stage_budget(_budget))
+        print()
+    print(format_total_budget(BUDGETS))
+    (RUN_DIR / "pass_budget.json").write_text(
+        json.dumps([b.to_dict() for b in BUDGETS], indent=2, default=str),
+        encoding="utf-8",
+    )
 
 # The derived gates are never *carried* from here. Every cell that decides
 # whether to spend model passes calls refresh_stage_gates(globals()) again,
@@ -918,7 +1078,12 @@ from jlens.mmpilot.stage_gates import format_stage_gates, refresh_stage_gates
 STAGE_GATES = refresh_stage_gates(globals())
 print()
 print(format_stage_gates(STAGE_GATES, switches=globals()))
-if not MODEL_STAGES_ENABLED:
+assert_amendment_mode_exclusive(globals())
+if RUN_AMENDED_REPORT_ONLY:
+    print()
+    print("AMENDMENT-ONLY MODE — every gate above is False and stays False.")
+    print("Run section 18b next; sections 8-18 all print a skip line.")
+elif not MODEL_STAGES_ENABLED:
     print()
     print("MODEL STAGES BLOCKED — nothing below loads a model. To proceed set,")
     print("in section 2 and in this order:")
@@ -2119,55 +2284,123 @@ artifact beside the original.
   amended artifact binds to the run fingerprint **and** to a digest over the
   exact source units it read. Re-deriving it against changed units is refused.
 
-Run this on a CPU runtime against an existing run directory. It loads nothing.
+### This cell is standalone
+
+With `RUN_AMENDED_REPORT_ONLY = True` it needs **nothing** in the kernel from
+the model sections — not `STORE`, `FINGERPRINT`, `LENS_REPORT`,
+`AUDIO_PROTOCOL`, `INVARIANCE` or `BLOCKED_MODALITIES`. It opens the completed
+run named in section 2, checks the run's stored fingerprint against
+`AMEND_EXPECTED_FINGERPRINT`, and reads every report-only value back from that
+run's own `native_audio_transfer_summary.json`. Nothing is inferred from the
+current runtime's libraries, and no directory is created.
+
+It is idempotent, which matters because the artifacts for the real run already
+exist:
+
+- **both** amended files present and still bound to these units → `reused`,
+  and neither file is rewritten;
+- both present but the binding differs → **refused**, never overwritten;
+- exactly one present → refused as a torn write;
+- neither present → generated, both files placed together.
+
+Run it on a free CPU runtime. It loads no model.
 """
 )
 
 code(
     '''
 # 18b. Regenerate the verdicts from stored units under the admissibility rule.
+#
+# Standalone by construction: in amendment-only mode every input below comes
+# from the completed run that was named in section 2, never from this kernel and
+# never from this runtime's installed libraries.
+from jlens.mmpilot.amend import POSTPROCESSING_VERSION
+from jlens.mmpilot.amend_open import (
+    amend_or_reuse,
+    assert_amendment_mode_exclusive,
+    format_amendment_inputs,
+    open_existing_store,
+    restore_report_metadata,
+)
+
 AMENDED = None
 AMENDED_PATHS = None
-if STORE is None:
-    print("skipped: there is no run state to amend")
+AMENDED_STATUS = None
+AMEND_STORE = None
+AMEND_INPUTS = None
+
+if RUN_AMENDED_REPORT_ONLY:
+    assert_amendment_mode_exclusive(globals())
+    AMEND_STORE = open_existing_store(
+        AMEND_EXISTING_RUN_DIR, expected_fingerprint=AMEND_EXPECTED_FINGERPRINT
+    )
+    print(f"run state: {AMEND_STORE.status}")
+    print(f"run directory {AMEND_STORE.root}")
+    print(f"fingerprint   {AMEND_STORE.fingerprint.digest}")
+    print()
+    AMEND_INPUTS = restore_report_metadata(AMEND_STORE)
+    print(format_amendment_inputs(AMEND_INPUTS))
+    AMEND_INPUTS = {
+        key: value
+        for key, value in AMEND_INPUTS.items()
+        if key not in ("summary_path", "restored_from", "restored_fields")
+    }
+    _existing_policy = "reuse_or_refuse"
 else:
-    from jlens.mmpilot.amend import (
-        AMENDED_REPORT_NAME,
-        POSTPROCESSING_VERSION,
-        build_amended_report,
-        verify_amended_binding,
-        write_amended_report,
-    )
+    # The live path, unchanged: section 18 has just rewritten this run's own
+    # report, and the amended artifacts are written beside it from memory.
+    AMEND_STORE = globals().get("STORE")
+    if AMEND_STORE is not None:
+        AMEND_INPUTS = {
+            "primary_layer": PRIMARY_CAUSAL_LAYER,
+            "replication_layers": REPLICATION_LAYERS,
+            "focal_concepts": FOCAL_CONCEPTS,
+            "thresholds": THRESHOLDS,
+            "lens_report": LENS_REPORT,
+            "audio_protocol": AUDIO_PROTOCOL,
+            "invariance": INVARIANCE,
+            "blocked_modalities": BLOCKED_MODALITIES,
+            "mode": CONFIG.mode,
+            "original_report_path": RUN_DIR / "native_audio_transfer_report.md",
+        }
+    _existing_policy = "regenerate"
 
-    AMENDED = build_amended_report(
-        STORE,
-        primary_layer=PRIMARY_CAUSAL_LAYER,
-        replication_layers=REPLICATION_LAYERS,
-        focal_concepts=FOCAL_CONCEPTS,
-        thresholds=THRESHOLDS,
-        original_report_path=RUN_DIR / "native_audio_transfer_report.md",
-        lens_report=LENS_REPORT,
-        audio_protocol=AUDIO_PROTOCOL,
-        invariance=INVARIANCE,
-        blocked_modalities=BLOCKED_MODALITIES,
-        mode=CONFIG.mode,
-    )
-    AMENDED_PATHS = write_amended_report(AMENDED, run_dir=RUN_DIR)
-    # Immediately hold the artifact to the units it was computed from, so the
-    # binding is exercised on the way out rather than only on some later reuse.
-    print(verify_amended_binding(AMENDED["summary"], STORE))
+if AMEND_STORE is None:
+    print("skipped: there is no run state to amend")
+    print()
+    print("To amend a completed run on a free CPU runtime, set in section 2:")
+    print()
+    print("    RUN_REAL_AUDIO_TRANSFER    = True")
+    print("    RUN_AMENDED_REPORT_ONLY    = True")
+    print('    AMEND_EXISTING_RUN_DIR     = "<the completed run directory>"')
+    print('    AMEND_EXPECTED_FINGERPRINT = "<its raw-generation fingerprint>"')
+    print()
+    print("leaving every model and causal switch False, then run 1-7 and 18b.")
+else:
+    AMENDMENT = amend_or_reuse(AMEND_STORE, existing=_existing_policy, **AMEND_INPUTS)
+    AMENDED = AMENDMENT["amended"]
+    AMENDED_PATHS = AMENDMENT["paths"]
+    AMENDED_STATUS = AMENDMENT["status"]
+    # The binding is exercised on the way out rather than only on some later
+    # reuse — for a freshly written artifact and for a reused one alike.
+    print()
+    print(f"amendment: {AMENDED_STATUS}")
+    print(AMENDMENT["bound"])
 
-    _amended_overall = AMENDED["verdicts"]["overall"]
-    _amended_primary = AMENDED["verdicts"]["primary_causal"] or {}
+    _amended_overall = AMENDMENT["verdicts"]["overall"] or {}
+    _amended_primary = AMENDMENT["verdicts"]["primary_causal"] or {}
+    _amended_replication = AMENDMENT["verdicts"]["replication"] or {}
+    _binding = AMENDMENT["binding"] or {}
+    _primary_layer = AMEND_INPUTS["primary_layer"]
     print()
     print("=" * 72)
     print(f"AMENDED VERDICTS — {POSTPROCESSING_VERSION}")
     print("=" * 72)
-    print(f"  C  L{PRIMARY_CAUSAL_LAYER}_CAUSAL_TRANSFER            "
+    print(f"  C  L{_primary_layer}_CAUSAL_TRANSFER            "
           f"{_amended_primary.get('verdict', 'NOT_EVALUATED')}")
     print(f"  D  L38_L40_REPLICATION            "
-          f"{AMENDED['verdicts']['replication']['verdict']}")
-    print(f"  E  OVERALL_THREE_MODALITY_VERDICT {_amended_overall['verdict']}")
+          f"{_amended_replication.get('verdict', 'NOT_EVALUATED')}")
+    print(f"  E  OVERALL_THREE_MODALITY_VERDICT {_amended_overall.get('verdict')}")
     print()
     print(f"  admissible supporting cells: "
           f"{_amended_primary.get('audio_cells_supporting_a_claim')}")
@@ -2175,15 +2408,21 @@ else:
           f"{_amended_primary.get('audio_cells_measured_but_inadmissible')}")
     print()
     print(f"  raw-generation fingerprint (unchanged) "
-          f"{AMENDED['binding']['run_fingerprint_digest']}")
+          f"{_binding.get('run_fingerprint_digest')}")
     print(f"  source units digest                   "
-          f"{AMENDED['binding']['source_units']['combined_digest']}")
+          f"{(_binding.get('source_units') or {}).get('combined_digest')}")
     print(f"  admissibility rule checksum           "
-          f"{AMENDED['binding']['admissibility_rule_checksum']}")
+          f"{_binding.get('admissibility_rule_checksum')}")
     print()
+    if AMENDED_STATUS == "reused":
+        print("REUSED — both amended artifacts already existed and still bind to")
+        print("these exact units. Neither file was rewritten.")
+    else:
+        print("WRITTEN — both amended artifacts were placed together.")
     print(f"amended report  {AMENDED_PATHS['report']}")
     print(f"amended summary {AMENDED_PATHS['summary']}")
-    print(f"original report kept at {RUN_DIR / 'native_audio_transfer_report.md'}")
+    print(f"original report kept unchanged at "
+          f"{AMEND_STORE.root / 'native_audio_transfer_report.md'}")
 '''
 )
 
@@ -2203,7 +2442,27 @@ bound into the fingerprint.
 code(
     '''
 # 19. What was computed and what was reused.
-if STORE is None:
+#
+# Read out of the namespace rather than by bare name: this cell has to say
+# something useful whether the model stages ran, the amendment ran, or neither.
+STORE = globals().get("STORE")
+AMEND_STORE = globals().get("AMEND_STORE")
+AMENDED_STATUS = globals().get("AMENDED_STATUS")
+if STORE is None and AMEND_STORE is not None:
+    # Amendment-only mode: the run being reported is the one 18b reopened.
+    STATUS = AMEND_STORE.status_report()
+    print(f"run directory {STATUS['run_dir']}")
+    print(f"state         {STATUS['status']}")
+    print(f"fingerprint   {STATUS['fingerprint_digest']}")
+    print("completed units (read, never rewritten):")
+    for _stage, _count in sorted(STATUS["completed_units"].items()):
+        print(f"  {_stage:24s} {_count}")
+    if STATUS["invalid_units"]:
+        print(f"invalid units: {len(STATUS['invalid_units'])}")
+    print()
+    print(f"amendment: {AMENDED_STATUS}")
+    print("no unit was computed, no unit was written, and no model was loaded.")
+elif STORE is None:
     print("no run state: the model stages did not run")
     print()
     print("=" * 72)
@@ -2225,6 +2484,13 @@ if STORE is None:
     print()
     print("    RUN_L38_L40_REPLICATION       = True")
     print("    CONFIRM_REPLICATION_BUDGET    = True   # Stage C")
+    print()
+    print("Or, to amend one completed run's report on a free CPU runtime:")
+    print()
+    print("    RUN_REAL_AUDIO_TRANSFER       = True")
+    print("    RUN_AMENDED_REPORT_ONLY       = True")
+    print("    AMEND_EXISTING_RUN_DIR        = <the completed run directory>")
+    print("    AMEND_EXPECTED_FINGERPRINT    = <its raw-generation fingerprint>")
 else:
     STATUS = STORE.status_report()
     print(f"run directory {STATUS['run_dir']}")
