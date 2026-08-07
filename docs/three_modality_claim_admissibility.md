@@ -267,3 +267,37 @@ model and causal switch, and the notebook refuses the combination in section 2):
 `CONFIRM_L35_CAUSAL_BUDGET`, `RUN_L38_L40_REPLICATION` and
 `CONFIRM_REPLICATION_BUDGET` all `True`. Stage A and Stage B resume from their
 completed units; Stage C spends passes only on the eligible focal concepts.
+
+## A second boundary on the same verdict: the question was candidate-listed
+
+The capability rule above decides *which measured cells may support a claim*. It
+says nothing about *how the model was asked*, and that is a separate limit on
+the same `THREE_MODALITY_GO` verdict.
+
+Every stage of the completed study — the capability gate, the captured
+activations, the codes, the estimated directions, and every intervention forward
+pass — ran under a prompt that named all six candidates:
+
+```
+Question: which one of these is present: bird, cat, giraffe, microwave,
+toilet, zebra? Answer with exactly one word.
+Answer:
+```
+
+The list was identical across samples and modalities and did not disclose the
+correct answer, so it is not a leak of the target. It is a **priming**
+limitation: naming every candidate introduces all of them into the model's
+input. Source-derived positive-minus-negative estimation removes shared prompt
+components to first order but not that priming, and the candidate-order
+invariance control addresses **ordering** bias only.
+
+Consequently the verdict supports **candidate-conditioned cross-modal causal
+steering**, and does **not** establish spontaneous, unprompted concept
+emergence. The rule that states this per protocol is
+`mmpilot.prompt_protocol_claim_admissibility.v1` in
+`jlens/mmpilot/prompt_protocol.py`; it is versioned and checksummed
+**separately** from `mmpilot.claim_admissibility.v1`, precisely so that adding
+it cannot change the rule checksum the completed run's amended artifacts are
+already bound to. See [`prompt_protocol.md`](prompt_protocol.md).
+
+No completed artifact was read, rewritten, or reinterpreted by this addition.

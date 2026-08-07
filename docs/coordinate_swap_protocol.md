@@ -165,6 +165,44 @@ over the operator.
 
 ---
 
+## 5b. The prompt: candidates external to the model
+
+**The primary study requires an open prompt.** The completed steering study
+asked *"which one of these is present: bird, cat, giraffe, microwave, toilet,
+zebra?"*, which puts what would be the swap **target** into the model's own
+input. Identity replacement means the model produces a concept it was never
+shown, so a candidate-listed prompt cannot carry the primary claim — under it,
+the strongest result available is the candidate-conditioned one the completed
+study already has.
+
+`assert_open_prompt_protocol()` enforces it, and refuses unless a prompt
+protocol is bound, it is one of `mmpilot.open_identification.v1`,
+`mmpilot.open_downstream_property.v1` or `mmpilot.hidden_intermediate.v1`, its
+candidates were external, and its registered leakage audit passed. The
+candidate-listed prompt remains available as a **labelled comparison
+condition**, never as the primary. Full specification:
+[`prompt_protocol.md`](prompt_protocol.md).
+
+For the planned bird → cat example:
+
+| | identity condition | downstream condition |
+|---|---|---|
+| evidence | bird image, bird caption, or spoken bird caption | *the same evidence* |
+| swap | bird → cat | *the identical swap* |
+| visible question | `What animal is present in the evidence? Answer with the animal name.` | `How many legs does the animal typically have? Answer with a number.` |
+| externally scored | `bird`, `cat`, predeclared controls | `two`, `four`, predeclared controls |
+
+The model never sees a rendered list such as `bird, cat, giraffe, ...`. The swap
+stays restricted to original prompt and evidence positions; the teacher-forced
+identity and property-answer tokens remain outside the intervention boundary by
+`PROMPT_BOUNDARY_RULE`, for every position rule.
+
+The `hidden_intermediate` protocol — neither entity label nor any registered
+alias in any model-visible text, and for spoken audio neither in the offline
+transcript — is a **later, stronger stage**. It is not designed yet.
+
+---
+
 ## 6. Controls for the future study
 
 | Control | What it rules out |
@@ -199,8 +237,10 @@ method version, source and target token ids and strings, vector orientation and
 normalization, pseudoinverse/solve policy, condition-number threshold and rank
 tolerance, solve dtype, the alpha set, the position rule, the prompt-length
 boundary rule, the layer band, lens checksums by layer, model and processor
-revisions, the audio protocol fingerprint when `spoken_audio` is enabled, and
-the full control configuration.
+revisions, the audio protocol fingerprint when `spoken_audio` is enabled, the
+full control configuration, and — new — the whole `prompt_protocol` record plus
+its version and digest, so *what was asked* is bound beside *what was patched*.
+Candidate **order** does not move that digest; the candidate **set** does.
 
 Two independent gates keep the families apart:
 
@@ -228,6 +268,7 @@ and resume is fingerprint-gated.
 
 **Not claimed, by anything in this repository, under method B:**
 
+- open cross-modal identification;
 - cross-modal identity replacement;
 - downstream property recomputation rather than a shortcut;
 - flexible generalization;

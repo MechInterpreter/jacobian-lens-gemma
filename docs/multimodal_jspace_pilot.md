@@ -867,3 +867,37 @@ The planned identity-replacement and downstream-reasoning experiments are
 separate claims from each other and from anything above. Behavioral outputs
 remain text; `text`, `image` and `spoken_audio` are evidence modalities;
 `spoken_audio` means spoken captions, not environmental sound.
+
+## The completed result is candidate-conditioned
+
+The behavioral question above listed every candidate concept in the prompt:
+
+```
+Question: which one of these is present: bird, cat, giraffe, microwave,
+toilet, zebra? Answer with exactly one word.
+Answer:
+```
+
+Every stage consumed that prompt — the capability gate, the captured
+activations, the J-space codes, the estimated directions, and every intervention
+forward pass. So the following is what the completed `THREE_MODALITY_GO` study
+supports, stated exactly:
+
+- the study used a **candidate-listed** behavioral question, and **every**
+  candidate concept was present in it;
+- the list was **identical across samples and modalities** and did **not**
+  disclose which candidate was correct;
+- source-derived positive-minus-negative estimation removes shared prompt
+  components to first order, but **candidate priming remains a limitation**;
+- candidate-order invariance controls **ordering** bias, not semantic priming;
+- the result supports **candidate-conditioned cross-modal causal steering**;
+- it does **not** establish spontaneous, unprompted concept emergence;
+- the coordinate-swap follow-up will use **open prompts, with the candidates
+  external to the model**.
+
+Nothing here changes a number, a verdict, or a fingerprint. No completed
+artifact was edited, and the legacy question keeps its bytes and its recorded
+`gemma-it-chat-balanced-options-v1` protocol string so completed runs resume
+unchanged. The protocol that replaces it for future work is specified in
+[`prompt_protocol.md`](prompt_protocol.md) and implemented in
+`jlens/mmpilot/prompt_protocol.py`.

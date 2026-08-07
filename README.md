@@ -279,6 +279,8 @@ tests, and the upstream walkthrough/README (below).
 | `jlens/jspace_analysis.py`, `scripts/analyze_jspace.py` | Deterministic read-only analysis of a completed jspace run: integrity checks, k comparison, cross-k stability, transition/eval summaries (outputs under `reports/`) |
 | `jlens/explorer_export.py`, `scripts/export_explorer_bundle.py` | Deterministic explorer-bundle exporter: normalized schema, stable IDs, absolute-path stripping, subset export, causal/multimodal merging |
 | `jlens/interventions.py` | Residual-stream interventions at block_output sites: hook editing with exact position/dtype/tuple preservation, parity checks, deterministic condition IDs, norm-matched random controls, append-safe JSONL records |
+| `jlens/mmpilot/coordinate_swap.py` | Exact two-coordinate J-lens patching (`h + α·V(σ(c) − c)`, `c = pinv(V)h`), banded hooks, stability gate, controls, fingerprint isolation from the completed steering family ([docs/coordinate_swap_protocol.md](docs/coordinate_swap_protocol.md)) |
+| `jlens/mmpilot/prompt_protocol.py` | Versioned prompt protocols with the neutral question and the scored candidates as separate objects, a deterministic leakage audit, and protocol → claim admissibility ([docs/prompt_protocol.md](docs/prompt_protocol.md)) |
 | `schemas/explorer_bundle.schema.json` | Versioned JSON Schema for `jlens.explorer.bundle.v1` (text + image + audio + causal records) |
 | `explorer/` | The Gemma 4 Multimodal J-Lens Explorer (Vite + React + TypeScript static app, Vitest tests) |
 | `scripts/make_ui_fixtures.py` | Deterministic, loudly-labelled synthetic UI fixtures (causal + multimodal) for pre-run UI states |
@@ -293,6 +295,8 @@ tests, and the upstream walkthrough/README (below).
 | `notebooks/gemma_4_e4b_jspace_causal_smoke.ipynb` | Causal steering smoke run: parity-gated, checkpointed, resume-safe measured interventions |
 | `notebooks/gemma_4_e4b_multimodal_jlens_capture.ipynb` | First image/audio-conditioned captures on the frozen lens |
 | `notebooks/multimodal_jspace_output_convergence_audit_colab.ipynb` | Convergence-timing audit of the completed L35 transfer: the model's own output head applied to stored residuals at L35/38/40, read-only against the finished run ([docs/output_convergence_timing.md](docs/output_convergence_timing.md)) |
+| `notebooks/multimodal_jspace_coordinate_swap_mock_colab.ipynb` | MOCK-only coordinate-swap notebook: the algebra, the refusals, the controls and the involution on a synthetic world. Its real-run switch raises — no admissible layer band exists, and the readout has to be an open prompt |
+| `notebooks/open_prompt_protocol_mock_colab.ipynb` | MOCK-only open-prompt notebook: the legacy prompt rebuilt byte-for-byte, open prompts naming no candidate in any channel, the leakage refusals, and the external candidate-scoring boundary ([docs/prompt_protocol.md](docs/prompt_protocol.md)) |
 | `tests/` | CPU-only tests (no network, no real model): adapter, controls, evaluation, pursuit, cones, ignition, metadata, scripts, exporter, interventions, notebook light paths, finite differences |
 
 ## Gemma 4 E4B specifics

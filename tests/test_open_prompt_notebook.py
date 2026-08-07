@@ -341,3 +341,100 @@ def test_the_schematic_does_not_imply_the_open_experiments_have_succeeded():
     assert "No result under method B, and no result under any open protocol, exists yet." in svg
     assert "A hidden-intermediate test is a later, stronger stage" in svg
     assert "It is not designed yet." in svg
+
+
+# --------------------------------------------------------- the documentation
+
+PROTOCOL_DOC = REPO_ROOT / "docs" / "prompt_protocol.md"
+PILOT_DOC = REPO_ROOT / "docs" / "multimodal_jspace_pilot.md"
+SWAP_DOC = REPO_ROOT / "docs" / "coordinate_swap_protocol.md"
+ADMISSIBILITY_DOC = REPO_ROOT / "docs" / "three_modality_claim_admissibility.md"
+
+
+def _flat(text: str) -> str:
+    """Markdown reflow must not be able to break a documentation check."""
+    return " ".join(text.split())
+
+
+#: The eight statements the completed result's description has to make. Each one
+#: is a thing a reader could otherwise get wrong in either direction.
+COMPLETED_RESULT_STATEMENTS = [
+    "candidate-listed",
+    "every** candidate concept was present in it",
+    "identical across samples and modalities",
+    "not** disclose which candidate was correct",
+    "candidate priming remains a limitation",
+    "controls **ordering** bias, not semantic priming",
+    "candidate-conditioned cross-modal causal steering",
+    "not** establish spontaneous, unprompted concept emergence",
+    "open prompts, with the candidates external to the model",
+]
+
+
+def test_the_pilot_doc_states_the_completed_result_accurately():
+    text = _flat(PILOT_DOC.read_text(encoding="utf-8"))
+    section = text.split("## The completed result is candidate-conditioned", 1)
+    assert len(section) == 2, "the pilot doc must state the prompt limitation"
+    body = section[1]
+    for statement in COMPLETED_RESULT_STATEMENTS:
+        assert statement in body, statement
+    # And it must not read as a retraction of the completed numbers.
+    assert "Nothing here changes a number, a verdict, or a fingerprint" in body
+    assert "No completed artifact was edited" in body
+    assert "gemma-it-chat-balanced-options-v1" in body
+
+
+def test_the_protocol_doc_records_the_audit_and_the_boundaries():
+    text = _flat(PROTOCOL_DOC.read_text(encoding="utf-8"))
+    for required in (
+        # the four protocol identifiers
+        "mmpilot.candidate_listed_identification.v1",
+        "mmpilot.open_identification.v1",
+        "mmpilot.open_downstream_property.v1",
+        "mmpilot.hidden_intermediate.v1",
+        # the audit rows that matter
+        "`jlens/mmpilot/capability.py:29-63`",
+        "**All of them.**",
+        "it depends on the candidate set *and its order*",
+        "before** any candidate token exists",
+        "Media tensors (`pixel_values`",
+        "gemma-it-chat-balanced-options-v1",
+        # the exact open prompts
+        "What animal is present in the evidence? Answer with the animal name.",
+        "How many legs does the animal typically have? Answer with a number.",
+        # the scoring boundary and the two fingerprint properties
+        "prompt hash is independent of candidate enumeration order",
+        "changing the set changes the digest while reordering it does not",
+        # the audit's stated limits
+        "not a registered alias is **not detected**",
+        "image pixels are never read",
+        # the claim rules
+        "No MOCK result supports any scientific claim",
+        "no path by which a claim is raised after a result is seen",
+    ):
+        assert required in text, required
+    for statement in COMPLETED_RESULT_STATEMENTS:
+        assert statement in text, statement
+
+
+def test_the_swap_doc_requires_an_open_prompt_for_the_primary_study():
+    text = _flat(SWAP_DOC.read_text(encoding="utf-8"))
+    assert "The primary study requires an open prompt.**" in text
+    assert "assert_open_prompt_protocol()" in text
+    assert "labelled comparison condition" in text
+    assert "What animal is present in the evidence?" in text
+    assert "How many legs does the animal typically have?" in text
+    assert "never sees a rendered list such as `bird, cat, giraffe, ...`" in text
+    assert "later, stronger stage" in text
+    assert "open cross-modal identification;" in text
+    assert "prompt_protocol.md" in text
+
+
+def test_the_admissibility_doc_separates_the_two_rule_versions():
+    text = _flat(ADMISSIBILITY_DOC.read_text(encoding="utf-8"))
+    assert "the question was candidate-listed" in text
+    assert "mmpilot.prompt_protocol_claim_admissibility.v1" in text
+    # The point of the separation: the completed run's bound checksum is safe.
+    assert "separately** from `mmpilot.claim_admissibility.v1`" in text
+    assert "cannot change the rule checksum" in text
+    assert "candidate-conditioned cross-modal causal steering" in text
