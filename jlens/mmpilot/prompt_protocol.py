@@ -78,6 +78,9 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+# MODALITIES and PROMPT_PROTOCOL_VERSION are re-exported, not restated. A
+# modality this module accepted and the backend did not would be a prompt
+# nothing can run, and the protocol string is in every completed fingerprint.
 from jlens.mmpilot.backend import MODALITIES, text_hash
 from jlens.mmpilot.capability import PROMPT_PROTOCOL_VERSION, build_question
 from jlens.mmpilot.coordinate_swap import PROMPT_BOUNDARY_RULE
@@ -129,10 +132,6 @@ CANDIDATE_VISIBILITY_RULE = (
     "prompt hash is therefore independent of the candidate set and of its "
     "enumeration order"
 )
-
-#: Re-exported from :mod:`jlens.mmpilot.backend`, not restated — a modality this
-#: module accepted and the backend did not would be a prompt nothing can run.
-
 
 class PromptProtocolError(ValueError):
     """An invalid protocol request, evidence object, or candidate set."""
