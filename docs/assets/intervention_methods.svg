@@ -1,0 +1,160 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="1060" viewBox="0 0 1500 1060" font-family="DejaVu Sans, Helvetica, Arial, sans-serif">
+  <!--
+    Source of truth for docs/assets/intervention_methods.png.
+    Edit this file, then run:  python scripts/render_schematic.py
+    Deterministic and diffable: no generated bitmap text anywhere.
+
+    Replaces the equation that appeared on the earlier proposal graphic,
+    h' = h + alpha (V d_target - V d_source), which describes neither method.
+
+    Layout note: runs of spaces are not preserved by every SVG rasterizer, so
+    code and its trailing comment are separate <text> elements at fixed x.
+  -->
+  <defs>
+    <marker id="arrowA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#15803d"/>
+    </marker>
+    <marker id="arrowB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#5b21b6"/>
+    </marker>
+  </defs>
+
+  <rect width="1500" height="1060" fill="#ffffff"/>
+
+  <!-- ================================================================ title -->
+  <text x="750" y="46" text-anchor="middle" font-size="30" font-weight="bold" fill="#111827">
+    Two different J-space interventions. They are not the same measurement.
+  </text>
+  <text x="750" y="76" text-anchor="middle" font-size="16" fill="#4b5563">
+    A is what the completed three-modality causal result used. B is what the planned
+  </text>
+  <text x="750" y="97" text-anchor="middle" font-size="16" fill="#4b5563">
+    identity-swap and downstream-reasoning experiment will use.
+  </text>
+
+  <!-- ============================================================== panel A -->
+  <rect x="30" y="118" width="700" height="500" rx="12" fill="#eefaf2" stroke="#15803d" stroke-width="2"/>
+  <rect x="30" y="118" width="700" height="46" rx="12" fill="#15803d"/>
+  <rect x="30" y="146" width="700" height="18" fill="#15803d"/>
+  <text x="52" y="150" font-size="20" font-weight="bold" fill="#ffffff">
+    A — COMPLETED: source-derived J-space steering
+  </text>
+  <text x="52" y="186" font-size="14" font-family="DejaVu Sans Mono, Consolas, monospace" fill="#4b7f5f">jlens.mmpilot.causal</text>
+
+  <text x="52" y="212" font-size="15" fill="#111827">A direction is estimated from <tspan font-weight="bold">source-modality training</tspan></text>
+  <text x="52" y="232" font-size="15" fill="#111827"><tspan font-weight="bold">examples only</tspan>, then added to or subtracted from the residual.</text>
+
+  <rect x="52" y="246" width="656" height="118" rx="8" fill="#ffffff" stroke="#86c9a3"/>
+  <text x="70" y="276" font-size="17" font-family="DejaVu Sans Mono, Consolas, monospace" fill="#111827">delta = ReLU(mean_pos_code - mean_neg_code)</text>
+  <text x="70" y="302" font-size="17" font-family="DejaVu Sans Mono, Consolas, monospace" fill="#111827">v_concept = V delta</text>
+  <text x="330" y="302" font-size="14" fill="#6b7280">then unit-normalized</text>
+  <text x="70" y="342" font-size="22" font-family="DejaVu Sans Mono, Consolas, monospace" font-weight="bold" fill="#15803d">h' = h  ±  alpha · v_concept</text>
+
+  <!-- geometry sketch A -->
+  <text x="52" y="396" font-size="15" font-weight="bold" fill="#374151">What it does to an activation</text>
+  <line x1="86" y1="546" x2="86" y2="412" stroke="#9ca3af" stroke-width="1.5"/>
+  <line x1="86" y1="546" x2="336" y2="546" stroke="#9ca3af" stroke-width="1.5"/>
+  <line x1="86" y1="546" x2="216" y2="466" stroke="#15803d" stroke-width="3" marker-end="url(#arrowA)"/>
+  <text x="224" y="470" font-size="14" fill="#15803d">h</text>
+  <line x1="216" y1="466" x2="290" y2="422" stroke="#15803d" stroke-width="3" stroke-dasharray="6 4" marker-end="url(#arrowA)"/>
+  <text x="240" y="414" font-size="14" fill="#15803d">h + alpha·v</text>
+  <text x="52" y="578" font-size="13" fill="#6b7280">A fixed direction, scaled by a chosen alpha.</text>
+  <text x="52" y="596" font-size="13" fill="#6b7280">How much source content h carries is not read.</text>
+
+  <rect x="372" y="404" width="336" height="196" rx="8" fill="#ffffff" stroke="#86c9a3"/>
+  <text x="390" y="430" font-size="15" font-weight="bold" fill="#374151">As applied in the completed run</text>
+  <text x="390" y="458" font-size="14" fill="#374151">• final prompt token only</text>
+  <text x="390" y="482" font-size="14" fill="#374151">• one layer at a time</text>
+  <text x="402" y="502" font-size="14" fill="#374151">(L35 primary; L38 and L40 replication)</text>
+  <text x="390" y="526" font-size="14" fill="#374151">• controls: zero, norm-matched random,</text>
+  <text x="402" y="546" font-size="14" fill="#374151">unrelated concept, raw-residual difference</text>
+  <text x="390" y="576" font-size="14" font-weight="bold" fill="#15803d">A valid causal steering experiment —</text>
+  <text x="390" y="594" font-size="14" font-weight="bold" fill="#15803d">and not a coordinate swap.</text>
+
+  <!-- ============================================================== panel B -->
+  <rect x="770" y="118" width="700" height="500" rx="12" fill="#f4f1fd" stroke="#5b21b6" stroke-width="2"/>
+  <rect x="770" y="118" width="700" height="46" rx="12" fill="#5b21b6"/>
+  <rect x="770" y="146" width="700" height="18" fill="#5b21b6"/>
+  <text x="792" y="150" font-size="20" font-weight="bold" fill="#ffffff">
+    B — PLANNED: Anthropic-style coordinate swap
+  </text>
+  <text x="792" y="186" font-size="14" font-family="DejaVu Sans Mono, Consolas, monospace" fill="#6d4fae">jlens.mmpilot.coordinate_swap</text>
+
+  <text x="792" y="212" font-size="15" fill="#111827">The two tokens' lens vectors become a basis; the activation's</text>
+  <text x="792" y="232" font-size="15" fill="#111827"><tspan font-weight="bold">measured</tspan> coordinates in that basis are exchanged.</text>
+
+  <rect x="792" y="246" width="656" height="118" rx="8" fill="#ffffff" stroke="#b9a6ea"/>
+  <text x="810" y="276" font-size="17" font-family="DejaVu Sans Mono, Consolas, monospace" fill="#111827">V = [v_source  v_target]</text>
+  <text x="1070" y="276" font-size="14" fill="#6b7280">columns, [d_model, 2]</text>
+  <text x="810" y="302" font-size="17" font-family="DejaVu Sans Mono, Consolas, monospace" fill="#111827">c = pinv(V) h</text>
+  <text x="1070" y="302" font-size="14" fill="#6b7280">the lens coordinates</text>
+  <text x="810" y="342" font-size="22" font-family="DejaVu Sans Mono, Consolas, monospace" font-weight="bold" fill="#5b21b6">h_patched = h + alpha·V(sigma(c) - c)</text>
+
+  <!-- geometry sketch B -->
+  <text x="792" y="396" font-size="15" font-weight="bold" fill="#374151">What it does to an activation</text>
+  <line x1="826" y1="546" x2="1046" y2="546" stroke="#c4b5fd" stroke-width="6"/>
+  <text x="960" y="566" font-size="13" fill="#7c3aed">v_source axis</text>
+  <line x1="826" y1="546" x2="946" y2="422" stroke="#c4b5fd" stroke-width="6"/>
+  <text x="952" y="424" font-size="13" fill="#7c3aed">v_target axis</text>
+  <circle cx="985" cy="512" r="6" fill="#5b21b6"/>
+  <text x="996" y="508" font-size="13" fill="#5b21b6">h</text>
+  <text x="996" y="526" font-size="13" fill="#5b21b6">c = [c_s, c_t]</text>
+  <circle cx="886" cy="462" r="6" fill="#5b21b6"/>
+  <text x="792" y="424" font-size="13" fill="#5b21b6">h_patched</text>
+  <text x="792" y="442" font-size="13" fill="#5b21b6">c = [c_t, c_s]</text>
+  <line x1="979" y1="509" x2="894" y2="466" stroke="#5b21b6" stroke-width="3" stroke-dasharray="6 4" marker-end="url(#arrowB)"/>
+  <text x="792" y="578" font-size="13" fill="#6b7280">Step size measured from h, not chosen.</text>
+  <text x="792" y="596" font-size="13" fill="#6b7280">The orthogonal component does not move.</text>
+
+  <rect x="1112" y="404" width="336" height="196" rx="8" fill="#ffffff" stroke="#b9a6ea"/>
+  <text x="1130" y="430" font-size="15" font-weight="bold" fill="#374151">The faithful protocol</text>
+  <text x="1130" y="458" font-size="14" font-weight="bold" fill="#374151">• every original prompt position,</text>
+  <text x="1142" y="478" font-size="14" fill="#374151">including image and audio evidence</text>
+  <text x="1130" y="502" font-size="14" font-weight="bold" fill="#374151">• a contiguous validated layer band,</text>
+  <text x="1142" y="522" font-size="14" fill="#374151">coordinates recomputed at each layer</text>
+  <text x="1130" y="548" font-size="14" fill="#374151">• teacher-forced answer tokens are</text>
+  <text x="1142" y="568" font-size="14" fill="#374151">never patched</text>
+  <text x="1130" y="594" font-size="14" font-weight="bold" fill="#5b21b6">No result under B exists yet.</text>
+
+  <!-- ============================================ the difference, stated once -->
+  <rect x="30" y="640" width="1440" height="152" rx="12" fill="#f9fafb" stroke="#9ca3af" stroke-width="2"/>
+  <text x="52" y="672" font-size="19" font-weight="bold" fill="#111827">Why B is neither A nor a difference of lens vectors</text>
+  <text x="52" y="708" font-size="18" font-family="DejaVu Sans Mono, Consolas, monospace" fill="#111827">
+    V(sigma(c) - c)  =  (c_target - c_source) · (v_source - v_target)
+  </text>
+  <text x="52" y="742" font-size="15" fill="#374151">
+    The update direction is parallel to v_source - v_target, but its coefficient is <tspan font-weight="bold">read off the activation</tspan>.
+  </text>
+  <text x="52" y="766" font-size="15" fill="#374151">
+    So B is also not <tspan font-family="DejaVu Sans Mono, Consolas, monospace">h + alpha(v_target - v_source)</tspan>, which assumes a coefficient of 1.
+  </text>
+  <text x="960" y="708" font-size="14" fill="#6b7280">An activation carrying no source content is</text>
+  <text x="960" y="728" font-size="14" fill="#6b7280">barely moved; one saturated with it is</text>
+  <text x="960" y="748" font-size="14" fill="#6b7280">rewritten. That measured coefficient is</text>
+  <text x="960" y="768" font-size="14" fill="#6b7280">the whole method.</text>
+
+  <!-- ============================================================ boundaries -->
+  <rect x="30" y="812" width="1440" height="220" rx="12" fill="#ffffff" stroke="#111827" stroke-width="2"/>
+  <rect x="30" y="812" width="1440" height="40" rx="12" fill="#111827"/>
+  <rect x="30" y="836" width="1440" height="16" fill="#111827"/>
+  <text x="52" y="840" font-size="19" font-weight="bold" fill="#ffffff">Claim boundaries</text>
+
+  <text x="52" y="882" font-size="15" fill="#111827">
+    <tspan font-weight="bold">The completed three-modality causal result used method A.</tspan> Nothing in it is a coordinate swap.
+  </text>
+  <text x="52" y="910" font-size="15" fill="#111827">
+    <tspan font-weight="bold">The planned identity-swap and downstream-reasoning experiment will use method B</tspan>, applied over all original prompt
+  </text>
+  <text x="52" y="932" font-size="15" fill="#111827">
+    positions across a validated layer band. No result under method B exists yet.
+  </text>
+  <text x="52" y="962" font-size="15" fill="#111827">
+    <tspan font-weight="bold">Behavioral outputs remain text.</tspan> text, image and spoken_audio are <tspan font-weight="bold">evidence</tspan> modalities. <tspan font-weight="bold">spoken_audio means spoken captions</tspan>, not environmental sound.
+  </text>
+  <text x="52" y="992" font-size="15" fill="#111827">
+    <tspan font-weight="bold">Identity replacement and downstream recomputation are separate claims</tspan>, tested separately, each with its own controls: a
+  </text>
+  <text x="52" y="1014" font-size="15" fill="#111827">
+    downstream change is not recomputation if inserting the answer vector directly at the same or an earlier depth is equally effective.
+  </text>
+</svg>

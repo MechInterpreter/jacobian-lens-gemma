@@ -813,3 +813,57 @@ The verdict reports the **earliest tested layer with evidence**, never the
 earliest layer in the model. Four layers cannot resolve where a signal begins: a
 layer between two tested ones is untested, and anything shallower than 20 is
 unexamined.
+
+## The completed causal result is steering, not a coordinate swap
+
+The causal transfer above uses **source-derived positive-minus-negative J-space
+directions**: `δ = ReLU(mean positive code − mean negative code)` estimated from
+source-modality *training* examples, mapped back through the frozen dictionary
+as `v_concept = V δ`, unit-normalized, then added to or subtracted from the
+residual at the final prompt token:
+
+```
+h' = h ± alpha * v_concept
+```
+
+That method, its terminology, and every number it produced stand unchanged. It
+is a valid causal steering experiment.
+
+It is **not** Anthropic's coordinate swap, and must not be described as one.
+The paper's intervention takes both tokens' lens vectors as the columns of a
+basis, reads the activation's coordinates in that basis with a pseudoinverse,
+and exchanges them:
+
+```
+V = [v_source  v_target]
+c = pinv(V) h
+h_patched = h + alpha * V (sigma(c) - c)
+```
+
+Three differences matter, and none of them is cosmetic:
+
+1. **Where the coefficient comes from.** Steering multiplies a *fixed* direction
+   by a *chosen* alpha. The swap's coefficient is `c_target − c_source`, read
+   off the activation itself, so an activation carrying no source content is
+   barely moved.
+2. **What is preserved.** The swap leaves the component orthogonal to
+   `span{v_source, v_target}` unchanged exactly. Steering makes no such
+   guarantee.
+3. **Where it is applied.** The completed run edits the final prompt token of
+   one layer. The paper's protocol edits *every* prompt position — including
+   multimodal evidence positions — across a contiguous band of validated layers,
+   recomputing the coordinates at each one.
+
+The swap is implemented in `jlens/mmpilot/coordinate_swap.py`, specified in
+[`coordinate_swap_protocol.md`](coordinate_swap_protocol.md), drawn in
+[`assets/intervention_methods.svg`](assets/intervention_methods.svg), and
+exercised by `notebooks/multimodal_jspace_coordinate_swap_mock_colab.ipynb`.
+**No real coordinate-swap run exists.** Its artifacts carry an
+`intervention_family` that no steering run ever wrote, and a coordinate-swap run
+refuses to resume from a steering run's directory — the two families can never
+share a number.
+
+The planned identity-replacement and downstream-reasoning experiments are
+separate claims from each other and from anything above. Behavioral outputs
+remain text; `text`, `image` and `spoken_audio` are evidence modalities;
+`spoken_audio` means spoken captions, not environmental sound.
