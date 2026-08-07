@@ -78,7 +78,8 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from jlens.mmpilot.backend import text_hash
+from jlens.mmpilot.backend import MODALITIES, text_hash
+from jlens.mmpilot.capability import PROMPT_PROTOCOL_VERSION, build_question
 from jlens.mmpilot.coordinate_swap import PROMPT_BOUNDARY_RULE
 from jlens.mmpilot.store import payload_checksum
 
@@ -106,10 +107,11 @@ OPEN_PROTOCOLS: tuple[str, ...] = (
 )
 
 #: The string completed runs recorded as ``prompt_protocol`` /
-#: ``capability_protocol``. Re-exported, never redefined: changing it would
-#: change :func:`jlens.mmpilot.pipeline.scientific_fingerprint` and refuse every
+#: ``capability_protocol``. **Re-exported, never redefined** — it is imported
+#: from the module that owns it, because changing it would change
+#: :func:`jlens.mmpilot.pipeline.scientific_fingerprint` and refuse every
 #: completed run's resume.
-LEGACY_CAPABILITY_PROMPT_PROTOCOL = "gemma-it-chat-balanced-options-v1"
+LEGACY_CAPABILITY_PROMPT_PROTOCOL = PROMPT_PROTOCOL_VERSION
 
 AUDIT_VERSION = "jlens.mmpilot.prompt_leakage_audit.v1"
 CLAIM_RULE_VERSION = "mmpilot.prompt_protocol_claim_admissibility.v1"
@@ -128,7 +130,8 @@ CANDIDATE_VISIBILITY_RULE = (
     "enumeration order"
 )
 
-MODALITIES: tuple[str, ...] = ("text", "image", "spoken_audio")
+#: Re-exported from :mod:`jlens.mmpilot.backend`, not restated — a modality this
+#: module accepted and the backend did not would be a prompt nothing can run.
 
 
 class PromptProtocolError(ValueError):
@@ -873,8 +876,6 @@ def build_protocol_prompt(
 
     if protocol == CANDIDATE_LISTED_IDENTIFICATION:
         if question is None:
-            from jlens.mmpilot.capability import build_question
-
             if not legacy_candidate_list:
                 raise PromptProtocolError(
                     "the candidate-listed protocol builds its question from the "
