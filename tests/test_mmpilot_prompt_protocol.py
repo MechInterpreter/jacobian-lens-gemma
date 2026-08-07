@@ -64,7 +64,7 @@ from jlens.mmpilot.prompt_protocol import (
     prompt_protocol_fingerprint,
     protocol_claim_admissibility,
 )
-from jlens.mmpilot.store import RunFingerprint
+from jlens.mmpilot.store import IncompatibleStateError, RunFingerprint, UnitStore
 
 LEGACY_CONCEPTS = ["bird", "cat", "giraffe", "microwave", "toilet", "zebra"]
 
@@ -855,6 +855,69 @@ def test_changing_the_candidate_set_changes_the_swap_run_fingerprint(backend):
 
     assert _config(("bird", "cat")) != _config(("bird", "cat", "dog"))
     assert _config(("bird", "cat")) == _config(("cat", "bird"))
+
+
+def _swap_run_fingerprint(backend, candidates, protocol=OPEN_IDENTIFICATION, **overrides):
+    built = build_protocol_prompt(
+        protocol=protocol,
+        evidence=Evidence(modality="image", media="<pixels>"),
+        external_candidates=candidates,
+        source=BIRD,
+        target=CAT,
+        encode_candidate=backend.encode_candidate,
+        **overrides,
+    )
+    payload = prompt_protocol_fingerprint(
+        built,
+        model_revision=MOCK_MODEL_REVISION,
+        processor_revision=MOCK_PROCESSOR_REVISION,
+    )
+    return RunFingerprint(
+        mode="coordinate_swap",
+        model_repo_id="mock",
+        model_revision=MOCK_MODEL_REVISION,
+        processor_revision=MOCK_PROCESSOR_REVISION,
+        layers=tuple(PRIMARY_BAND),
+        lens_checksum="sha256:mock",
+        manifest_checksum="sha256:mock",
+        split_id="mock",
+        intervention_config=coordinate_swap_fingerprint(
+            _swap_spec(payload),
+            alphas=(1.0,),
+            controls=("coordinate_swap",),
+            prompt_protocol=payload,
+        ),
+    )
+
+
+def test_a_changed_prompt_protocol_refuses_an_incompatible_resume(backend, tmp_path):
+    """The digest gate is what makes these fields binding rather than decorative."""
+    original = _swap_run_fingerprint(backend, ("bird", "cat"))
+    store = UnitStore(tmp_path / "run", original)
+    assert store.open() == "starting"
+    store.save("metric", "probe", {"value": 1})
+    assert UnitStore(tmp_path / "run", original).open() == "resuming"
+
+    for label, changed in (
+        ("candidate set", _swap_run_fingerprint(backend, ("bird", "cat", "dog"))),
+        (
+            "question template",
+            _swap_run_fingerprint(
+                backend,
+                ("bird", "cat"),
+                question="Which animal does the evidence show? Answer:",
+            ),
+        ),
+    ):
+        with pytest.raises(IncompatibleStateError, match="different configuration"):
+            UnitStore(tmp_path / "run", changed).open()
+        assert changed.digest != original.digest, label
+
+    # And reordering the same set still resumes: it is the same measurement.
+    assert (
+        UnitStore(tmp_path / "run", _swap_run_fingerprint(backend, ("cat", "bird"))).open()
+        == "resuming"
+    )
 
 
 # ------------------------------------------------- 9. claim admissibility
