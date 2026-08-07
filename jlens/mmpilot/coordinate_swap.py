@@ -94,6 +94,20 @@ own dtype and device, so the model never sees float64.
   ``sigma(c)``. The paper's "double strength" swap is this case. It must be
   labelled as extrapolation in every artifact, never as "a stronger swap".
 
+The prompt this is measured through
+===================================
+
+The completed steering study asked *"which one of these is present: bird, cat,
+giraffe, microwave, toilet, zebra?"* — a valid question, and one that puts every
+candidate, including what would be a swap target, into the model's own input.
+The primary coordinate-swap study may not be asked that way: identity
+replacement means the model produces a concept it was never shown. So the
+primary protocol is an **open prompt** built by
+:mod:`jlens.mmpilot.prompt_protocol`, with the candidate answers supplied only
+to the external teacher-forced scorer, and
+:func:`assert_open_prompt_protocol` refuses any other configuration. The
+candidate-listed prompt remains available as a labelled comparison condition.
+
 An involution, and what that costs a layer band
 ===============================================
 
@@ -149,6 +163,17 @@ SOLVE_POLICY = (
     "torch.linalg.solve; rank and condition number are measured from "
     "torch.linalg.svdvals(V) before the solve and a failing pair is refused, "
     "never regularized"
+)
+
+#: Prompt protocols the **primary** coordinate-swap study may run under. The
+#: swap target must be absent from everything the model can see, which a prompt
+#: that enumerates every candidate cannot promise. The legacy candidate-listed
+#: protocol is admissible only as a labelled comparison condition, never as the
+#: primary claim. See :mod:`jlens.mmpilot.prompt_protocol`.
+PRIMARY_PROMPT_PROTOCOLS: tuple[str, ...] = (
+    "mmpilot.open_identification.v1",
+    "mmpilot.open_downstream_property.v1",
+    "mmpilot.hidden_intermediate.v1",
 )
 
 #: The rule that keeps teacher-forced candidate tokens out of every patch.
@@ -1195,6 +1220,12 @@ class CoordinateSwapSpec:
     prompt_boundary_rule: str = PROMPT_BOUNDARY_RULE
     stability: dict = field(default_factory=lambda: DEFAULT_STABILITY.to_dict())
     audio_protocol_fingerprint: str | None = None
+    #: The prompt protocol the behavioral readout was asked under, and the
+    #: digest of its full fingerprint. ``None`` on a spec built before a prompt
+    #: was bound — which the primary study refuses (see
+    #: :func:`assert_open_prompt_protocol`).
+    prompt_protocol_version: str | None = None
+    prompt_protocol_digest: str | None = None
 
     def to_dict(self) -> dict:
         payload = asdict(self)
@@ -1219,8 +1250,17 @@ def build_spec(
     processor_revision: str,
     policy: StabilityPolicy = DEFAULT_STABILITY,
     audio_protocol_fingerprint: str | None = None,
+    prompt_protocol: Mapping | None = None,
 ) -> CoordinateSwapSpec:
-    """Assemble a spec, validating the parts that have a fixed vocabulary."""
+    """Assemble a spec, validating the parts that have a fixed vocabulary.
+
+    Args:
+        prompt_protocol: The record from
+            :func:`jlens.mmpilot.prompt_protocol.prompt_protocol_fingerprint`.
+            Its version and digest are carried into the spec so that *what was
+            asked* is bound to *what was patched*. Optional here and **required**
+            by :func:`assert_open_prompt_protocol` for the primary study.
+    """
     if position_rule not in POSITION_RULES:
         raise CoordinateSwapError(
             f"unknown position rule {position_rule!r}; known: {POSITION_RULES}"
@@ -1257,6 +1297,12 @@ def build_spec(
         processor_revision=str(processor_revision),
         stability=policy.to_dict(),
         audio_protocol_fingerprint=audio_protocol_fingerprint,
+        prompt_protocol_version=(
+            None if prompt_protocol is None else str(prompt_protocol["prompt_protocol_version"])
+        ),
+        prompt_protocol_digest=(
+            None if prompt_protocol is None else str(prompt_protocol["prompt_protocol_digest"])
+        ),
     )
 
 
@@ -1269,6 +1315,7 @@ def coordinate_swap_fingerprint(
     alphas: Sequence[float],
     controls: Sequence[str],
     control_config: Mapping | None = None,
+    prompt_protocol: Mapping | None = None,
 ) -> dict:
     """The ``intervention_config`` a coordinate-swap run binds its artifacts to.
 
@@ -1309,8 +1356,73 @@ def coordinate_swap_fingerprint(
         "audio_protocol_fingerprint": spec.audio_protocol_fingerprint,
         "controls": sorted(controls),
         "control_config": dict(control_config or {}),
+        # What the model was asked, bound beside what was patched. A run that
+        # scored a different candidate set, or asked under a different protocol,
+        # is not the same measurement and must not resume from this directory.
+        "prompt_protocol": dict(prompt_protocol) if prompt_protocol else None,
+        "prompt_protocol_version": spec.prompt_protocol_version,
+        "prompt_protocol_digest": spec.prompt_protocol_digest,
         "spec_digest": spec.digest,
     }
+
+
+def assert_open_prompt_protocol(
+    prompt_protocol: Mapping | None,
+    *,
+    allowed: Sequence[str] = PRIMARY_PROMPT_PROTOCOLS,
+) -> dict:
+    """Refuse a primary coordinate-swap study asked under a candidate-listed prompt.
+
+    The paper's identity-replacement and downstream-property experiments turn on
+    the swap **target** being absent from everything the model can see. A prompt
+    that enumerates every candidate introduces the target itself, so the strongest
+    thing such a run could support is a candidate-conditioned claim — which is
+    what the completed steering study already established and is not what this
+    method is for.
+
+    Args:
+        prompt_protocol: The record from
+            :func:`jlens.mmpilot.prompt_protocol.prompt_protocol_fingerprint`.
+        allowed: The admissible protocol identifiers.
+
+    Returns:
+        The record, unchanged, when it is admissible.
+
+    Raises:
+        CoordinateSwapError: If no prompt protocol is bound, if it is not one of
+            ``allowed``, if its candidates were rendered into the prompt, or if
+            its registered leakage audit did not pass. Every one of those is a
+            refusal rather than a warning: there is no configuration in which the
+            primary study proceeds without them.
+    """
+    if not prompt_protocol:
+        raise CoordinateSwapError(
+            "the primary coordinate-swap study requires a bound prompt protocol. "
+            "Build the prompt with jlens.mmpilot.prompt_protocol and pass its "
+            "prompt_protocol_fingerprint; an unrecorded prompt cannot be shown "
+            "to have kept the swap target out of the model's input."
+        )
+    version = prompt_protocol.get("prompt_protocol_version")
+    if version not in tuple(allowed):
+        raise CoordinateSwapError(
+            f"prompt protocol {version!r} is not admissible for the primary "
+            f"coordinate-swap study; admissible: {tuple(allowed)}. A "
+            "candidate-listed prompt names the swap target, so a swap run under "
+            "it could support only a candidate-conditioned claim. Run it as a "
+            "labelled comparison condition if you want it, never as the primary."
+        )
+    if prompt_protocol.get("candidates_in_prompt"):
+        raise CoordinateSwapError(
+            f"prompt protocol {version!r} recorded candidates_in_prompt=True; the "
+            "candidates must be external to the model's prompt"
+        )
+    if not prompt_protocol.get("leakage_audit_passed"):
+        raise CoordinateSwapError(
+            f"the registered leakage audit did not pass for prompt protocol "
+            f"{version!r}; refusing to run the primary study on a prompt whose "
+            "target-absence could not be established"
+        )
+    return dict(prompt_protocol)
 
 
 def assert_coordinate_swap_artifacts(stored: Mapping | None) -> None:
