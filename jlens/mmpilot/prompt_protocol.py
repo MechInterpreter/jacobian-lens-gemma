@@ -625,8 +625,12 @@ def audit_prompt_leakage(
 
     reference_forms: list[str] = []
     if media_reference:
-        stem = str(media_reference).replace("\\", "/").rsplit("/", 1)[-1]
-        reference_forms = [form for form in {stem, stem.rsplit(".", 1)[0]} if form]
+        basename = str(media_reference).replace("\\", "/").rsplit("/", 1)[-1]
+        # Ordered dedup, not a set: this list decides the order of the recorded
+        # matches, and a set's iteration order varies with PYTHONHASHSEED.
+        reference_forms = list(
+            dict.fromkeys(form for form in (basename, basename.rsplit(".", 1)[0]) if form)
+        )
     findings["semantic_filename_exposure"] = _finding(
         "semantic_filename_exposure",
         policy["semantic_filename_exposure"],

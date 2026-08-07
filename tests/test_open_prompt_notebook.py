@@ -295,3 +295,49 @@ def test_flipping_the_switch_refuses_instead_of_running_anything():
     assert payload["ok"] is False
     assert "NotImplementedError" in payload["error"]
     assert "does not exist yet" in payload["error"]
+
+
+# ------------------------------------------------------------ the schematic
+
+SCHEMATIC_SVG = REPO_ROOT / "docs" / "assets" / "intervention_methods.svg"
+SCHEMATIC_PNG = REPO_ROOT / "docs" / "assets" / "intervention_methods.png"
+
+
+def test_the_schematic_draws_how_the_model_is_asked():
+    svg = SCHEMATIC_SVG.read_text(encoding="utf-8")
+    assert SCHEMATIC_PNG.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+
+    # The completed side: the prompt it actually used, and the claim it carries.
+    for statement in (
+        "COMPLETED — candidate-listed identification",
+        "mmpilot.candidate_listed_identification.v1",
+        "bird, cat, giraffe, microwave, toilet, zebra?",
+        "every candidate concept is inside the model's own input",
+        "not disclose which candidate is correct",
+        "Supports: candidate-conditioned cross-modal causal steering.",
+        "Does not establish spontaneous, unprompted concept emergence",
+        "may prime their J-space representations",
+    ):
+        assert statement in svg, statement
+
+    # The planned side: the open prompts, and the boundary the scorer sits on.
+    for statement in (
+        "PLANNED — open prompt, candidates external to the model",
+        "mmpilot.open_identification.v1 / open_downstream_property.v1",
+        "What animal is present in the evidence?",
+        "How many legs does the animal typically have?",
+        "no candidate list anywhere in the model-visible prompt",
+        "candidates go only to the external teacher-forced scorer",
+        "the swap target appears in no visible prompt and no transcript",
+        "coordinate exchange (method B)",
+        "separate conditions with separate claims",
+    ):
+        assert statement in svg, statement
+
+
+def test_the_schematic_does_not_imply_the_open_experiments_have_succeeded():
+    svg = SCHEMATIC_SVG.read_text(encoding="utf-8")
+    assert "Not yet run. No result exists under any open protocol." in svg
+    assert "No result under method B, and no result under any open protocol, exists yet." in svg
+    assert "A hidden-intermediate test is a later, stronger stage" in svg
+    assert "It is not designed yet." in svg
