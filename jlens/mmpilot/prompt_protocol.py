@@ -26,7 +26,7 @@ but not the swap target. This module is what lets the planned coordinate-swap
 study ask that way: **the question and the scored candidates are separate
 objects**, and only the question is ever built into a prompt.
 
-Four protocols, and the difference between them is a claim boundary
+Five protocols, and the difference between them is a claim boundary
 ==================================================================
 
 ``mmpilot.candidate_listed_identification.v1``
@@ -36,19 +36,23 @@ Four protocols, and the difference between them is a claim boundary
     (:data:`LEGACY_CAPABILITY_PROMPT_PROTOCOL`) are frozen — completed runs
     resume unchanged.
 
-``mmpilot.open_identification.v1``
+``mmpilot.open_animal_identification.v1``
     No candidate list in the instruction. The source identity may occur
     naturally in written evidence, and that is *recorded* rather than hidden.
     The swap target must not occur anywhere the model can see, and for spoken
     audio must not occur in the offline transcript either.
 
-``mmpilot.open_downstream_property.v1``
+``mmpilot.open_entity_identification.v1``
+    A domain-neutral identification question. It accepts mixed object classes
+    and supports no property or multi-hop claim.
+
+``mmpilot.open_animal_legs.v1``
     Every open-identification rule, plus: no entity candidates and no answer
     choices in the question, and the target's property answer must not appear in
     the model-visible prompt. Whether the *source's* property answer occurs
     naturally is recorded.
 
-``mmpilot.hidden_intermediate.v1``
+``mmpilot.hidden_animal_legs.v1``
     Neither entity label nor any registered alias may appear in any
     model-visible text, and for spoken audio neither may appear in the offline
     transcript. The entity has to be inferred from a description. This is the
@@ -56,8 +60,8 @@ Four protocols, and the difference between them is a claim boundary
     outright rather than silently downgraded when the audit cannot clear it.
 
 An open prompt is **not** hidden-intermediate reasoning merely because the
-candidate list is absent. ``open_identification`` still lets the source appear
-in the evidence; ``hidden_intermediate`` does not.
+candidate list is absent. ``open_animal_identification`` still lets the source
+appear in the evidence; ``hidden_animal_legs`` does not.
 
 The leakage audit is deterministic
 ==================================
@@ -158,6 +162,19 @@ PROPERTY_SCHEMAS: tuple[str, ...] = (PROPERTY_LEG_COUNT,)
 #: How concepts are chosen for the first real animal-only study.
 ANIMAL_CONCEPT_SELECTION_VERSION = "mmpilot.animal_concept_selection.v1"
 
+#: How a property study turns the pre-model animal pool into directed swaps.
+#: Kept separate from concept selection because identity replacement does not
+#: require a property contrast, while downstream recomputation does.
+PROPERTY_CONTRAST_PAIR_SELECTION_VERSION = (
+    "mmpilot.property_contrast_pair_selection.v1"
+)
+
+#: Applying a later capability gate may exclude a predeclared pair, but may
+#: never replace it with a pair chosen after model behavior is known.
+PROPERTY_PAIR_CAPABILITY_FILTER_VERSION = (
+    "mmpilot.property_pair_capability_filter.v1"
+)
+
 #: The string completed runs recorded as ``prompt_protocol`` /
 #: ``capability_protocol``. **Re-exported, never redefined** — it is imported
 #: from the module that owns it, because changing it would change
@@ -166,7 +183,7 @@ ANIMAL_CONCEPT_SELECTION_VERSION = "mmpilot.animal_concept_selection.v1"
 LEGACY_CAPABILITY_PROMPT_PROTOCOL = PROMPT_PROTOCOL_VERSION
 
 AUDIT_VERSION = "jlens.mmpilot.prompt_leakage_audit.v1"
-CLAIM_RULE_VERSION = "mmpilot.prompt_protocol_claim_admissibility.v1"
+CLAIM_RULE_VERSION = "mmpilot.prompt_protocol_claim_admissibility.v2"
 
 #: What the external scorer does, named so a fingerprint binds it.
 CANDIDATE_SCORING_VERSION = (
@@ -214,6 +231,10 @@ class PropertyAnswerError(PromptProtocolError):
     Unregistered and ambiguous are both refusals. A leg count guessed at
     scoring time would silently decide the experiment's ground truth.
     """
+
+
+class PropertyContrastError(PropertyAnswerError):
+    """A source-target pair cannot change the registered downstream answer."""
 
 
 # ------------------------------------------------------------------ questions
@@ -604,6 +625,66 @@ def leg_count_surfaces(count: int) -> tuple[str, ...]:
             "would have nothing to score and the audit nothing to refuse"
         )
     return surfaces
+
+
+def assert_property_contrast(
+    source: str,
+    target: str,
+    *,
+    registry: Mapping[str, Sequence[int]] | None = None,
+) -> dict:
+    """Require a source-target pair whose registered leg counts differ.
+
+    Equal-property pairs remain valid for identity-only protocols. They are
+    refused here because a downstream legs experiment cannot distinguish
+    recomputation when both counterfactual worlds have the same answer.
+    """
+    source_count = resolve_leg_count(source, registry=registry)
+    target_count = resolve_leg_count(target, registry=registry)
+    if source_count == target_count:
+        raise PropertyContrastError(
+            f"{source!r} -> {target!r} cannot test leg-count recomputation: "
+            f"both have the registered answer {source_count}. The pair may be "
+            "used for identity replacement only; choose a predeclared target "
+            "with a different registered leg count for the property study."
+        )
+    payload = {
+        "property_schema": PROPERTY_LEG_COUNT,
+        "source": str(source),
+        "target": str(target),
+        "source_value": int(source_count),
+        "target_value": int(target_count),
+        "different": True,
+        "rule": "source registered property value must differ from target",
+        "property_registry_checksum": property_registry_checksum(registry),
+    }
+    return {**payload, "contrast_checksum": payload_checksum(payload)}
+
+
+def identity_pair_property_status(
+    source: str,
+    target: str,
+    *,
+    registry: Mapping[str, Sequence[int]] | None = None,
+) -> dict:
+    """Record, without refusing, whether an identity pair supports legs work."""
+    source_count = resolve_leg_count(source, registry=registry)
+    target_count = resolve_leg_count(target, registry=registry)
+    different = source_count != target_count
+    return {
+        "source": str(source),
+        "target": str(target),
+        "source_property_value": source_count,
+        "target_property_value": target_count,
+        "downstream_property_admissible": different,
+        "reason": (
+            None
+            if different
+            else "source and target share the same registered leg count"
+        ),
+        "property_schema": PROPERTY_LEG_COUNT,
+        "property_registry_checksum": property_registry_checksum(registry),
+    }
 
 
 # ----------------------------------------------------------- the domain gate
@@ -1226,6 +1307,9 @@ class BuiltPrompt:
     property_answers: dict
     task_domain: dict
     property_schema: str | None = None
+    #: The pre-model fact that the source and target imply different property
+    #: answers. Required for property protocols; absent for identity-only work.
+    property_contrast: dict | None = None
     #: Checksum of the property-answer registry **actually used**, not of the
     #: module default — a run scored against a corrected registry is a different
     #: measurement even when the prompt is byte-identical.
@@ -1282,6 +1366,9 @@ class BuiltPrompt:
             "property_answers": dict(self.property_answers),
             "task_domain": dict(self.task_domain),
             "property_schema": self.property_schema,
+            "property_contrast": (
+                dict(self.property_contrast) if self.property_contrast else None
+            ),
             "property_registry_checksum": self.property_registry_checksum,
             "media_checksum": self.media_checksum,
             "transcript_hash": self.transcript_hash,
@@ -1414,6 +1501,7 @@ def build_protocol_prompt(
             question = DEFAULT_QUESTIONS[protocol]
 
     property_schema = PROTOCOL_PROPERTY_SCHEMA[protocol]
+    property_contrast = None
     if property_schema is not None:
         if source is None or target is None:
             raise PromptProtocolError(
@@ -1421,6 +1509,9 @@ def build_protocol_prompt(
                 "so both concepts must be named. Without them there is no ground "
                 "truth to score against and nothing for the audit to refuse."
             )
+        property_contrast = assert_property_contrast(
+            source.name, target.name, registry=leg_counts
+        )
         if property_answers is None:
             # Derived, never guessed: resolve_leg_count refuses an unregistered
             # or ambiguous concept rather than inventing its ground truth.
@@ -1523,6 +1614,7 @@ def build_protocol_prompt(
         },
         task_domain=domain_record,
         property_schema=property_schema,
+        property_contrast=property_contrast,
         property_registry_checksum=(
             property_registry_checksum(leg_counts, schema=property_schema)
             if property_schema
@@ -1639,6 +1731,9 @@ def prompt_protocol_fingerprint(
         "concept_domains": dict(domain.get("resolved") or {}),
         "domain_registry_checksum": domain.get("registry_checksum"),
         "property_schema": built.property_schema,
+        "property_contrast": (
+            dict(built.property_contrast) if built.property_contrast else None
+        ),
         "property_registry_checksum": built.property_registry_checksum,
         "question_template": built.question,
         "question_hash": built.question_hash,
@@ -1716,6 +1811,7 @@ def protocol_claim_admissibility(
     leakage: Mapping | None,
     mode: str,
     task_domain: Mapping | None = None,
+    property_contrast: Mapping | None = None,
     identity_replacement_passed: bool | None = None,
     direct_answer_control_passed: bool | None = None,
     direct_answer_onset_control_passed: bool | None = None,
@@ -1736,6 +1832,9 @@ def protocol_claim_admissibility(
             ``BuiltPrompt.task_domain``. Required for a domain-restricted
             protocol: a claim that says "animal" must be able to show that
             every identity in play was one.
+        property_contrast: The record from :func:`assert_property_contrast`.
+            Required by both legs protocols; an equal-property or unrecorded
+            pair cannot support downstream recomputation.
         identity_replacement_passed: Whether the identity condition actually
             replaced the identity. Required by :data:`OPEN_ANIMAL_LEGS`.
         direct_answer_control_passed: Whether inserting the answer's own lens
@@ -1804,6 +1903,14 @@ def protocol_claim_admissibility(
                 )
 
     if protocol == OPEN_ANIMAL_LEGS:
+        contrast = dict(property_contrast or {})
+        requirements["property_contrast"] = contrast
+        if not contrast.get("different"):
+            reasons.append(
+                "downstream recomputation requires a recorded source-target "
+                "property contrast; equal or unspecified leg counts cannot "
+                "produce a counterfactual answer change"
+            )
         requirements["identity_replacement_passed"] = identity_replacement_passed
         requirements["direct_answer_control_passed"] = direct_answer_control_passed
         if not identity_replacement_passed:
@@ -1819,6 +1926,19 @@ def protocol_claim_admissibility(
                 "a shortcut rather than recomputation"
             )
     if protocol == HIDDEN_ANIMAL_LEGS:
+        contrast = dict(property_contrast or {})
+        requirements["property_contrast"] = contrast
+        if not contrast.get("different"):
+            reasons.append(
+                "multi-hop recomputation requires a recorded source-target "
+                "property contrast"
+            )
+        requirements["identity_replacement_passed"] = identity_replacement_passed
+        if not identity_replacement_passed:
+            reasons.append(
+                "multi-hop recomputation requires the matched identity "
+                "condition to replace the inferred entity"
+            )
         requirements["direct_answer_onset_control_passed"] = (
             direct_answer_onset_control_passed
         )
@@ -1835,7 +1955,7 @@ def protocol_claim_admissibility(
 
     admissible = not reasons
     return {
-        "schema": "jlens.mmpilot.prompt_protocol_claim_admissibility.v1",
+        "schema": "jlens.mmpilot.prompt_protocol_claim_admissibility.v2",
         "rule_version": CLAIM_RULE_VERSION,
         "protocol": protocol,
         "mode": mode,
@@ -1874,11 +1994,12 @@ def claim_admissibility_rule_record() -> dict:
             "identification over whatever categories it scored, and never a "
             "property or multi-hop claim.",
             "An open_animal_legs result supports leg-count recomputation only "
-            "when identity replacement also succeeds and the direct-answer "
-            "controls pass.",
+            "for a predeclared unequal-property pair, when identity replacement "
+            "also succeeds and the direct-answer controls pass.",
             "A hidden_animal_legs result supports multi-hop reasoning only when "
             "both entity names are absent under the registered deterministic "
-            "audit and the direct-answer onset control passes.",
+            "audit, the pair has unequal property values, identity replacement "
+            "succeeds, and the direct-answer onset control passes.",
             "A domain-restricted protocol's claim is inadmissible without a "
             "task-domain record showing the restriction held.",
             "No MOCK result supports any scientific claim.",
@@ -2036,6 +2157,144 @@ def select_animal_concepts(
     return {**payload, "selection_checksum": payload_checksum(payload)}
 
 
+def select_property_contrast_pairs(
+    animal_selection: Mapping,
+    *,
+    n_undirected_pairs: int = 1,
+    leg_counts: Mapping[str, Sequence[int]] | None = None,
+) -> dict:
+    """Predeclare directed unequal-property swaps from an animal pool.
+
+    The input order is the dataset ranking. Unordered pairs are ranked by the
+    later member's rank and then the earlier member's rank; each selected pair
+    is emitted in both directions, adjacent and in ranking order. No model
+    result participates. An unrelated control is the first ranked surviving
+    animal outside the pair and is recorded, never optimized after outcomes.
+    """
+    if int(n_undirected_pairs) < 1:
+        raise PromptProtocolError("n_undirected_pairs must be at least 1")
+    if animal_selection.get("selection_version") != ANIMAL_CONCEPT_SELECTION_VERSION:
+        raise PromptProtocolError(
+            "property-pair selection requires the versioned pre-model animal "
+            "selection record, not an untracked concept list"
+        )
+    concepts = [
+        str(name) for name in animal_selection.get("animal_concepts") or ()
+    ]
+    if len(concepts) < 3:
+        raise PromptProtocolError(
+            "a property-contrast pair needs source, target, and a distinct "
+            "external unrelated control"
+        )
+    counts = {
+        name: resolve_leg_count(name, registry=leg_counts) for name in concepts
+    }
+    unordered: list[tuple[int, int]] = []
+    for target_rank in range(1, len(concepts)):
+        for source_rank in range(target_rank):
+            if counts[concepts[source_rank]] != counts[concepts[target_rank]]:
+                unordered.append((source_rank, target_rank))
+    if len(unordered) < int(n_undirected_pairs):
+        observed = ", ".join(f"{name}={counts[name]}" for name in concepts)
+        raise PropertyContrastError(
+            f"only {len(unordered)} unequal-leg-count pair(s) exist in the "
+            f"predeclared animal pool, but {n_undirected_pairs} were requested "
+            f"({observed}). Do not manufacture property diversity; select a "
+            "different registered property or widen the pre-model pool."
+        )
+
+    directed: list[dict] = []
+    for left_rank, right_rank in unordered[: int(n_undirected_pairs)]:
+        left, right = concepts[left_rank], concepts[right_rank]
+        control = next(name for name in concepts if name not in (left, right))
+        control_count = counts[control]
+        for source, target in ((left, right), (right, left)):
+            contrast = assert_property_contrast(source, target, registry=leg_counts)
+            if control_count == contrast["source_value"]:
+                relation = "matches_source"
+            elif control_count == contrast["target_value"]:
+                relation = "matches_target"
+            else:
+                relation = "matches_neither"
+            directed.append(
+                {
+                    "source": source,
+                    "target": target,
+                    "source_rank": concepts.index(source),
+                    "target_rank": concepts.index(target),
+                    "source_property_value": contrast["source_value"],
+                    "target_property_value": contrast["target_value"],
+                    "property_contrast_checksum": contrast["contrast_checksum"],
+                    "downstream_property_admissible": True,
+                    "unrelated_control": control,
+                    "unrelated_control_property_value": control_count,
+                    "unrelated_control_relation": relation,
+                }
+            )
+
+    payload = {
+        "pair_selection_version": PROPERTY_CONTRAST_PAIR_SELECTION_VERSION,
+        "animal_selection_checksum": animal_selection.get("selection_checksum"),
+        "property_schema": PROPERTY_LEG_COUNT,
+        "property_contrast_rule": (
+            "source and target must have distinct unique registered values; "
+            "unordered pairs follow dataset ranking and both directions are "
+            "emitted before moving to the next pair"
+        ),
+        "n_undirected_pairs": int(n_undirected_pairs),
+        "ranked_animal_pool": concepts,
+        "ordered_directed_pairs": directed,
+        "property_registry_checksum": property_registry_checksum(leg_counts),
+        "control_rule": (
+            "first ranked animal outside the source-target pair; fixed before "
+            "capability or intervention results"
+        ),
+    }
+    return {**payload, "pair_selection_checksum": payload_checksum(payload)}
+
+
+def capability_filter_property_pairs(
+    pair_selection: Mapping,
+    *,
+    eligible_concepts: Sequence[str],
+) -> dict:
+    """Exclude failed predeclared pairs without selecting replacements."""
+    if pair_selection.get("pair_selection_version") != (
+        PROPERTY_CONTRAST_PAIR_SELECTION_VERSION
+    ):
+        raise PromptProtocolError("unversioned property-pair selection record")
+    eligible = {str(name) for name in eligible_concepts}
+    rows: list[dict] = []
+    for original in pair_selection.get("ordered_directed_pairs") or ():
+        row = dict(original)
+        required = (row["source"], row["target"], row["unrelated_control"])
+        failed = [name for name in required if name not in eligible]
+        row["capability_eligible"] = not failed
+        row["capability_rejection_reason"] = (
+            None
+            if not failed
+            else "predeclared concept(s) failed capability: " + ", ".join(failed)
+        )
+        rows.append(row)
+    payload = {
+        "filter_version": PROPERTY_PAIR_CAPABILITY_FILTER_VERSION,
+        "pair_selection_checksum": pair_selection.get("pair_selection_checksum"),
+        "eligible_concepts": sorted(eligible),
+        "pairs": rows,
+        "eligible_pairs": [
+            {"source": row["source"], "target": row["target"]}
+            for row in rows
+            if row["capability_eligible"]
+        ],
+        "replacement_forbidden": True,
+        "rule": (
+            "capability may exclude a predeclared pair but never replace or "
+            "reorder it"
+        ),
+    }
+    return {**payload, "filter_checksum": payload_checksum(payload)}
+
+
 __all__ = [
     "ANIMAL_CONCEPT_SELECTION_VERSION",
     "ANIMAL_LEG_COUNTS",
@@ -2072,6 +2331,8 @@ __all__ = [
     "OPEN_PROTOCOLS",
     "OPEN_TEXT_EVIDENCE_TEMPLATE",
     "POST_MODEL_ROW_FIELDS",
+    "PROPERTY_CONTRAST_PAIR_SELECTION_VERSION",
+    "PROPERTY_PAIR_CAPABILITY_FILTER_VERSION",
     "PROPERTY_LEG_COUNT",
     "PROPERTY_PROTOCOLS",
     "PROPERTY_SCHEMAS",
@@ -2087,20 +2348,24 @@ __all__ = [
     "PromptLeakageError",
     "PromptProtocolError",
     "PropertyAnswerError",
+    "PropertyContrastError",
     "TaskDomainError",
     "aliases_checksum",
     "assert_prompt_leakage_clean",
+    "assert_property_contrast",
     "assert_task_domain",
     "audit_prompt_leakage",
     "backend_input_kwargs",
     "build_backend_inputs",
     "build_protocol_prompt",
+    "capability_filter_property_pairs",
     "claim_admissibility_rule_record",
     "concept_spec",
     "contains_surface",
     "domain_registry_checksum",
     "domain_registry_from_universe",
     "leg_count_surfaces",
+    "identity_pair_property_status",
     "looks_like_candidate_enumeration",
     "normalize",
     "prompt_protocol_fingerprint",
@@ -2108,4 +2373,5 @@ __all__ = [
     "protocol_claim_admissibility",
     "resolve_leg_count",
     "select_animal_concepts",
+    "select_property_contrast_pairs",
 ]

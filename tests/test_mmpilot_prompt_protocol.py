@@ -57,6 +57,7 @@ from jlens.mmpilot.prompt_protocol import (
     OPEN_ANIMAL_LEGS,
     OPEN_ENTITY_IDENTIFICATION,
     OPEN_ENTITY_IDENTIFICATION_QUESTION,
+    PROPERTY_CONTRAST_PAIR_SELECTION_VERSION,
     PROPERTY_LEG_COUNT,
     RETIRED_PROTOCOLS,
     BuiltPrompt,
@@ -65,23 +66,33 @@ from jlens.mmpilot.prompt_protocol import (
     PromptLeakageError,
     PromptProtocolError,
     PropertyAnswerError,
+    PropertyContrastError,
     TaskDomainError,
+    assert_property_contrast,
     assert_task_domain,
     audit_prompt_leakage,
     backend_input_kwargs,
     build_backend_inputs,
     build_protocol_prompt,
+    capability_filter_property_pairs,
     claim_admissibility_rule_record,
     concept_spec,
     domain_registry_checksum,
+    identity_pair_property_status,
     normalize,
     prompt_protocol_fingerprint,
     property_registry_checksum,
     protocol_claim_admissibility,
     resolve_leg_count,
     select_animal_concepts,
+    select_property_contrast_pairs,
 )
-from jlens.mmpilot.store import IncompatibleStateError, RunFingerprint, UnitStore
+from jlens.mmpilot.store import (
+    IncompatibleStateError,
+    RunFingerprint,
+    UnitStore,
+    payload_checksum,
+)
 
 LEGACY_CONCEPTS = ["bird", "cat", "giraffe", "microwave", "toilet", "zebra"]
 
@@ -397,6 +408,40 @@ def test_property_answers_are_derived_from_the_registry_not_guessed():
             target=CAT,
             property_answers={},
         )
+
+
+def test_equal_leg_count_pair_is_identity_only_and_refused_for_recomputation():
+    zebra = concept_spec("zebra")
+    status = identity_pair_property_status("zebra", "cat")
+    assert status["downstream_property_admissible"] is False
+    assert status["reason"] == "source and target share the same registered leg count"
+
+    # Identity replacement remains meaningful.
+    identity = build_protocol_prompt(
+        protocol=OPEN_ANIMAL_IDENTIFICATION,
+        evidence=Evidence(modality="image", media="<pixels>"),
+        external_candidates=("zebra", "cat"),
+        source=zebra,
+        target=CAT,
+    )
+    assert identity.protocol == OPEN_ANIMAL_IDENTIFICATION
+
+    # Property recomputation does not: both counterfactual answers are four.
+    with pytest.raises(PropertyContrastError, match="both have the registered answer 4"):
+        build_protocol_prompt(
+            protocol=OPEN_ANIMAL_LEGS,
+            evidence=Evidence(modality="image", media="<pixels>"),
+            external_candidates=("two", "four"),
+            source=zebra,
+            target=CAT,
+        )
+
+
+@pytest.mark.parametrize(("source", "target"), (("bird", "cat"), ("cat", "bird")))
+def test_unequal_leg_count_pairs_are_admissible_for_recomputation(source, target):
+    contrast = assert_property_contrast(source, target)
+    assert contrast["different"] is True
+    assert {contrast["source_value"], contrast["target_value"]} == {2, 4}
 
 
 # ------------------------------------------------- 4. the hidden intermediate
@@ -1015,6 +1060,7 @@ def test_downstream_recomputation_needs_identity_replacement_and_the_controls():
             protocol=OPEN_ANIMAL_LEGS,
             leakage=leakage,
             task_domain=_animal_domain(OPEN_ANIMAL_LEGS, external_candidates=()),
+            property_contrast=assert_property_contrast("bird", "cat"),
             mode="real",
             identity_replacement_passed=True,
             direct_answer_control_passed=True,
@@ -1030,6 +1076,7 @@ def test_downstream_recomputation_needs_identity_replacement_and_the_controls():
             protocol=OPEN_ANIMAL_LEGS,
             leakage=leakage,
             task_domain=_animal_domain(OPEN_ANIMAL_LEGS, external_candidates=()),
+            property_contrast=assert_property_contrast("bird", "cat"),
             mode="real",
             **kwargs
         )
@@ -1043,7 +1090,9 @@ def test_multi_hop_reasoning_needs_both_names_absent_and_the_onset_control():
             protocol=HIDDEN_ANIMAL_LEGS,
             leakage=clean,
             task_domain=_animal_domain(HIDDEN_ANIMAL_LEGS, external_candidates=()),
+            property_contrast=assert_property_contrast("bird", "cat"),
             mode="real",
+            identity_replacement_passed=True,
             direct_answer_onset_control_passed=True,
         )["granted_claim"]
         == "hidden_animal_multi_hop_reasoning"
@@ -1053,7 +1102,9 @@ def test_multi_hop_reasoning_needs_both_names_absent_and_the_onset_control():
             protocol=HIDDEN_ANIMAL_LEGS,
             leakage=clean,
             task_domain=_animal_domain(HIDDEN_ANIMAL_LEGS, external_candidates=()),
+            property_contrast=assert_property_contrast("bird", "cat"),
             mode="real",
+            identity_replacement_passed=True,
             direct_answer_onset_control_passed=False,
         )["admissible"]
         is False
@@ -1068,7 +1119,9 @@ def test_multi_hop_reasoning_needs_both_names_absent_and_the_onset_control():
         protocol=HIDDEN_ANIMAL_LEGS,
         leakage=named,
         task_domain=_animal_domain(HIDDEN_ANIMAL_LEGS, external_candidates=()),
+        property_contrast=assert_property_contrast("bird", "cat"),
         mode="real",
+        identity_replacement_passed=True,
         direct_answer_onset_control_passed=True,
     )
     assert decision["admissible"] is False
@@ -1461,3 +1514,116 @@ def test_the_selection_is_deterministic_and_checksummed():
     # Ranking order is the selection: a different input order is a different set.
     assert second["focal"] == ["zebra", "cat"]
     assert first["selection_checksum"] != second["selection_checksum"]
+
+
+# ------------------------------------- 15. property-contrast pair selection
+
+
+def _animal_selection(names):
+    return select_animal_concepts([_row(name) for name in names], n_focal=2)
+
+
+def test_property_pairs_require_a_counterfactual_answer_change():
+    selection = _animal_selection(["zebra", "cat", "giraffe", "bird", "sheep"])
+    pairs = select_property_contrast_pairs(selection)
+    assert pairs["pair_selection_version"] == PROPERTY_CONTRAST_PAIR_SELECTION_VERSION
+    assert [
+        (row["source"], row["target"])
+        for row in pairs["ordered_directed_pairs"]
+    ] == [("zebra", "bird"), ("bird", "zebra")]
+    assert all(
+        row["source_property_value"] != row["target_property_value"]
+        for row in pairs["ordered_directed_pairs"]
+    )
+    assert all(
+        row["unrelated_control"] == "cat"
+        for row in pairs["ordered_directed_pairs"]
+    )
+
+
+def test_an_all_four_leg_pool_refuses_property_pair_construction():
+    selection = _animal_selection(["zebra", "cat", "giraffe", "sheep"])
+    with pytest.raises(PropertyContrastError, match="0 unequal-leg-count"):
+        select_property_contrast_pairs(selection)
+
+
+def test_pair_selection_follows_pre_model_ranking_and_is_checksummed():
+    first = select_property_contrast_pairs(
+        _animal_selection(["zebra", "cat", "bird", "sheep"])
+    )
+    repeated = select_property_contrast_pairs(
+        _animal_selection(["zebra", "cat", "bird", "sheep"])
+    )
+    reordered = select_property_contrast_pairs(
+        _animal_selection(["bird", "zebra", "cat", "sheep"])
+    )
+    assert first == repeated
+    assert first["pair_selection_checksum"] != reordered["pair_selection_checksum"]
+
+
+def test_capability_excludes_predeclared_pairs_without_replacement():
+    pairs = select_property_contrast_pairs(
+        _animal_selection(["zebra", "cat", "bird", "sheep"])
+    )
+    filtered = capability_filter_property_pairs(
+        pairs, eligible_concepts=("zebra", "cat", "sheep")
+    )
+    assert filtered["eligible_pairs"] == []
+    assert [
+        (row["source"], row["target"])
+        for row in filtered["pairs"]
+    ] == [("zebra", "bird"), ("bird", "zebra")]
+    assert all(row["capability_eligible"] is False for row in filtered["pairs"])
+    assert filtered["replacement_forbidden"] is True
+
+
+def test_pair_selection_changes_the_coordinate_swap_fingerprint():
+    backend = SwapMockBackend()
+    built = build_protocol_prompt(
+        protocol=OPEN_ANIMAL_IDENTIFICATION,
+        evidence=Evidence(modality="image", media="<pixels>"),
+        external_candidates=("bird", "cat", "zebra"),
+        source=BIRD,
+        target=CAT,
+        encode_candidate=backend.encode_candidate,
+        encode_prompt=backend.encode_token,
+    )
+    prompt_fp = prompt_protocol_fingerprint(
+        built,
+        model_revision=MOCK_MODEL_REVISION,
+        processor_revision=MOCK_PROCESSOR_REVISION,
+    )
+    tokens = mock_concept_tokens(backend)
+    spec = build_spec(
+        source=tokens["bird"],
+        target=tokens["cat"],
+        layer_band=PRIMARY_BAND,
+        alpha=1.0,
+        position_rule="all_prompt_positions",
+        control_kind="coordinate_swap",
+        lens_checksums=mock_lens_checksums(PRIMARY_BAND),
+        model_revision=MOCK_MODEL_REVISION,
+        processor_revision=MOCK_PROCESSOR_REVISION,
+        prompt_protocol=prompt_fp,
+    )
+    pair_a = select_property_contrast_pairs(
+        _animal_selection(["zebra", "cat", "bird", "sheep"])
+    )
+    pair_b = select_property_contrast_pairs(
+        _animal_selection(["cat", "zebra", "bird", "sheep"])
+    )
+    fp_a = coordinate_swap_fingerprint(
+        spec,
+        alphas=(0.0, 1.0),
+        controls=("coordinate_swap",),
+        prompt_protocol=prompt_fp,
+        pair_selection=pair_a,
+    )
+    fp_b = coordinate_swap_fingerprint(
+        spec,
+        alphas=(0.0, 1.0),
+        controls=("coordinate_swap",),
+        prompt_protocol=prompt_fp,
+        pair_selection=pair_b,
+    )
+    assert payload_checksum(fp_a) != payload_checksum(fp_b)

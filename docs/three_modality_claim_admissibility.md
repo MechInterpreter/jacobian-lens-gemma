@@ -294,7 +294,7 @@ invariance control addresses **ordering** bias only.
 Consequently the verdict supports **candidate-conditioned cross-modal causal
 steering**, and does **not** establish spontaneous, unprompted concept
 emergence. The rule that states this per protocol is
-`mmpilot.prompt_protocol_claim_admissibility.v1` in
+`mmpilot.prompt_protocol_claim_admissibility.v2` in
 `jlens/mmpilot/prompt_protocol.py`; it is versioned and checksummed
 **separately** from `mmpilot.claim_admissibility.v1`, precisely so that adding
 it cannot change the rule checksum the completed run's amended artifacts are

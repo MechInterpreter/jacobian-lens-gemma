@@ -442,7 +442,7 @@ def test_the_swap_doc_requires_an_open_prompt_for_the_primary_study():
 def test_the_admissibility_doc_separates_the_two_rule_versions():
     text = _flat(ADMISSIBILITY_DOC.read_text(encoding="utf-8"))
     assert "the question was candidate-listed" in text
-    assert "mmpilot.prompt_protocol_claim_admissibility.v1" in text
+    assert "mmpilot.prompt_protocol_claim_admissibility.v2" in text
     # The point of the separation: the completed run's bound checksum is safe.
     assert "separately** from `mmpilot.claim_admissibility.v1`" in text
     assert "cannot change the rule checksum" in text
@@ -540,6 +540,24 @@ def test_the_animal_concept_set_is_predeclared_from_the_ranking(executed):
     # Coverage is never assumed, and the choice never sees a model result.
     assert "Coverage is" in selection["coverage_refusal"]
     assert "post-model field" in selection["post_model_refusal"]
+
+
+def test_property_pairs_are_predeclared_and_have_different_answers(executed):
+    selection = executed["summary"]["property_contrast_pair_selection"]
+    assert selection["pair_selection_version"] == (
+        "mmpilot.property_contrast_pair_selection.v1"
+    )
+    assert [
+        (row["source"], row["target"])
+        for row in selection["ordered_directed_pairs"]
+    ] == [("bird", "cat"), ("cat", "bird")]
+    assert all(
+        row["source_property_value"] != row["target_property_value"]
+        for row in selection["ordered_directed_pairs"]
+    )
+    assert selection["pair_selection_checksum"].startswith("sha256:")
+    assert selection["capability_does_not_replace"] is True
+    assert "0 unequal-leg-count" in selection["all_four_leg_pool_refusal"]
 
 
 def test_the_protocol_doc_specifies_the_task_domains():

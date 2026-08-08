@@ -200,7 +200,7 @@
     <tspan font-weight="bold">The planned bird → cat identity and legs experiment is ANIMAL-ONLY.</tspan> Both of its questions presume an animal, so every source, target and
   </text>
   <text x="52" y="1424" font-size="15" fill="#111827">
-    externally scored identity must carry the predeclared <tspan font-family="DejaVu Sans Mono, Consolas, monospace">animal</tspan> domain, and leg counts come from a registry rather than a guess.
+    externally scored identity must carry the <tspan font-family="DejaVu Sans Mono, Consolas, monospace">animal</tspan> domain; downstream pairs must also have <tspan font-weight="bold">different registered leg counts</tspan> and be fixed pre-model.
   </text>
   <text x="52" y="1452" font-size="15" fill="#111827">
     <tspan font-weight="bold">General object identification is a separate protocol</tspan> — <tspan font-family="DejaVu Sans Mono, Consolas, monospace">mmpilot.open_entity_identification.v1</tspan>, a domain-neutral question that takes a

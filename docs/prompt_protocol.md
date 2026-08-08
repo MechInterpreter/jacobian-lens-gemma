@@ -264,7 +264,7 @@ report, summary and units are read-only and were not touched.
 
 ## 7. Claim admissibility
 
-`mmpilot.prompt_protocol_claim_admissibility.v1`, in
+`mmpilot.prompt_protocol_claim_admissibility.v2`, in
 `protocol_claim_admissibility()`. It decides from **predeclared** facts only —
 which protocol was used, whether the registered audit cleared it, and whether
 named controls passed. It never reads an effect size, and **there is no path by
@@ -396,3 +396,32 @@ Two further guards:
 The result is also *not* the mixed six-concept set, and cannot be: `toilet` and
 `microwave` are dropped at the domain filter with their COCO supercategories
 named in the exclusion record.
+
+---
+
+## 11. Identity candidates are not automatically property pairs
+
+The animal pool and the downstream swap pairs are selected separately. An
+identity replacement such as `zebra → cat` is meaningful even though both
+animals have four legs. It is **not** admissible evidence for leg-count
+recomputation: the clean and counterfactual property answers are identical.
+
+`select_property_contrast_pairs()`
+(`mmpilot.property_contrast_pair_selection.v1`) therefore requires unique,
+registered and unequal source/target leg counts. It consumes the pre-model
+animal selection, preserves its ranking, ranks unordered pairs by their later
+then earlier member, and emits both directed swaps before considering another
+pair. The unrelated control is the first ranked animal outside the pair. All of
+this happens before capability, activation, or intervention results exist.
+
+With the likely SpokenCOCO pool, most animals have four legs and `bird` is the
+only two-leg contrast. The first admissible pair will therefore be the
+highest-ranked four-legged animal paired bidirectionally with `bird`; the code
+records the actual names rather than assuming them. An all-four-leg pool is a
+hard refusal, not a reason to invent diversity.
+
+Capability is applied only after this pair is fixed.
+`capability_filter_property_pairs()` may exclude it, including when its fixed
+unrelated control fails, but cannot replace or reorder it. The pair-selection
+version, directed pairs, property values, control assignment and property
+registry checksum are all fingerprinted.

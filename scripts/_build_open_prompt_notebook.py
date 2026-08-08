@@ -275,9 +275,11 @@ from jlens.mmpilot.prompt_protocol import (
     PromptLeakageError,
     PromptProtocolError,
     PropertyAnswerError,
+    PropertyContrastError,
     TaskDomainError,
     backend_input_kwargs,
     build_protocol_prompt,
+    capability_filter_property_pairs,
     claim_admissibility_rule_record,
     concept_spec,
     normalize,
@@ -285,6 +287,7 @@ from jlens.mmpilot.prompt_protocol import (
     protocol_claim_admissibility,
     resolve_leg_count,
     select_animal_concepts,
+    select_property_contrast_pairs,
 )
 
 BACKEND = SwapMockBackend()
@@ -824,6 +827,62 @@ assert "post-model field" in POST_MODEL_REFUSAL
 
 markdown(
     """
+### Property pairs are selected separately
+
+Identity replacement may compare any two animals. Leg-count recomputation may
+not: its source and target must imply different answers. The directed pair and
+its unrelated control are fixed from the pre-model ranking, then capability may
+exclude the pair but can never replace it.
+"""
+)
+
+code(
+    '''
+# 6g. The first unequal-property pair in ranking order, emitted both ways.
+PROPERTY_PAIRS = select_property_contrast_pairs(ANIMAL_SELECTION)
+print(f"pair rule {PROPERTY_PAIRS['pair_selection_version']}")
+for _pair in PROPERTY_PAIRS["ordered_directed_pairs"]:
+    print(
+        f"  {_pair['source']}({_pair['source_property_value']}) -> "
+        f"{_pair['target']}({_pair['target_property_value']}); "
+        f"control={_pair['unrelated_control']} "
+        f"({_pair['unrelated_control_relation']})"
+    )
+assert [
+    (_row["source"], _row["target"])
+    for _row in PROPERTY_PAIRS["ordered_directed_pairs"]
+] == [("bird", "cat"), ("cat", "bird")]
+
+# Capability failure excludes the fixed pair and never substitutes zebra.
+CAPABILITY_FILTER = capability_filter_property_pairs(
+    PROPERTY_PAIRS, eligible_concepts=("cat", "zebra", "sheep", "cow")
+)
+assert CAPABILITY_FILTER["eligible_pairs"] == []
+assert [
+    (_row["source"], _row["target"])
+    for _row in CAPABILITY_FILTER["pairs"]
+] == [("bird", "cat"), ("cat", "bird")]
+
+# A pool with only four-legged animals cannot support this property study.
+try:
+    select_property_contrast_pairs(
+        select_animal_concepts(
+            [
+                {"concept": "cat", "feasible": True},
+                {"concept": "zebra", "feasible": True},
+                {"concept": "sheep", "feasible": True},
+            ],
+            n_focal=2,
+        )
+    )
+except PropertyContrastError as error:
+    NO_CONTRAST_REFUSAL = str(error).splitlines()[0]
+print(f"all-four-leg pool -> {NO_CONTRAST_REFUSAL[:120]}")
+'''
+)
+
+markdown(
+    """
 ## 7. The transcript is audited and never reaches the model
 
 The spoken-audio condition's whole claim is that the recording is the only
@@ -1152,6 +1211,11 @@ MOCK_CLAIMS = {
         protocol=protocol,
         leakage=leakage,
         mode=MODE,
+        property_contrast=(
+            PROPERTY_PROMPT.property_contrast
+            if protocol == OPEN_ANIMAL_LEGS
+            else None
+        ),
         identity_replacement_passed=True,
         direct_answer_control_passed=True,
         direct_answer_onset_control_passed=True,
@@ -1235,6 +1299,14 @@ SUMMARY = {
         "selection_checksum": ANIMAL_SELECTION["selection_checksum"],
         "coverage_refusal": COVERAGE_REFUSAL,
         "post_model_refusal": POST_MODEL_REFUSAL,
+    },
+    "property_contrast_pair_selection": {
+        "pair_selection_version": PROPERTY_PAIRS["pair_selection_version"],
+        "ordered_directed_pairs": PROPERTY_PAIRS["ordered_directed_pairs"],
+        "pair_selection_checksum": PROPERTY_PAIRS["pair_selection_checksum"],
+        "capability_filter_version": CAPABILITY_FILTER["filter_version"],
+        "capability_does_not_replace": CAPABILITY_FILTER["replacement_forbidden"],
+        "all_four_leg_pool_refusal": NO_CONTRAST_REFUSAL,
     },
     "transcript_reached_backend": TRANSCRIPT_CROSSED,
     "external_scoring": {

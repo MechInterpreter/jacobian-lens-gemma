@@ -213,6 +213,18 @@ transcript — is a **later, stronger stage**. It is not designed yet.
 
 ---
 
+### Property-contrast pairing
+
+The identity candidate pool is not itself the legs-study pair list. Equal-count
+pairs such as `zebra → cat` remain valid identity tests but are marked
+`downstream_property_admissible=false`. The versioned property-pair selector
+requires unequal registered counts, fixes both directed swaps and an unrelated
+control from dataset ranking alone, and fingerprints that record. Capability
+may exclude a fixed pair but never substitute a different one after seeing
+model behavior. In the likely SpokenCOCO animal pool, `bird` is the only
+two-leg contrast among predominantly four-legged animals; that limitation is
+reported rather than hidden.
+
 ## 6. Controls for the future study
 
 | Control | What it rules out |

@@ -1317,6 +1317,7 @@ def coordinate_swap_fingerprint(
     controls: Sequence[str],
     control_config: Mapping | None = None,
     prompt_protocol: Mapping | None = None,
+    pair_selection: Mapping | None = None,
 ) -> dict:
     """The ``intervention_config`` a coordinate-swap run binds its artifacts to.
 
@@ -1363,6 +1364,27 @@ def coordinate_swap_fingerprint(
         "prompt_protocol": dict(prompt_protocol) if prompt_protocol else None,
         "prompt_protocol_version": spec.prompt_protocol_version,
         "prompt_protocol_digest": spec.prompt_protocol_digest,
+        "property_pair_selection": dict(pair_selection) if pair_selection else None,
+        "property_pair_selection_version": (
+            None
+            if pair_selection is None
+            else pair_selection.get("pair_selection_version")
+        ),
+        "ordered_directed_pairs": (
+            []
+            if pair_selection is None
+            else list(pair_selection.get("ordered_directed_pairs") or ())
+        ),
+        "property_contrast_rule": (
+            None
+            if pair_selection is None
+            else pair_selection.get("property_contrast_rule")
+        ),
+        "property_pair_selection_checksum": (
+            None
+            if pair_selection is None
+            else pair_selection.get("pair_selection_checksum")
+        ),
         "spec_digest": spec.digest,
     }
 
