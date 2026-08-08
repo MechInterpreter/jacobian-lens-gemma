@@ -171,9 +171,10 @@ SOLVE_POLICY = (
 #: protocol is admissible only as a labelled comparison condition, never as the
 #: primary claim. See :mod:`jlens.mmpilot.prompt_protocol`.
 PRIMARY_PROMPT_PROTOCOLS: tuple[str, ...] = (
-    "mmpilot.open_identification.v1",
-    "mmpilot.open_downstream_property.v1",
-    "mmpilot.hidden_intermediate.v1",
+    "mmpilot.open_animal_identification.v1",
+    "mmpilot.open_entity_identification.v1",
+    "mmpilot.open_animal_legs.v1",
+    "mmpilot.hidden_animal_legs.v1",
 )
 
 #: The rule that keeps teacher-forced candidate tokens out of every patch.

@@ -91,23 +91,72 @@ from jlens.mmpilot.store import payload_checksum
 #: The legacy, completed protocol. Its identifier is new; the *prompt* it names
 #: is byte-for-byte the one :mod:`jlens.mmpilot.capability` has always built.
 CANDIDATE_LISTED_IDENTIFICATION = "mmpilot.candidate_listed_identification.v1"
-OPEN_IDENTIFICATION = "mmpilot.open_identification.v1"
-OPEN_DOWNSTREAM_PROPERTY = "mmpilot.open_downstream_property.v1"
-HIDDEN_INTERMEDIATE = "mmpilot.hidden_intermediate.v1"
+
+#: Open identification **restricted to animals**. Its question says "animal", so
+#: it is only a valid ask when every identity in play is one.
+OPEN_ANIMAL_IDENTIFICATION = "mmpilot.open_animal_identification.v1"
+
+#: Open identification over **any** object category. Domain-neutral question,
+#: mixed candidate sets allowed — and no property or multi-hop claim.
+OPEN_ENTITY_IDENTIFICATION = "mmpilot.open_entity_identification.v1"
+
+#: The downstream property, named for the property it actually asks about.
+OPEN_ANIMAL_LEGS = "mmpilot.open_animal_legs.v1"
+
+#: The same property with both entity labels hidden everywhere.
+HIDDEN_ANIMAL_LEGS = "mmpilot.hidden_animal_legs.v1"
 
 PROTOCOLS: tuple[str, ...] = (
     CANDIDATE_LISTED_IDENTIFICATION,
-    OPEN_IDENTIFICATION,
-    OPEN_DOWNSTREAM_PROPERTY,
-    HIDDEN_INTERMEDIATE,
+    OPEN_ANIMAL_IDENTIFICATION,
+    OPEN_ENTITY_IDENTIFICATION,
+    OPEN_ANIMAL_LEGS,
+    HIDDEN_ANIMAL_LEGS,
 )
 
 #: Protocols whose instruction carries no candidate list.
 OPEN_PROTOCOLS: tuple[str, ...] = (
-    OPEN_IDENTIFICATION,
-    OPEN_DOWNSTREAM_PROPERTY,
-    HIDDEN_INTERMEDIATE,
+    OPEN_ANIMAL_IDENTIFICATION,
+    OPEN_ENTITY_IDENTIFICATION,
+    OPEN_ANIMAL_LEGS,
+    HIDDEN_ANIMAL_LEGS,
 )
+
+#: Identifiers this module used briefly and no longer accepts, with what to use
+#: instead. They were domain-blind names on domain-specific questions — an
+#: ``open_identification.v1`` that asked "what **animal** is present" cannot
+#: screen ``toilet``, and a "how many legs" protocol called
+#: ``open_downstream_property`` implies a generality it does not have. No real
+#: run was ever recorded under any of them (they were MOCK-only), so they are
+#: **renamed rather than deprecated**, and a caller that still names one gets a
+#: refusal that says which protocol it meant.
+RETIRED_PROTOCOLS: dict[str, str] = {
+    "mmpilot.open_identification.v1": OPEN_ANIMAL_IDENTIFICATION,
+    "mmpilot.open_downstream_property.v1": OPEN_ANIMAL_LEGS,
+    "mmpilot.hidden_intermediate.v1": HIDDEN_ANIMAL_LEGS,
+}
+
+# ------------------------------------------------------------- task domains
+
+#: COCO's own ``animal`` supercategory.
+DOMAIN_ANIMAL = "animal"
+
+#: The universal domain: any object category, mixed sets included. It is not a
+#: supercategory — it is the statement that the question does not restrict one.
+DOMAIN_ENTITY = "entity"
+
+TASK_DOMAINS: tuple[str, ...] = (DOMAIN_ANIMAL, DOMAIN_ENTITY)
+
+#: The property a protocol scores, or ``None`` for an identification protocol.
+#: Versioned separately from the protocol because the answer *registry* can be
+#: corrected without the question changing, and a run scored under a different
+#: registry is a different measurement.
+PROPERTY_LEG_COUNT = "animal_leg_count.v1"
+
+PROPERTY_SCHEMAS: tuple[str, ...] = (PROPERTY_LEG_COUNT,)
+
+#: How concepts are chosen for the first real animal-only study.
+ANIMAL_CONCEPT_SELECTION_VERSION = "mmpilot.animal_concept_selection.v1"
 
 #: The string completed runs recorded as ``prompt_protocol`` /
 #: ``capability_protocol``. **Re-exported, never redefined** — it is imported
@@ -140,36 +189,83 @@ class PromptProtocolError(ValueError):
 class PromptLeakageError(PromptProtocolError):
     """The registered deterministic audit refused this prompt.
 
-    Raised instead of downgrading to a weaker protocol. A ``hidden_intermediate``
-    prompt whose transcript names the source is not an ``open_identification``
-    prompt — it is a prompt that failed, and the caller has to fix the evidence.
+    Raised instead of downgrading to a weaker protocol. A ``hidden_animal_legs``
+    prompt whose transcript names the source is not an
+    ``open_animal_identification`` prompt — it is a prompt that failed, and the
+    caller has to fix the evidence.
+    """
+
+
+class TaskDomainError(PromptProtocolError):
+    """A concept does not carry the domain this protocol's question presumes.
+
+    The failure this exists for: ``open_animal_identification`` asks *"What
+    animal is present?"*, and the pilot's six-concept set contains ``toilet``
+    and ``microwave``. Scoring those under that question does not measure open
+    identification — it measures whether the model will name a non-animal when
+    asked for an animal, which is a different experiment with a different
+    interpretation. Refused rather than run.
+    """
+
+
+class PropertyAnswerError(PromptProtocolError):
+    """A concept has no unique registered answer for this protocol's property.
+
+    Unregistered and ambiguous are both refusals. A leg count guessed at
+    scoring time would silently decide the experiment's ground truth.
     """
 
 
 # ------------------------------------------------------------------ questions
 
-#: The primary open identification question. It names no animal, lists nothing,
-#: and is byte-identical across the three evidence modalities.
-OPEN_IDENTIFICATION_QUESTION = (
+#: Open identification, **animal domain**. It names no specific animal and lists
+#: nothing, and it is byte-identical across the three evidence modalities — but
+#: it does presume the answer is an animal, which is why
+#: :data:`OPEN_ANIMAL_IDENTIFICATION` refuses a non-animal candidate.
+OPEN_ANIMAL_IDENTIFICATION_QUESTION = (
     "What animal is present in the evidence? Answer with the animal name.\n"
     "Answer:"
 )
 
-#: The downstream-property question. No entity candidates, no numeric choices.
-OPEN_PROPERTY_QUESTION = (
+#: Open identification, **domain-neutral**. Presumes nothing about the category,
+#: so a mixed candidate set (``bird``, ``toilet``, ``microwave``) is legitimate.
+OPEN_ENTITY_IDENTIFICATION_QUESTION = (
+    "What is present in the evidence? Answer with its name.\nAnswer:"
+)
+
+#: The leg-count question. Animal-specific by construction: "the animal" is in
+#: the sentence, and a leg count is not a property every object has.
+ANIMAL_LEGS_QUESTION = (
     "How many legs does the animal typically have? Answer with a number.\n"
     "Answer:"
 )
 
-#: ``hidden_intermediate`` asks the same property question. What changes is the
-#: evidence: the entity is described rather than named, and the audit refuses
-#: both entity labels everywhere the model can see and in the transcript.
-HIDDEN_INTERMEDIATE_QUESTION = OPEN_PROPERTY_QUESTION
-
 DEFAULT_QUESTIONS: dict[str, str] = {
-    OPEN_IDENTIFICATION: OPEN_IDENTIFICATION_QUESTION,
-    OPEN_DOWNSTREAM_PROPERTY: OPEN_PROPERTY_QUESTION,
-    HIDDEN_INTERMEDIATE: HIDDEN_INTERMEDIATE_QUESTION,
+    OPEN_ANIMAL_IDENTIFICATION: OPEN_ANIMAL_IDENTIFICATION_QUESTION,
+    OPEN_ENTITY_IDENTIFICATION: OPEN_ENTITY_IDENTIFICATION_QUESTION,
+    OPEN_ANIMAL_LEGS: ANIMAL_LEGS_QUESTION,
+    HIDDEN_ANIMAL_LEGS: ANIMAL_LEGS_QUESTION,
+}
+
+#: The task domain each protocol's question presumes, and the property it
+#: scores. Both are bound into the fingerprint: a run asked under a different
+#: domain, or scored against a different property schema, is not the same
+#: measurement. ``None`` for the legacy protocol, whose question is built from
+#: whatever candidate list it is given and presumes nothing.
+PROTOCOL_TASK_DOMAIN: dict[str, str | None] = {
+    CANDIDATE_LISTED_IDENTIFICATION: None,
+    OPEN_ANIMAL_IDENTIFICATION: DOMAIN_ANIMAL,
+    OPEN_ENTITY_IDENTIFICATION: DOMAIN_ENTITY,
+    OPEN_ANIMAL_LEGS: DOMAIN_ANIMAL,
+    HIDDEN_ANIMAL_LEGS: DOMAIN_ANIMAL,
+}
+
+PROTOCOL_PROPERTY_SCHEMA: dict[str, str | None] = {
+    CANDIDATE_LISTED_IDENTIFICATION: None,
+    OPEN_ANIMAL_IDENTIFICATION: None,
+    OPEN_ENTITY_IDENTIFICATION: None,
+    OPEN_ANIMAL_LEGS: PROPERTY_LEG_COUNT,
+    HIDDEN_ANIMAL_LEGS: PROPERTY_LEG_COUNT,
 }
 
 #: How written evidence is joined to the question. The image and spoken-audio
@@ -253,10 +349,15 @@ class ConceptSpec:
         aliases: Registered additional surface forms — plurals, spellings,
             common synonyms. The audit detects **only** what is registered here;
             see :data:`AUDIT_LIMITS`.
+        domain: The category domain this concept belongs to, spelled as COCO's
+            supercategory spells it (``"animal"``, ``"appliance"``,
+            ``"furniture"``). ``None`` means **unspecified**, which a
+            domain-restricted protocol refuses rather than assuming.
     """
 
     name: str
     aliases: tuple[str, ...] = ()
+    domain: str | None = None
 
     @property
     def surface_forms(self) -> tuple[str, ...]:
@@ -267,25 +368,123 @@ class ConceptSpec:
                 seen.setdefault(key, None)
         return tuple(seen)
 
+    @property
+    def is_animal(self) -> bool:
+        return self.domain == DOMAIN_ANIMAL
+
     def to_dict(self) -> dict:
-        return {"name": self.name, "aliases": list(self.aliases)}
+        return {"name": self.name, "aliases": list(self.aliases), "domain": self.domain}
 
 
-#: Registered aliases for the concepts the planned bird -> cat study names.
-#: Deliberately conservative: plurals only. A wrong alias would refuse a clean
-#: prompt, and a missing one is a stated limit rather than a silent pass.
+#: Registered aliases. Deliberately conservative: plurals only. A wrong alias
+#: would refuse a clean prompt, and a missing one is a stated limit rather than
+#: a silent pass.
 DEFAULT_ALIASES: dict[str, tuple[str, ...]] = {
+    "bear": ("bears",),
     "bird": ("birds",),
     "cat": ("cats",),
-    "spider": ("spiders",),
+    "cow": ("cows",),
+    "dog": ("dogs",),
+    "elephant": ("elephants",),
+    "giraffe": ("giraffes",),
+    "horse": ("horses",),
+    "sheep": (),  # already plural; COCO spells it this way and so do we
+    "zebra": ("zebras",),
+    "microwave": ("microwaves",),
+    "toilet": ("toilets",),
+    # Not COCO categories. Registered because they are the paper's own
+    # hidden-intermediate example ("the animal that spins webs"), and the
+    # hidden protocol needs real domains and real leg counts to refuse against.
     "ant": ("ants",),
+    "spider": ("spiders",),
+}
+
+#: COCO's ``animal`` supercategory, spelled as COCO spells it. This is a *read*
+#: of the dataset's own ontology, not a judgement about what an animal is.
+COCO_ANIMAL_CATEGORIES: tuple[str, ...] = (
+    "bear",
+    "bird",
+    "cat",
+    "cow",
+    "dog",
+    "elephant",
+    "giraffe",
+    "horse",
+    "sheep",
+    "zebra",
+)
+
+#: ``concept -> COCO supercategory``, for the categories this project has
+#: actually used. It is deliberately **small and explicit** rather than a guess
+#: for all eighty: an unregistered concept resolves to ``None``, and a
+#: domain-restricted protocol refuses ``None`` instead of assuming.
+#:
+#: The live alternative is :func:`domain_registry_from_universe`, which reads
+#: the supercategories out of the local COCO annotation files. Prefer it when a
+#: :class:`~jlens.mmpilot.concepts.CategoryUniverse` is in hand.
+CONCEPT_DOMAINS: dict[str, str] = {
+    **{name: DOMAIN_ANIMAL for name in COCO_ANIMAL_CATEGORIES},
+    # Not COCO categories, and so never selectable from SpokenCOCO coverage.
+    # They exist here only as the paper's hidden-intermediate example.
+    "ant": DOMAIN_ANIMAL,
+    "spider": DOMAIN_ANIMAL,
+    # The two that made this whole distinction necessary: both were in the
+    # pilot's six-concept set, and neither is an animal.
+    "microwave": "appliance",
+    "toilet": "furniture",
+    "bus": "vehicle",
+    "train": "vehicle",
+    "pizza": "food",
 }
 
 
-def concept_spec(name: str, aliases: Sequence[str] | None = None) -> ConceptSpec:
-    """A :class:`ConceptSpec`, defaulting to :data:`DEFAULT_ALIASES`."""
+def domain_registry_from_universe(universe: Any) -> dict[str, str]:
+    """``{category: supercategory}`` read from a discovered COCO universe.
+
+    Args:
+        universe: A :class:`jlens.mmpilot.concepts.CategoryUniverse`, or
+            anything exposing ``supercategories``.
+
+    A category the annotation files give no supercategory for is **omitted**,
+    not defaulted — it then resolves to an unspecified domain, which a
+    domain-restricted protocol refuses.
+    """
+    supercategories = dict(getattr(universe, "supercategories", None) or {})
+    return {
+        str(name): str(value).casefold()
+        for name, value in sorted(supercategories.items())
+        if str(value).strip()
+    }
+
+
+def concept_spec(
+    name: str,
+    aliases: Sequence[str] | None = None,
+    *,
+    domain: str | None = None,
+    domain_registry: Mapping[str, str] | None = None,
+) -> ConceptSpec:
+    """A :class:`ConceptSpec`, with its domain resolved rather than assumed.
+
+    Args:
+        aliases: Overrides :data:`DEFAULT_ALIASES` for this concept.
+        domain: States the domain explicitly. Wins over the registry.
+        domain_registry: ``{concept: domain}``; defaults to
+            :data:`CONCEPT_DOMAINS`. Pass
+            :func:`domain_registry_from_universe`'s result to resolve against
+            the local annotation files instead of this module's small table.
+
+    An unregistered concept gets ``domain=None`` — *unspecified*, which is a
+    refusal under a domain-restricted protocol rather than a pass.
+    """
     registered = tuple(aliases) if aliases is not None else DEFAULT_ALIASES.get(name, ())
-    return ConceptSpec(name=str(name), aliases=tuple(str(a) for a in registered))
+    registry = CONCEPT_DOMAINS if domain_registry is None else domain_registry
+    resolved = domain if domain is not None else registry.get(str(name))
+    return ConceptSpec(
+        name=str(name),
+        aliases=tuple(str(a) for a in registered),
+        domain=None if resolved is None else str(resolved),
+    )
 
 
 def aliases_checksum(*concepts: ConceptSpec | None) -> str:
@@ -294,6 +493,243 @@ def aliases_checksum(*concepts: ConceptSpec | None) -> str:
         spec.name: sorted(spec.surface_forms) for spec in concepts if spec is not None
     }
     return payload_checksum(payload)
+
+
+def domain_registry_checksum(registry: Mapping[str, str] | None = None) -> str:
+    """Checksum of the ``concept -> domain`` table a run resolved against."""
+    registry = CONCEPT_DOMAINS if registry is None else registry
+    return payload_checksum(
+        {"domains": {str(k): str(v) for k, v in sorted(registry.items())}}
+    )
+
+
+# --------------------------------------------------------- property answers
+
+#: ``concept -> the leg counts that concept can have``. A **one-element** tuple
+#: is a unique registered answer and the only thing
+#: :data:`OPEN_ANIMAL_LEGS` will run on; more than one is ambiguous and is
+#: refused; absent is unregistered and is refused.
+#:
+#: Every entry here is a COCO ``animal`` category with an uncontested count.
+#: There is deliberately **no ambiguous entry shipped** — inventing a fake one
+#: to demonstrate the refusal would put a wrong fact in a registry that decides
+#: an experiment's ground truth. The ambiguous path is exercised by passing an
+#: explicit registry (see the tests), which is also how a real contested concept
+#: would be declared.
+ANIMAL_LEG_COUNTS: dict[str, tuple[int, ...]] = {
+    # The paper's hidden-intermediate pair. Not COCO categories.
+    "ant": (6,),
+    "spider": (8,),
+    "bear": (4,),
+    "bird": (2,),
+    "cat": (4,),
+    "cow": (4,),
+    "dog": (4,),
+    "elephant": (4,),
+    "giraffe": (4,),
+    "horse": (4,),
+    "sheep": (4,),
+    "zebra": (4,),
+}
+
+#: How an integer leg count is spelled for the external scorer. Both the word
+#: and the digit, because the model may produce either and the audit must refuse
+#: either appearing in a prompt.
+LEG_COUNT_SURFACES: dict[int, tuple[str, ...]] = {
+    0: ("zero", "0"),
+    2: ("two", "2"),
+    4: ("four", "4"),
+    6: ("six", "6"),
+    8: ("eight", "8"),
+}
+
+
+def property_registry_checksum(
+    registry: Mapping[str, Sequence[int]] | None = None,
+    *,
+    schema: str = PROPERTY_LEG_COUNT,
+) -> str:
+    """Checksum of the property-answer registry a run scored against."""
+    registry = ANIMAL_LEG_COUNTS if registry is None else registry
+    return payload_checksum(
+        {
+            "schema": schema,
+            "answers": {
+                str(k): sorted(int(v) for v in values)
+                for k, values in sorted(registry.items())
+            },
+            "surfaces": {
+                str(k): list(v) for k, v in sorted(LEG_COUNT_SURFACES.items())
+            },
+        }
+    )
+
+
+def resolve_leg_count(
+    concept: str, *, registry: Mapping[str, Sequence[int]] | None = None
+) -> int:
+    """The concept's single registered leg count, or refuse.
+
+    Raises:
+        PropertyAnswerError: If the concept is unregistered, or registered with
+            more than one possible count. Both are refusals: a guessed count
+            would decide the experiment's ground truth silently, and an
+            ambiguous one has no ground truth to decide.
+    """
+    registry = ANIMAL_LEG_COUNTS if registry is None else registry
+    counts = registry.get(str(concept))
+    if counts is None:
+        raise PropertyAnswerError(
+            f"{concept!r} has no registered leg count in the "
+            f"{PROPERTY_LEG_COUNT} registry, so this protocol has no ground "
+            "truth for it. Register the count deliberately, or use a concept "
+            "that has one — it is not inferred."
+        )
+    unique = sorted({int(value) for value in counts})
+    if len(unique) != 1:
+        raise PropertyAnswerError(
+            f"{concept!r} is registered with leg counts {unique}, which is "
+            "ambiguous. A protocol that scores one number cannot be run on a "
+            "concept that has several; refusing rather than picking one."
+        )
+    return unique[0]
+
+
+def leg_count_surfaces(count: int) -> tuple[str, ...]:
+    """Every registered spelling of ``count``, word and digit."""
+    surfaces = LEG_COUNT_SURFACES.get(int(count))
+    if not surfaces:
+        raise PropertyAnswerError(
+            f"leg count {count} has no registered surface forms; the scorer "
+            "would have nothing to score and the audit nothing to refuse"
+        )
+    return surfaces
+
+
+# ----------------------------------------------------------- the domain gate
+
+
+def assert_task_domain(
+    protocol: str,
+    *,
+    concepts: Sequence[ConceptSpec | None],
+    external_candidates: Sequence[str] = (),
+    domain_registry: Mapping[str, str] | None = None,
+) -> dict:
+    """Hold every identity in play to the domain this protocol's question presumes.
+
+    Args:
+        protocol: One of :data:`PROTOCOLS`.
+        concepts: The source and target specs (``None`` entries are skipped).
+        external_candidates: The **identities** the scorer will score. Their
+            domains are resolved through ``domain_registry`` — they arrive as
+            bare strings, so this is the only place they can be checked. Pass
+            nothing for a property protocol: its candidates are answers
+            (``two``, ``four``), not identities, and belong to
+            :func:`assert_property_candidates`.
+        domain_registry: ``{concept: domain}``; defaults to
+            :data:`CONCEPT_DOMAINS`.
+
+    Returns:
+        ``{"task_domain", "resolved", "checked", "registry_checksum"}``.
+
+    Raises:
+        TaskDomainError: If the protocol restricts a domain and any source,
+            target, or externally scored identity is in a different one, or in
+            an unspecified one. ``DOMAIN_ENTITY`` restricts nothing and records
+            what it observed instead.
+    """
+    if protocol not in PROTOCOL_TASK_DOMAIN:
+        raise PromptProtocolError(f"unknown prompt protocol {protocol!r}; known: {PROTOCOLS}")
+    required = PROTOCOL_TASK_DOMAIN[protocol]
+    registry = CONCEPT_DOMAINS if domain_registry is None else domain_registry
+
+    resolved: dict[str, str | None] = {}
+    for spec in concepts:
+        if spec is not None:
+            resolved[spec.name] = spec.domain
+    for name in external_candidates:
+        resolved.setdefault(str(name), registry.get(str(name)))
+
+    record = {
+        "task_domain": required,
+        "domain_restricted": required not in (None, DOMAIN_ENTITY),
+        "resolved": dict(sorted(resolved.items())),
+        "checked": sorted(resolved),
+        "registry_checksum": domain_registry_checksum(registry),
+    }
+    if required in (None, DOMAIN_ENTITY):
+        # Nothing to refuse. What was observed is recorded, because a mixed set
+        # under a domain-neutral question is a fact worth having in the artifact.
+        record["observed_domains"] = sorted(
+            {value for value in resolved.values() if value}
+        )
+        record["unspecified_domain_concepts"] = sorted(
+            name for name, value in resolved.items() if not value
+        )
+        return record
+
+    wrong = sorted(
+        (name, value) for name, value in resolved.items() if value and value != required
+    )
+    unspecified = sorted(name for name, value in resolved.items() if not value)
+    if wrong or unspecified:
+        parts = [f"{name} is domain {value!r}" for name, value in wrong]
+        parts += [f"{name} has no registered domain" for name in unspecified]
+        raise TaskDomainError(
+            f"{protocol} asks a question in the {required!r} domain, so every "
+            f"source, target and externally scored identity must be in it. "
+            + "; ".join(parts)
+            + f".\n\nThe question is {DEFAULT_QUESTIONS[protocol].splitlines()[0]!r} "
+            f"— scoring something outside the {required!r} domain against it "
+            "does not measure open identification, it measures what the model "
+            f"says when asked for a {required} that is not there. Use "
+            f"{OPEN_ENTITY_IDENTIFICATION} for a mixed set, or register the "
+            "concept's domain if it really is in this one."
+        )
+    return record
+
+
+def assert_property_candidates(
+    protocol: str,
+    external_candidates: Sequence[str],
+    *,
+    surfaces: Mapping[int, Sequence[str]] | None = None,
+) -> dict:
+    """Hold a property protocol's scored answers to its registered answer space.
+
+    A property protocol's external candidates are *answers* — ``two``, ``four``
+    — not identities, so they are checked here rather than by
+    :func:`assert_task_domain`. An answer outside the registry would be scored
+    against nothing: the audit could not refuse it in a prompt, and no source or
+    target could ever be its ground truth.
+
+    Raises:
+        PropertyAnswerError: If any candidate is not a registered surface form
+            for some leg count.
+    """
+    table = LEG_COUNT_SURFACES if surfaces is None else surfaces
+    by_surface = {
+        normalize(form): int(count)
+        for count, forms in table.items()
+        for form in forms
+    }
+    unknown = sorted(
+        name for name in external_candidates if normalize(name) not in by_surface
+    )
+    if unknown:
+        raise PropertyAnswerError(
+            f"{protocol} scores {PROTOCOL_PROPERTY_SCHEMA[protocol]}, but "
+            f"{unknown} are not registered answers for it (registered: "
+            f"{sorted(by_surface)}). An unregistered answer has no ground truth "
+            "and cannot be refused in a prompt; register it or drop it."
+        )
+    return {
+        "property_schema": PROTOCOL_PROPERTY_SCHEMA[protocol],
+        "candidate_counts": {
+            str(name): by_surface[normalize(name)] for name in external_candidates
+        },
+    }
 
 
 def _surfaces(value: object) -> tuple[str, ...]:
@@ -390,11 +826,12 @@ LEAKAGE_CATEGORIES: tuple[str, ...] = (
 
 REFUSE, RECORD = "refuse", "record"
 
-#: Per-protocol policy. ``refuse`` fails the audit; ``record`` reports the
-#: finding and passes. There is no third action that quietly rewrites the
-#: protocol.
-LEAKAGE_POLICY: dict[str, dict[str, str]] = {
-    CANDIDATE_LISTED_IDENTIFICATION: {
+#: Leakage policy by *family*, so two protocols that differ only in task domain
+#: cannot drift apart in what they refuse. ``refuse`` fails the audit;
+#: ``record`` reports the finding and passes. There is no third action that
+#: quietly rewrites the protocol.
+LEAKAGE_FAMILIES: dict[str, dict[str, str]] = {
+    "candidate_listed": {
         "instruction_candidate_leakage": RECORD,
         "candidate_enumeration_detected": RECORD,
         "source_in_visible_evidence": RECORD,
@@ -404,7 +841,7 @@ LEAKAGE_POLICY: dict[str, dict[str, str]] = {
         "property_answer_in_prompt": RECORD,
         "semantic_filename_exposure": REFUSE,
     },
-    OPEN_IDENTIFICATION: {
+    "open_identification": {
         "instruction_candidate_leakage": REFUSE,
         "candidate_enumeration_detected": REFUSE,
         "source_in_visible_evidence": RECORD,
@@ -414,7 +851,7 @@ LEAKAGE_POLICY: dict[str, dict[str, str]] = {
         "property_answer_in_prompt": RECORD,
         "semantic_filename_exposure": REFUSE,
     },
-    OPEN_DOWNSTREAM_PROPERTY: {
+    "open_property": {
         "instruction_candidate_leakage": REFUSE,
         "candidate_enumeration_detected": REFUSE,
         "source_in_visible_evidence": RECORD,
@@ -424,7 +861,7 @@ LEAKAGE_POLICY: dict[str, dict[str, str]] = {
         "property_answer_in_prompt": REFUSE,
         "semantic_filename_exposure": REFUSE,
     },
-    HIDDEN_INTERMEDIATE: {
+    "hidden_property": {
         "instruction_candidate_leakage": REFUSE,
         "candidate_enumeration_detected": REFUSE,
         "source_in_visible_evidence": REFUSE,
@@ -435,6 +872,37 @@ LEAKAGE_POLICY: dict[str, dict[str, str]] = {
         "semantic_filename_exposure": REFUSE,
     },
 }
+
+#: Which family each protocol belongs to. The task domain is orthogonal to the
+#: leakage policy: ``open_animal_identification`` and
+#: ``open_entity_identification`` refuse exactly the same things and differ only
+#: in the domain their question presumes.
+PROTOCOL_LEAKAGE_FAMILY: dict[str, str] = {
+    CANDIDATE_LISTED_IDENTIFICATION: "candidate_listed",
+    OPEN_ANIMAL_IDENTIFICATION: "open_identification",
+    OPEN_ENTITY_IDENTIFICATION: "open_identification",
+    OPEN_ANIMAL_LEGS: "open_property",
+    HIDDEN_ANIMAL_LEGS: "hidden_property",
+}
+
+#: Per-protocol policy, derived from the families above.
+LEAKAGE_POLICY: dict[str, dict[str, str]] = {
+    protocol: dict(LEAKAGE_FAMILIES[family])
+    for protocol, family in PROTOCOL_LEAKAGE_FAMILY.items()
+}
+
+#: Protocols that hide the intermediate entity entirely. Named once so a policy
+#: lookup and a special case cannot disagree.
+HIDDEN_PROTOCOLS: tuple[str, ...] = tuple(
+    protocol
+    for protocol, family in PROTOCOL_LEAKAGE_FAMILY.items()
+    if family == "hidden_property"
+)
+
+#: Protocols that score a downstream property rather than an identity.
+PROPERTY_PROTOCOLS: tuple[str, ...] = tuple(
+    protocol for protocol, schema in PROTOCOL_PROPERTY_SCHEMA.items() if schema
+)
 
 
 def _finding(
@@ -611,7 +1079,7 @@ def audit_prompt_leakage(
     ]
     refused_answer_hits = _scan(visible, refused_forms)
     source_answer_hits = _scan(visible, source_answer_forms)
-    if policy["property_answer_in_prompt"] == REFUSE and protocol == HIDDEN_INTERMEDIATE:
+    if policy["property_answer_in_prompt"] == REFUSE and protocol in HIDDEN_PROTOCOLS:
         # A source property answer in the prompt trivially reveals the
         # intermediate the protocol exists to hide.
         refused_answer_hits = [*refused_answer_hits, *source_answer_hits]
@@ -756,6 +1224,12 @@ class BuiltPrompt:
     source_concept: dict | None
     target_concept: dict | None
     property_answers: dict
+    task_domain: dict
+    property_schema: str | None = None
+    #: Checksum of the property-answer registry **actually used**, not of the
+    #: module default — a run scored against a corrected registry is a different
+    #: measurement even when the prompt is byte-identical.
+    property_registry_checksum: str | None = None
     sampling_rate: int | None = None
     media_reference: str | None = None
     media_checksum: str | None = None
@@ -806,6 +1280,9 @@ class BuiltPrompt:
             "source_concept": self.source_concept,
             "target_concept": self.target_concept,
             "property_answers": dict(self.property_answers),
+            "task_domain": dict(self.task_domain),
+            "property_schema": self.property_schema,
+            "property_registry_checksum": self.property_registry_checksum,
             "media_checksum": self.media_checksum,
             "transcript_hash": self.transcript_hash,
             "audit_only_fields": list(self.audit_only_fields),
@@ -836,6 +1313,8 @@ def build_protocol_prompt(
     encode_candidate: Callable[[str], Sequence[int]] | None = None,
     encode_prompt: Callable[[str], Sequence[int]] | None = None,
     legacy_candidate_list: Sequence[str] | None = None,
+    domain_registry: Mapping[str, str] | None = None,
+    leg_counts: Mapping[str, Sequence[int]] | None = None,
     strict: bool = True,
 ) -> BuiltPrompt:
     """Build one prompt under ``protocol``, with the candidates kept outside it.
@@ -851,8 +1330,12 @@ def build_protocol_prompt(
             question built by :func:`jlens.mmpilot.capability.build_question`
             from ``legacy_candidate_list`` — byte-for-byte what completed runs
             used.
-        source / target: Concept specs, for auditing only.
-        property_answers: ``{"source": ..., "target": ...}`` surface forms.
+        source / target: Concept specs, for auditing only. A domain-restricted
+            protocol additionally holds them to its task domain.
+        property_answers: ``{"source": ..., "target": ...}`` surface forms. For
+            a property protocol this is **derived** from the registry when
+            omitted, and refused rather than guessed when the registry has no
+            unique answer.
         encode_candidate: ``str -> [token ids]``. Supplied, every candidate's
             **complete** token sequence is recorded here and handed to the
             scorer; the leading space is added exactly as
@@ -860,18 +1343,55 @@ def build_protocol_prompt(
         encode_prompt: ``str -> [token ids]`` for the model-visible text.
         legacy_candidate_list: Candidate-listed protocol only. The concepts the
             legacy question enumerates.
+        domain_registry: ``{concept: domain}`` for resolving the externally
+            scored candidates' domains; defaults to :data:`CONCEPT_DOMAINS`.
+        leg_counts: Overrides :data:`ANIMAL_LEG_COUNTS`.
         strict: Refuse a prompt the audit rejects. Turning it off returns the
             record instead of raising and is for *inspecting* a refusal, never
             for running one.
 
     Raises:
-        PromptProtocolError: On an unknown protocol, a candidate list supplied to
-            an open protocol, or an open question that interpolates a candidate.
+        PromptProtocolError: On an unknown or retired protocol, a candidate list
+            supplied to an open protocol, or an open question that interpolates
+            a candidate.
+        TaskDomainError: When a domain-restricted protocol is handed a concept
+            from another domain, or one whose domain is unspecified.
+        PropertyAnswerError: When a property protocol's source or target has no
+            unique registered answer.
         PromptLeakageError: When ``strict`` and the audit refuses.
     """
+    if protocol in RETIRED_PROTOCOLS:
+        raise PromptProtocolError(
+            f"prompt protocol {protocol!r} was renamed to "
+            f"{RETIRED_PROTOCOLS[protocol]!r}. The old name was domain-blind on a "
+            "domain-specific question — an 'open identification' protocol that "
+            "asks 'what ANIMAL is present' cannot screen 'toilet'. Use the new "
+            f"name, or {OPEN_ENTITY_IDENTIFICATION!r} for a mixed category set."
+        )
     if protocol not in PROTOCOLS:
         raise PromptProtocolError(f"unknown prompt protocol {protocol!r}; known: {PROTOCOLS}")
     names = _normalize_candidates(external_candidates)
+
+    # The domain gate runs before anything is rendered: a prompt that should not
+    # exist is never built, hashed, or handed to a scorer. A property protocol's
+    # candidates are answers rather than identities, so only its source and
+    # target are domain-checked; the answers go through the property registry.
+    identity_candidates = (
+        ()
+        if protocol == CANDIDATE_LISTED_IDENTIFICATION
+        or PROTOCOL_PROPERTY_SCHEMA[protocol] is not None
+        else names
+    )
+    domain_record = assert_task_domain(
+        protocol,
+        concepts=(source, target),
+        external_candidates=identity_candidates,
+        domain_registry=domain_registry,
+    )
+    if PROTOCOL_PROPERTY_SCHEMA[protocol] is not None:
+        domain_record["property_candidates"] = assert_property_candidates(
+            protocol, names
+        )
 
     if protocol == CANDIDATE_LISTED_IDENTIFICATION:
         if question is None:
@@ -892,13 +1412,32 @@ def build_protocol_prompt(
             )
         if question is None:
             question = DEFAULT_QUESTIONS[protocol]
-    if protocol in (OPEN_DOWNSTREAM_PROPERTY, HIDDEN_INTERMEDIATE) and not property_answers:
-        raise PromptProtocolError(
-            f"{protocol} scores a downstream property, so the source and target "
-            "property answers must be declared (property_answers={'source': ..., "
-            "'target': ...}). Without them the audit has nothing to refuse and "
-            "would pass by omission."
-        )
+
+    property_schema = PROTOCOL_PROPERTY_SCHEMA[protocol]
+    if property_schema is not None:
+        if source is None or target is None:
+            raise PromptProtocolError(
+                f"{protocol} scores a property of the source and of the target, "
+                "so both concepts must be named. Without them there is no ground "
+                "truth to score against and nothing for the audit to refuse."
+            )
+        if property_answers is None:
+            # Derived, never guessed: resolve_leg_count refuses an unregistered
+            # or ambiguous concept rather than inventing its ground truth.
+            property_answers = {
+                "source": leg_count_surfaces(
+                    resolve_leg_count(source.name, registry=leg_counts)
+                ),
+                "target": leg_count_surfaces(
+                    resolve_leg_count(target.name, registry=leg_counts)
+                ),
+            }
+        elif not property_answers:
+            raise PromptProtocolError(
+                f"{protocol} was given an empty property_answers. Pass None to "
+                f"derive them from the {property_schema} registry, or state them; "
+                "an empty mapping would make the audit pass by omission."
+            )
 
     question = str(question)
     if protocol in OPEN_PROTOCOLS:
@@ -982,6 +1521,13 @@ def build_protocol_prompt(
         property_answers={
             key: list(_surfaces(value)) for key, value in dict(property_answers or {}).items()
         },
+        task_domain=domain_record,
+        property_schema=property_schema,
+        property_registry_checksum=(
+            property_registry_checksum(leg_counts, schema=property_schema)
+            if property_schema
+            else None
+        ),
         sampling_rate=evidence.sampling_rate,
         media_reference=evidence.media_reference,
         media_checksum=evidence.media_checksum,
@@ -1077,10 +1623,23 @@ def prompt_protocol_fingerprint(
       the candidates are not in the prompt;
     * the **fingerprint** does depend on the candidate set and on its token ids —
       a run that scored a different set measured a different thing.
+
+    The task domain, the property schema, and the checksums of the registries
+    they were resolved against are bound here too. Asking the same question of
+    an animal-only set and of a mixed set is not the same experiment, and a
+    corrected leg-count registry changes the ground truth a property run was
+    scored against even when nothing about the prompt moves.
     """
     candidate_ids = built.external_candidate_token_ids or {}
+    domain = dict(built.task_domain or {})
     payload = {
         "prompt_protocol_version": built.protocol_version,
+        "task_domain": domain.get("task_domain"),
+        "task_domain_restricted": bool(domain.get("domain_restricted")),
+        "concept_domains": dict(domain.get("resolved") or {}),
+        "domain_registry_checksum": domain.get("registry_checksum"),
+        "property_schema": built.property_schema,
+        "property_registry_checksum": built.property_registry_checksum,
         "question_template": built.question,
         "question_hash": built.question_hash,
         "prompt_hash": built.prompt_hash,
@@ -1116,12 +1675,16 @@ def prompt_protocol_fingerprint(
 #: considered. Nothing in this module raises a claim above its protocol's entry.
 MAXIMUM_CLAIM: dict[str, str] = {
     CANDIDATE_LISTED_IDENTIFICATION: "candidate_conditioned_identification",
-    OPEN_IDENTIFICATION: "open_cross_modal_identification",
-    OPEN_DOWNSTREAM_PROPERTY: "downstream_property_recomputation",
-    HIDDEN_INTERMEDIATE: "hidden_intermediate_multi_hop_reasoning",
+    OPEN_ANIMAL_IDENTIFICATION: "open_cross_modal_animal_identification",
+    OPEN_ENTITY_IDENTIFICATION: "open_cross_modal_entity_identification",
+    OPEN_ANIMAL_LEGS: "animal_leg_count_recomputation",
+    HIDDEN_ANIMAL_LEGS: "hidden_animal_multi_hop_reasoning",
 }
 
 #: What each protocol may never support, stated so a report cannot imply it.
+#: Note what the two identification protocols exclude in *each other's*
+#: direction: an animal-only result is not a general object-identification
+#: result, and a mixed-set result is not evidence about animals specifically.
 EXCLUDED_CLAIMS: dict[str, tuple[str, ...]] = {
     CANDIDATE_LISTED_IDENTIFICATION: (
         "spontaneous unprompted concept emergence",
@@ -1129,12 +1692,21 @@ EXCLUDED_CLAIMS: dict[str, tuple[str, ...]] = {
         "downstream property recomputation",
         "multi-hop reasoning",
     ),
-    OPEN_IDENTIFICATION: (
+    OPEN_ANIMAL_IDENTIFICATION: (
+        "general object identification outside the animal domain",
         "downstream property recomputation",
         "multi-hop reasoning",
     ),
-    OPEN_DOWNSTREAM_PROPERTY: ("multi-hop reasoning",),
-    HIDDEN_INTERMEDIATE: (),
+    OPEN_ENTITY_IDENTIFICATION: (
+        "animal-specific identification",
+        "downstream property recomputation",
+        "multi-hop reasoning",
+    ),
+    OPEN_ANIMAL_LEGS: (
+        "a property claim outside the animal domain",
+        "multi-hop reasoning",
+    ),
+    HIDDEN_ANIMAL_LEGS: ("a reasoning claim outside the animal domain",),
 }
 
 
@@ -1143,6 +1715,7 @@ def protocol_claim_admissibility(
     protocol: str,
     leakage: Mapping | None,
     mode: str,
+    task_domain: Mapping | None = None,
     identity_replacement_passed: bool | None = None,
     direct_answer_control_passed: bool | None = None,
     direct_answer_onset_control_passed: bool | None = None,
@@ -1159,14 +1732,17 @@ def protocol_claim_admissibility(
         protocol: One of :data:`PROTOCOLS`.
         leakage: The audit record from :func:`audit_prompt_leakage`.
         mode: ``"mock"`` makes every claim inadmissible, whatever else passed.
+        task_domain: The record from :func:`assert_task_domain`, i.e.
+            ``BuiltPrompt.task_domain``. Required for a domain-restricted
+            protocol: a claim that says "animal" must be able to show that
+            every identity in play was one.
         identity_replacement_passed: Whether the identity condition actually
-            replaced the identity. Required by
-            :data:`OPEN_DOWNSTREAM_PROPERTY`.
+            replaced the identity. Required by :data:`OPEN_ANIMAL_LEGS`.
         direct_answer_control_passed: Whether inserting the answer's own lens
             vector failed to reproduce the effect. Required by
-            :data:`OPEN_DOWNSTREAM_PROPERTY`.
+            :data:`OPEN_ANIMAL_LEGS`.
         direct_answer_onset_control_passed: The onset version of the same
-            control. Required by :data:`HIDDEN_INTERMEDIATE`.
+            control. Required by :data:`HIDDEN_ANIMAL_LEGS`.
 
     Returns:
         ``{"admissible", "maximum_claim", "granted_claim", "reasons", ...}``.
@@ -1199,7 +1775,35 @@ def protocol_claim_admissibility(
             f"{sorted(leakage.get('violations', ())) or sorted(leakage.get('unauditable', ()))}"
         )
 
-    if protocol == OPEN_DOWNSTREAM_PROPERTY:
+    required_domain = PROTOCOL_TASK_DOMAIN[protocol]
+    requirements["task_domain"] = required_domain
+    if required_domain not in (None, DOMAIN_ENTITY):
+        observed = dict(task_domain or {})
+        requirements["task_domain_verified"] = observed.get("task_domain")
+        if not observed:
+            reasons.append(
+                f"{protocol} restricts its identities to the {required_domain} "
+                "domain, but no task-domain record was supplied, so that "
+                "restriction cannot be shown to have held"
+            )
+        elif observed.get("task_domain") != required_domain:
+            reasons.append(
+                f"the task-domain record is for {observed.get('task_domain')!r}, "
+                f"not {required_domain!r}"
+            )
+        else:
+            offenders = sorted(
+                name
+                for name, value in (observed.get("resolved") or {}).items()
+                if value != required_domain
+            )
+            if offenders:
+                reasons.append(
+                    f"{offenders} are not in the {required_domain} domain; a "
+                    f"{required_domain} claim cannot rest on them"
+                )
+
+    if protocol == OPEN_ANIMAL_LEGS:
         requirements["identity_replacement_passed"] = identity_replacement_passed
         requirements["direct_answer_control_passed"] = direct_answer_control_passed
         if not identity_replacement_passed:
@@ -1214,7 +1818,7 @@ def protocol_claim_admissibility(
                 "answer's own lens vector moves the answer as well, the effect is "
                 "a shortcut rather than recomputation"
             )
-    if protocol == HIDDEN_INTERMEDIATE:
+    if protocol == HIDDEN_ANIMAL_LEGS:
         requirements["direct_answer_onset_control_passed"] = (
             direct_answer_onset_control_passed
         )
@@ -1257,56 +1861,236 @@ def claim_admissibility_rule_record() -> dict:
         "maximum_claim": dict(MAXIMUM_CLAIM),
         "excluded_claims": {k: list(v) for k, v in EXCLUDED_CLAIMS.items()},
         "leakage_policy": {k: dict(v) for k, v in LEAKAGE_POLICY.items()},
+        "task_domains": dict(PROTOCOL_TASK_DOMAIN),
+        "property_schemas": dict(PROTOCOL_PROPERTY_SCHEMA),
         "statements": [
             "A candidate_listed_identification result supports only a "
             "candidate-conditioned claim.",
-            "An open_identification result supports open cross-modal "
-            "identification only when the target leakage checks pass.",
-            "An open_downstream_property result supports downstream "
-            "recomputation only when identity replacement also succeeds and the "
-            "direct-answer controls pass.",
-            "A hidden_intermediate result supports multi-hop reasoning only when "
+            "An open_animal_identification result supports open cross-modal "
+            "identification only when the target leakage checks pass and every "
+            "source, target and externally scored identity is in the animal "
+            "domain.",
+            "An open_entity_identification result supports open cross-modal "
+            "identification over whatever categories it scored, and never a "
+            "property or multi-hop claim.",
+            "An open_animal_legs result supports leg-count recomputation only "
+            "when identity replacement also succeeds and the direct-answer "
+            "controls pass.",
+            "A hidden_animal_legs result supports multi-hop reasoning only when "
             "both entity names are absent under the registered deterministic "
             "audit and the direct-answer onset control passes.",
+            "A domain-restricted protocol's claim is inadmissible without a "
+            "task-domain record showing the restriction held.",
             "No MOCK result supports any scientific claim.",
         ],
     }
     return {**payload, "rule_checksum": payload_checksum(payload)}
 
 
+# ------------------------------------------- predeclared animal concept set
+
+#: Fields a ranking row must **not** carry. The animal concept set is chosen
+#: before the model runs; a row carrying an accuracy or a prediction came from
+#: after, and selecting on it would make the choice depend on the outcome.
+POST_MODEL_ROW_FIELDS: tuple[str, ...] = (
+    "accuracy",
+    "n_correct",
+    "candidate_scores",
+    "capability",
+    "correct",
+    "prediction",
+    "target_margin",
+    "target_score",
+)
+
+
+def select_animal_concepts(
+    ranked_rows: Sequence[Mapping],
+    *,
+    n_focal: int = 2,
+    domain_registry: Mapping[str, str] | None = None,
+    leg_counts: Mapping[str, Sequence[int]] | None = None,
+    require_leg_counts: bool = True,
+) -> dict:
+    """The predeclared animal-only concept set for the first real swap study.
+
+    Takes the rows :func:`jlens.mmpilot.expansion.rank_concepts` already
+    produces — the existing deterministic ranking and evidence audit — and
+    filters them. It **re-implements neither**: coverage is whatever the local
+    SpokenCOCO/COCO annotation files actually support, and a concept that is not
+    feasible there is dropped with the ranking's own ``unmet`` reasons attached.
+
+    ``bird``, ``cat``, ``giraffe``, ``zebra``, ``sheep`` and ``cow`` are the
+    *likely* survivors. They are not assumed: if the local data does not carry
+    them, they do not appear in the result, and if fewer than ``n_focal + 1``
+    animals survive, this refuses rather than filling the gap.
+
+    Filters, applied in this order and all pre-model:
+
+    1. domain — the concept resolves to :data:`DOMAIN_ANIMAL`;
+    2. feasibility — the ranking row's own ``feasible`` flag;
+    3. property — a unique registered leg count, when ``require_leg_counts``.
+
+    Ranking order is preserved throughout and never re-sorted alphabetically,
+    for the reason :func:`jlens.mmpilot.selection.select_focal_concepts` gives:
+    the ranking *is* the deterministic pre-model statement of what the dataset
+    supports best.
+
+    Returns:
+        ``{"selection_version", "animal_concepts", "focal", "non_focal",
+        "excluded", "selection_checksum", ...}``. ``non_focal`` supplies the
+        external unrelated control, which is why ``n_focal + 1`` are needed.
+
+    Raises:
+        PromptProtocolError: If a ranking row carries a post-model field, or if
+            too few animal concepts survive.
+    """
+    rows = [dict(row) for row in ranked_rows]
+    contaminated = sorted(
+        {field for row in rows for field in POST_MODEL_ROW_FIELDS if field in row}
+    )
+    if contaminated:
+        raise PromptProtocolError(
+            f"the ranking rows carry post-model field(s) {contaminated}. The "
+            "animal concept set is predeclared: choosing it from rows that "
+            "already know how the model behaved would make the selection depend "
+            "on the outcome, which is the failure this study is built to avoid."
+        )
+
+    registry = CONCEPT_DOMAINS if domain_registry is None else domain_registry
+    kept: list[str] = []
+    excluded: list[dict] = []
+    for row in rows:
+        name = str(row.get("concept", ""))
+        if not name:
+            raise PromptProtocolError(f"ranking row without a concept: {row}")
+        domain = registry.get(name)
+        if domain != DOMAIN_ANIMAL:
+            excluded.append(
+                {
+                    "concept": name,
+                    "stage": "domain",
+                    "reason": (
+                        f"domain {domain!r}, not {DOMAIN_ANIMAL!r}"
+                        if domain
+                        else "no registered domain"
+                    ),
+                }
+            )
+            continue
+        if not row.get("feasible"):
+            excluded.append(
+                {
+                    "concept": name,
+                    "stage": "evidence_audit",
+                    "reason": "; ".join(str(item) for item in row.get("unmet") or [])
+                    or "not feasible in the local split",
+                }
+            )
+            continue
+        if require_leg_counts:
+            try:
+                resolve_leg_count(name, registry=leg_counts)
+            except PropertyAnswerError as error:
+                excluded.append(
+                    {"concept": name, "stage": "property", "reason": str(error).splitlines()[0]}
+                )
+                continue
+        kept.append(name)
+
+    if len(kept) < n_focal + 1:
+        raise PromptProtocolError(
+            f"only {len(kept)} animal concept(s) survived the ranking and the "
+            f"evidence audit ({kept}), which cannot supply {n_focal} focal "
+            "concepts plus at least one external unrelated control. Coverage is "
+            "a property of the local data, not something to relax: widen the "
+            "manifest or lower n_focal deliberately.\n  excluded: "
+            + "; ".join(f"{row['concept']} ({row['stage']})" for row in excluded)
+        )
+
+    payload = {
+        "selection_version": ANIMAL_CONCEPT_SELECTION_VERSION,
+        "task_domain": DOMAIN_ANIMAL,
+        "property_schema": PROPERTY_LEG_COUNT if require_leg_counts else None,
+        "require_leg_counts": bool(require_leg_counts),
+        "n_focal": int(n_focal),
+        "ranked_input": [str(row.get("concept")) for row in rows],
+        "animal_concepts": list(kept),
+        "focal": list(kept[:n_focal]),
+        "non_focal": list(kept[n_focal:]),
+        "leg_counts": {
+            name: resolve_leg_count(name, registry=leg_counts) for name in kept
+        }
+        if require_leg_counts
+        else {},
+        "excluded": excluded,
+        "domain_registry_checksum": domain_registry_checksum(registry),
+        "property_registry_checksum": (
+            property_registry_checksum(leg_counts) if require_leg_counts else None
+        ),
+        "order_rule": (
+            "ranking order preserved; never re-sorted alphabetically, and never "
+            "reordered by any model result"
+        ),
+    }
+    return {**payload, "selection_checksum": payload_checksum(payload)}
+
+
 __all__ = [
+    "ANIMAL_CONCEPT_SELECTION_VERSION",
+    "ANIMAL_LEG_COUNTS",
+    "ANIMAL_LEGS_QUESTION",
     "AUDIT_LIMITS",
     "AUDIT_VERSION",
     "CANDIDATE_LISTED_IDENTIFICATION",
     "CANDIDATE_SCORING_VERSION",
     "CANDIDATE_VISIBILITY_RULE",
     "CLAIM_RULE_VERSION",
+    "COCO_ANIMAL_CATEGORIES",
+    "CONCEPT_DOMAINS",
     "DEFAULT_ALIASES",
     "DEFAULT_QUESTIONS",
+    "DOMAIN_ANIMAL",
+    "DOMAIN_ENTITY",
     "EXCLUDED_CLAIMS",
     "FORBIDDEN_BACKEND_KWARGS",
-    "HIDDEN_INTERMEDIATE",
-    "HIDDEN_INTERMEDIATE_QUESTION",
+    "HIDDEN_ANIMAL_LEGS",
+    "HIDDEN_PROTOCOLS",
     "LEAKAGE_CATEGORIES",
+    "LEAKAGE_FAMILIES",
     "LEAKAGE_POLICY",
     "LEGACY_CAPABILITY_PROMPT_PROTOCOL",
+    "LEG_COUNT_SURFACES",
     "MAXIMUM_CLAIM",
     "MODALITIES",
     "NORMALIZATION_RULE",
-    "OPEN_DOWNSTREAM_PROPERTY",
-    "OPEN_IDENTIFICATION",
-    "OPEN_IDENTIFICATION_QUESTION",
-    "OPEN_PROPERTY_QUESTION",
+    "OPEN_ANIMAL_IDENTIFICATION",
+    "OPEN_ANIMAL_IDENTIFICATION_QUESTION",
+    "OPEN_ANIMAL_LEGS",
+    "OPEN_ENTITY_IDENTIFICATION",
+    "OPEN_ENTITY_IDENTIFICATION_QUESTION",
     "OPEN_PROTOCOLS",
     "OPEN_TEXT_EVIDENCE_TEMPLATE",
+    "POST_MODEL_ROW_FIELDS",
+    "PROPERTY_LEG_COUNT",
+    "PROPERTY_PROTOCOLS",
+    "PROPERTY_SCHEMAS",
     "PROTOCOLS",
+    "PROTOCOL_LEAKAGE_FAMILY",
+    "PROTOCOL_PROPERTY_SCHEMA",
+    "PROTOCOL_TASK_DOMAIN",
+    "RETIRED_PROTOCOLS",
+    "TASK_DOMAINS",
     "BuiltPrompt",
     "ConceptSpec",
     "Evidence",
     "PromptLeakageError",
     "PromptProtocolError",
+    "PropertyAnswerError",
+    "TaskDomainError",
     "aliases_checksum",
     "assert_prompt_leakage_clean",
+    "assert_task_domain",
     "audit_prompt_leakage",
     "backend_input_kwargs",
     "build_backend_inputs",
@@ -1314,8 +2098,14 @@ __all__ = [
     "claim_admissibility_rule_record",
     "concept_spec",
     "contains_surface",
+    "domain_registry_checksum",
+    "domain_registry_from_universe",
+    "leg_count_surfaces",
     "looks_like_candidate_enumeration",
     "normalize",
     "prompt_protocol_fingerprint",
+    "property_registry_checksum",
     "protocol_claim_admissibility",
+    "resolve_leg_count",
+    "select_animal_concepts",
 ]
