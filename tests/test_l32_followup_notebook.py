@@ -464,3 +464,172 @@ def test_the_run_wrote_only_into_its_own_directory(mock_run, tmp_path_factory):
             if path.is_file() and path.suffix not in (".pt", ".json")
         ]
         assert written == [], f"the extension run was written into: {written}"
+
+
+# ------------------------------------------------ the reporting repair (v2)
+
+
+def test_the_notebook_prints_the_l32_criterion_not_the_historical_one(notebook):
+    """The L35/L38/L40 constant is another audit's protocol, not a template."""
+    source = _code_source(notebook)
+    assert "format_l32_criterion" in source
+    assert "L32_CRITERION_TEXT" in source
+    # The historical constant may be *named* in a comment explaining why it is
+    # not used; it must not be imported or printed. Checked as usage, so the
+    # explanation is allowed to say the thing it is explaining.
+    code_lines = [
+        line
+        for line in source.splitlines()
+        if not line.lstrip().startswith("#")
+    ]
+    for line in code_lines:
+        assert "CRITERION_TEXT" not in line or "L32_CRITERION_TEXT" in line, (
+            "the historical criterion is titled 'L35 / L38 / L40' and names "
+            f"layer 35 as the primary throughout; a single-layer L32 audit must "
+            f"not use it. Offending line: {line!r}"
+        )
+
+
+def test_the_notebook_reads_no_retired_metric_key(notebook):
+    from jlens.mmpilot.l32_reporting import RETIRED_CELL_FIELDS
+
+    source = _code_source(notebook)
+    for retired, replacement in RETIRED_CELL_FIELDS.items():
+        assert f"'{retired}'" not in source and f'"{retired}"' not in source, (
+            f"{retired!r} has never existed in summarize_cell; use {replacement}"
+        )
+
+
+def test_the_notebook_reads_controls_through_the_nested_helper(notebook):
+    source = _code_source(notebook)
+    assert "control_rows(" in source
+    assert "format_controls(" in source
+    # The shallow index that printed None for every variant.
+    assert "_cell.get(_variant)" not in source
+
+
+def test_the_notebook_prints_the_causal_bucket_breakdown(notebook):
+    source = _code_source(notebook)
+    assert "causal_cell_breakdown(" in source
+    assert "format_causal_breakdown(" in source
+
+
+def test_the_notebook_carries_the_cpu_only_amendment_section(notebook):
+    text = _source(notebook)
+    source = _code_source(notebook)
+    assert "Reporting amendment for an already-completed run" in text
+    assert "AMEND_COMPLETED_RUN_DIR" in source
+    assert "build_reporting_amendment" in source
+    assert "write_reporting_amendment" in source
+    assert 'AMEND_COMPLETED_RUN_DIR = ""' in source
+
+
+def test_the_mock_convergence_output_has_no_none_fields(mock_run):
+    report = _report(mock_run)
+    for row in report["convergence_cells"]:
+        for key, value in row.items():
+            assert value is not None, f"convergence_cells[{row['modality']}].{key}"
+    detail = report["classification_detail"]
+    for key in (
+        "decided_by",
+        "pooled_clean_agreement_unique",
+        "bootstrap_point",
+        "bootstrap_independent_units",
+        "criterion_digest",
+    ):
+        assert detail[key] is not None, key
+
+
+def test_the_mock_report_stores_all_three_controls_flattened(mock_run):
+    from jlens.mmpilot.convergence import CONTROL_VARIANTS
+
+    controls = _report(mock_run)["controls"]
+    assert [row["variant"] for row in controls] == list(CONTROL_VARIANTS)
+    for row in controls:
+        for key in (
+            "compared_field",
+            "primary_value",
+            "control_value",
+            "chance_rate",
+            "primary_is_informative",
+            "passed",
+            "reason",
+        ):
+            assert row[key] is not None, f"{row['variant']}.{key}"
+
+
+def test_the_mock_report_reconciles_the_two_cell_counts(mock_run):
+    breakdown = _report(mock_run)["causal_breakdown"]
+    assert (
+        breakdown["n_off_diagonal_passing"]
+        == breakdown["n_audio_related_passing"] + breakdown["n_text_image_passing"]
+    )
+    assert "neither number is wrong" in breakdown["reconciliation"]
+
+
+def test_the_mock_report_records_the_reporting_version(mock_run):
+    from jlens.mmpilot.l32_reporting import L32_REPORTING_VERSION
+
+    report = _report(mock_run)
+    assert report["reporting_version"] == L32_REPORTING_VERSION
+    assert "physical layer" in report["l32_criterion_text"]
+    assert "L35 / L38 / L40" not in report["l32_criterion_text"]
+
+
+def test_the_amendment_runs_through_the_notebook_and_preserves_the_original(
+    tmp_path_factory,
+):
+    """Section 19, end to end, against a run in the real completed shape."""
+    from tests.test_l32_reporting import build_real_shaped_run
+
+    root = tmp_path_factory.mktemp("l32amend") / "run"
+    build_real_shaped_run(root)
+
+    before = {
+        str(path.relative_to(root)): path.read_bytes()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+    environment = dict(os.environ)
+    environment.pop("PYTHONPATH", None)
+    environment["MMPILOT_REPO_DIR"] = str(REPO_ROOT)
+    environment["MMPILOT_SCRATCH"] = str(root.parent / "scratch")
+    environment["MMPILOT_AMEND_L32_RUN_DIR"] = str(root)
+    result = subprocess.run(
+        [sys.executable, str(RUNNER), str(NOTEBOOK_PATH)],
+        capture_output=True,
+        text=True,
+        cwd=str(root.parent),
+        env=environment,
+    )
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    assert payload.get("ok"), payload
+
+    after = {
+        str(path.relative_to(root)): path.read_bytes()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+    assert set(after) - set(before) == {
+        "l32_followup_report_reporting_v2.json",
+        "l32_followup_report_reporting_v2.md",
+    }
+    for name, payload_bytes in before.items():
+        assert after[name] == payload_bytes, f"{name} was modified by the amendment"
+
+    amended = json.loads(
+        (root / "l32_followup_report_reporting_v2.json").read_text(encoding="utf-8")
+    )
+    assert amended["verdicts_unchanged"] == {
+        "A_lens_integrity": "PASSED",
+        "B_representational_transfer": "SUPPORTED",
+        "C_causal_transfer": "WEAK",
+        "D_native_output_convergence": "AMBIGUOUS",
+        "E_pre_convergence_causal_transfer": "INCONCLUSIVE",
+    }
+    assert amended["changes_no_scientific_verdict"] is True
+    markdown = (root / "l32_followup_report_reporting_v2.md").read_text(
+        encoding="utf-8"
+    )
+    assert "changes no scientific result" in markdown
+    assert "L35 / L38 / L40" not in markdown
