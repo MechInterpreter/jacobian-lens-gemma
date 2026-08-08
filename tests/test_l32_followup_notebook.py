@@ -172,6 +172,15 @@ def test_no_adjacent_layer_is_fitted_or_tested(notebook):
     assert "not** fitted or tested here" in _source(notebook)
 
 
+def test_real_media_loaders_use_the_established_local_implementations(notebook):
+    source = _code_source(notebook)
+    assert "from jlens.mmpilot.audio import load_audio" not in source
+    assert "from jlens.mmpilot.backend import load_image" not in source
+    assert "from PIL import Image" in source
+    assert 'sf.read(path, dtype="float32")' in source
+    assert 'MEDIA = {"load_image": _load_image, "load_audio": _load_audio}' in source
+
+
 def test_completed_runs_are_named_as_protected(notebook):
     source = _code_source(notebook)
     for prefix in ("rgext_", "mmaudio_", "rgcalib_"):

@@ -1577,10 +1577,20 @@ from jlens.mmpilot.tri_modal import run_invariance_by_modality
 MEDIA = None
 if BACKEND is not None:
     if RUN_REAL_L32_FOLLOWUP:
-        from jlens.mmpilot.audio import load_audio
-        from jlens.mmpilot.backend import load_image
+        from PIL import Image
 
-        MEDIA = {"load_image": load_image, "load_audio": load_audio}
+        def _load_image(path):
+            return Image.open(path).convert("RGB")
+
+        def _load_audio(path):
+            import soundfile as sf
+
+            waveform, sample_rate = sf.read(path, dtype="float32")
+            if waveform.ndim > 1:
+                waveform = waveform.mean(axis=1)
+            return waveform, int(sample_rate)
+
+        MEDIA = {"load_image": _load_image, "load_audio": _load_audio}
     else:
         from jlens.mmpilot.mock import load_mock_media
 
