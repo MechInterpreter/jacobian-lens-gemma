@@ -1380,3 +1380,251 @@ def build_mock_published_lenses(
         "failed_spec": failed_spec,
         "expectations": expectations,
     }
+
+
+#: The MOCK stand-in for physical layer 32 — an *earlier* layer than the mock
+#: published set (2/3/4), published under the extension's own schema at its own
+#: scale. Its whole job is to let the discovery chain run on CPU.
+MOCK_EXTENSION_LAYER = 1
+MOCK_EXTENSION_SCALE = 250
+
+#: The deliberate defects :func:`build_mock_extension_run` can write, so a test
+#: watches a refusal happen rather than asserting that it would.
+MOCK_EXTENSION_DEFECTS: tuple[str, ...] = (
+    "lens_bytes",
+    "report_checksum",
+    "extension_checksum",
+    "duplicate",
+    "wrong_layer",
+    "wrong_scale",
+    "unconfirmed",
+)
+
+
+def build_mock_extension_run(
+    root: str | Path,
+    *,
+    layer: int = MOCK_EXTENSION_LAYER,
+    scale: int = MOCK_EXTENSION_SCALE,
+    d_model: int = MOCK_D_MODEL,
+    model_repo_id: str = "mock/gemma-like",
+    model_revision: str = "mockrevision0000000000000000000000000000",
+    mode: str = "real",
+    verdict: str = "EARLY_LAYER_CALIBRATION_GO",
+    publish: bool = True,
+    corrupt: str | None = None,
+) -> dict:
+    """Write a mock early-layer extension run, in the real run's exact layout.
+
+    Produces ``artifacts/early_layer_extension_report.json`` plus, under
+    ``artifacts/published``, the lens, the base ``.json`` sidecar
+    :func:`jlens.calibration.publication.build_artifact` writes, and the
+    ``.extension.json`` sidecar
+    :func:`jlens.calibration.extension.publish_early_layer` writes beside it.
+    That is the entire input to
+    :func:`jlens.mmpilot.l32_followup.discover_published_l32_lens`, so the MOCK
+    exercises discovery instead of skipping to a hard-coded path.
+
+    Args:
+        corrupt: One defect from :data:`MOCK_EXTENSION_DEFECTS`, or ``None``.
+            ``"lens_bytes"`` rewrites the file after both sidecars are written —
+            exactly the state a partial Drive sync leaves behind.
+    """
+    from jlens.calibration.publication import ARTIFACT_FORMAT_VERSION
+    from jlens.metadata import file_sha256
+    from jlens.mmpilot.l32_followup import (
+        EXTENSION_ARTIFACT_SCHEMA,
+        EXTENSION_REPORT_SCHEMA,
+        PUBLISHED_STATUS,
+        l32_expectations,
+    )
+    from jlens.mmpilot.store import payload_checksum
+
+    if corrupt is not None and corrupt not in MOCK_EXTENSION_DEFECTS:
+        raise ValueError(
+            f"unknown defect {corrupt!r}; known defects are {MOCK_EXTENSION_DEFECTS}"
+        )
+
+    root = Path(root)
+    published = root / "artifacts" / "published"
+    published.mkdir(parents=True, exist_ok=True)
+
+    recorded_layer = 99 if corrupt == "wrong_layer" else int(layer)
+    recorded_scale = 100 if corrupt == "wrong_scale" else int(scale)
+    validated = corrupt != "unconfirmed"
+
+    destination = (
+        published / f"lens.early.layer{int(layer)}.scale{int(scale)}.validated.pt"
+    )
+    JacobianLens(
+        jacobians={int(layer): torch.eye(d_model)},
+        n_prompts=int(scale),
+        d_model=int(d_model),
+    ).save(str(destination))
+    checksum = file_sha256(str(destination))
+
+    confirmation_metrics = {
+        "mean_reciprocal_rank": 0.4058,
+        "median_midrank": 3.5,
+        "top_10_inclusion": 0.574,
+        "n_confirmation_prompts": 256,
+    }
+    base = {
+        "artifact_format_version": ARTIFACT_FORMAT_VERSION,
+        "protocol_version": "research-grade-early-layer-jlens-extension-v1",
+        "frozen": True,
+        "validated": bool(validated),
+        "model_repo_id": model_repo_id,
+        "model_revision": model_revision,
+        "tokenizer_repo_id": model_repo_id,
+        "tokenizer_revision": model_revision,
+        "physical_layer": int(layer),
+        "normalized_depth": round(int(layer) / MOCK_N_LAYERS, 4),
+        "d_model": int(d_model),
+        "target_layer": MOCK_N_LAYERS - 1,
+        "hook_site": "block_output",
+        "residual_convention": (
+            "pre-final-norm residual after the block; the exact input to block l+1"
+        ),
+        "vector_orientation": (
+            "J_l maps a layer-l residual into the final-layer basis; applied as "
+            "residual @ J_l.T"
+        ),
+        "normalization_convention": "readout is lm_head(final_norm(J_l @ h))",
+        "logit_softcap": 30.0,
+        "calibration_modality": "text-only",
+        "spokencoco_used": False,
+        "multimodal_data_used": False,
+        "cross_modal_alignment": False,
+        "modality_specific_lens": False,
+        "corpus_id": "mock/wikitext-like",
+        "corpus_revision": "mock",
+        "confirmation_split_checksum": "sha256:mock-confirmation-split",
+        "n_fitting_prompts": int(scale),
+        "scale_point": int(scale),
+        "gate_digest": "sha256:mock-extension-gate",
+        "confirmation_protocol": "mock-extension-confirmation-v1",
+        "confirmation_failed_checks": [] if validated else ["mock_rank_criterion"],
+        "confirmation_metrics": dict(confirmation_metrics),
+        "validation_protocol": "mock-extension-development-v1",
+        "validation_failed_checks": [],
+        "estimator": "jlens.fitting.fit (upstream, unmodified)",
+        "objective": "not_applicable_estimator_is_a_sample_mean",
+        "lens_path": str(destination),
+        "lens_checksum": checksum,
+    }
+    base["artifact_checksum"] = payload_checksum(base)
+    destination.with_suffix(".json").write_text(
+        json.dumps(base, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+
+    def write_extension_sidecar(path: Path) -> dict:
+        payload = {
+            "schema": EXTENSION_ARTIFACT_SCHEMA,
+            "protocol_version": "research-grade-early-layer-jlens-extension-v1",
+            "protocol_digest": "sha256:mock-extension-protocol",
+            "frozen": True,
+            "validated": bool(validated),
+            "publication_status": PUBLISHED_STATUS,
+            "physical_layer": int(recorded_layer),
+            "scale_point": int(recorded_scale),
+            "parent_run_root": str(root / "parent"),
+            "parent_accumulator_checksum": "sha256:mock-accumulator",
+            "old_confirmation_set_reused": False,
+            "old_development_set_reused": False,
+            "model_repo_id": model_repo_id,
+            "model_revision": model_revision,
+            "n_fitting_prompts": int(recorded_scale),
+            "fit_order_protocol": "parent-prefix-pinned-nested-order-v1",
+            "development_split_checksum": "sha256:mock-development-split",
+            "confirmation_split_checksum": "sha256:mock-confirmation-split",
+            "fresh_splits_manifest_checksum": "sha256:mock-fresh-splits",
+            "confirmation_metrics": dict(confirmation_metrics),
+            "confirmation_failed_checks": list(base["confirmation_failed_checks"]),
+            "lens_path": str(destination),
+            "lens_checksum": checksum,
+            "base_artifact_checksum": base["artifact_checksum"],
+            "existing_publications_unchanged": [35, 38, 40],
+            "parent_run_written": False,
+            "calibration_modality": "text-only",
+            "spokencoco_used": False,
+            "multimodal_data_used": False,
+        }
+        payload["artifact_checksum"] = (
+            "sha256:deliberately-wrong"
+            if corrupt == "extension_checksum"
+            else payload_checksum(payload)
+        )
+        path.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        return payload
+
+    extension = write_extension_sidecar(destination.with_suffix(".extension.json"))
+    if corrupt == "duplicate":
+        write_extension_sidecar(
+            published
+            / f"lens.early.layer{int(layer)}.scale{int(scale)}.copy.extension.json"
+        )
+
+    report_checksum = (
+        "sha256:deliberately-wrong" if corrupt == "report_checksum" else checksum
+    )
+    report = {
+        "schema": EXTENSION_REPORT_SCHEMA,
+        "mode": mode,
+        "protocol_version": "research-grade-early-layer-jlens-extension-v1",
+        "fingerprint_digest": "sha256:mock-extension-fingerprint",
+        "gate_digest": "sha256:mock-extension-gate",
+        "parent_immutability_proof": {"immutable": True, "n_files_checked": 7},
+        "scale_selection": {
+            "selected_scale": int(scale),
+            "selection_checksum": "sha256:mock-selection",
+        },
+        "early_layer_verdict": {
+            "verdict": verdict,
+            "earlier_layers_passing_confirmation": [int(layer)] if publish else [],
+            "statement": "mock verdict; proves pipeline behaviour only",
+        },
+        "publication": {
+            "n_published": 1 if publish else 0,
+            "n_failed": 0 if publish else 1,
+            "published_layers": [int(layer)] if publish else [],
+            "failed_layers": [] if publish else [int(layer)],
+            "published_checksums": (
+                {str(int(layer)): report_checksum} if publish else {}
+            ),
+            "failed_layers_marked_validated": False,
+        },
+        "resume": {"status": "resuming", "invalid_units": []},
+        "mock_proves_pipeline_only": mode != "real",
+    }
+    report_path = root / "artifacts" / "early_layer_extension_report.json"
+    report_path.write_text(
+        json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+
+    if corrupt == "lens_bytes":
+        JacobianLens(
+            jacobians={int(layer): torch.eye(d_model) * 2.0},
+            n_prompts=int(scale),
+            d_model=int(d_model),
+        ).save(str(destination))
+
+    return {
+        "root": str(root),
+        "report_path": str(report_path),
+        "published_dir": str(published),
+        "lens_path": str(destination),
+        "lens_checksum": checksum,
+        "base_sidecar": base,
+        "extension_sidecar": extension,
+        "report": report,
+        "expectations": l32_expectations(
+            model_repo_id=model_repo_id,
+            model_revision=model_revision,
+            d_model=int(d_model),
+            layer=int(layer),
+            scale=int(scale),
+        ),
+    }
