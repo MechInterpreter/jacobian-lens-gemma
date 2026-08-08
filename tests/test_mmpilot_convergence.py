@@ -97,10 +97,36 @@ def audited(tmp_path_factory):
 # ------------------------------------------------------- lens-validity refusal
 
 
-def test_layer_32_is_never_interpreted():
+def test_layer_32_is_never_interpreted_on_the_scale_100_evidence():
     assert 32 in LENS_INVALID_LAYERS
-    with pytest.raises(LensInvalidLayerError, match="failed the calibration"):
+    with pytest.raises(LensInvalidLayerError, match="failed the scale-100"):
         assert_lens_valid_layer(32)
+
+
+def test_layer_32_needs_a_passing_record_not_a_flag():
+    """Wanting to interpret layer 32 is not evidence that it may be.
+
+    The early-layer extension confirmed layer 32 at scale 250, so the refusal is
+    no longer unconditional — but it is cleared only by the artifact's own
+    passing validation record, and a record that is for another layer or that
+    did not pass clears nothing.
+    """
+    passing = {"layer": 32, "passed": True, "failed_checks": []}
+    assert_lens_valid_layer(32, audited=(32,), confirmation_record=passing)
+
+    with pytest.raises(LensInvalidLayerError, match="did not pass"):
+        assert_lens_valid_layer(
+            32,
+            audited=(32,),
+            confirmation_record={"layer": 32, "passed": False, "failed_checks": ["x"]},
+        )
+    with pytest.raises(LensInvalidLayerError, match="is for layer"):
+        assert_lens_valid_layer(
+            32, audited=(32,), confirmation_record={"layer": 35, "passed": True}
+        )
+    # A passing record does not also widen the audited set.
+    with pytest.raises(LensInvalidLayerError, match="not one of the independently"):
+        assert_lens_valid_layer(32, confirmation_record=passing)
 
 
 @pytest.mark.parametrize("layer", AUDITED_LAYERS)
