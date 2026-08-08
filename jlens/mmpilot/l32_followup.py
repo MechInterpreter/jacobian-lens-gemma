@@ -1367,10 +1367,18 @@ def adjacent_layer_recommendation(
             "recommendation": "smallest_convergence_resolution_study",
             "fit_l33_l34": False,
             "rationale": (
-                f"Layer {L32_LAYER} sits between the bars. Adjacent layers cannot "
-                "resolve an ambiguity about layer 32 itself; the next step is the "
-                "smallest study that moves layer 32 out of the ambiguous band — "
-                "more samples in the undersized cells, not more layers."
+                f"Layer {L32_LAYER} sits between the two bars. Adjacent layers "
+                "cannot resolve an ambiguity about layer 32 itself, so the next "
+                "step is a separately fingerprinted, predeclared **independent "
+                f"layer-{L32_LAYER} convergence-resolution population** — new "
+                "photographs and recordings under this same open protocol, "
+                "scored against these same frozen thresholds, with the "
+                "classification declared before the data are opened. "
+                "AMBIGUOUS is a measured outcome, not a sample-size problem: "
+                "an ambiguous layer can stay ambiguous at any n, and nothing "
+                "about a larger population makes NOT_CONVERGED more likely to "
+                "be the answer. What a fresh population buys is an independent "
+                "test of the same question, not a nudge toward a preferred side."
             ),
         }
     if causal_verdict == SUPPORTED and classification == NOT_CONVERGED:
@@ -1477,24 +1485,65 @@ def followup_fingerprint(**fields) -> dict:
     return {**payload, "fingerprint_digest": payload_checksum(payload)}
 
 
+#: Words that mark a forbidden phrase as being *ruled out* rather than asserted.
+#: The rule is "the report must not claim pre-linguistic", not "the report must
+#: not contain the letters" — a criterion that tells a reader which phrases are
+#: forbidden has to be able to name them.
+#:
+#: Deliberately only these two. A bare ``"not "`` was considered and rejected:
+#: it is common enough in ordinary prose that it would excuse an affirmative use
+#: sitting a sentence away from an unrelated negation, which is exactly the slip
+#: this check exists to catch.
+PHRASE_NEGATION_MARKERS: tuple[str, ...] = ("never", "forbidden")
+
+#: How far either side of an occurrence a negation marker is looked for.
+PHRASE_NEGATION_WINDOW = 400
+
+
 def assert_report_phrasing(text: str) -> dict:
     """The report says ``before native direct-readout convergence`` and nothing else.
 
+    Every occurrence of a forbidden phrase must sit inside a passage that is
+    *ruling it out*. A bare affirmative use is refused; a sentence such as
+    "never 'pre-linguistic'" is not, because otherwise the criterion could not
+    state its own boundary and the check would be evaded by paraphrase instead
+    of enforced.
+
     Raises:
-        L32FollowupRefused: If any forbidden phrase appears. The claim this
-            study can make is about a readout; the forbidden phrases are claims
-            about language, and no measurement here supports one.
+        L32FollowupRefused: If a forbidden phrase appears with no negation
+            marker near it. The claim this study can make is about a readout;
+            the forbidden phrases are claims about language, and no measurement
+            here supports one.
     """
     lowered = str(text).lower()
-    found = [phrase for phrase in FORBIDDEN_PHRASES if phrase in lowered]
-    if found:
+    asserted: list[dict] = []
+    ruled_out: list[str] = []
+    for phrase in FORBIDDEN_PHRASES:
+        start = 0
+        while (index := lowered.find(phrase, start)) != -1:
+            window = lowered[
+                max(0, index - PHRASE_NEGATION_WINDOW) : index
+                + len(phrase)
+                + PHRASE_NEGATION_WINDOW
+            ]
+            if any(marker in window for marker in PHRASE_NEGATION_MARKERS):
+                ruled_out.append(phrase)
+            else:
+                asserted.append({"phrase": phrase, "context": window.strip()[:200]})
+            start = index + len(phrase)
+    if asserted:
         raise L32FollowupRefused(
-            f"the report uses phrasing this study cannot support: {found}. Say "
+            "the report uses phrasing this study cannot support: "
+            f"{[entry['phrase'] for entry in asserted]}. Say "
             f"{CONVERGENCE_PHRASE!r} — a weak native readout is a fact about the "
-            "readout, not about whether linguistic information is present."
+            "readout, not about whether linguistic information is present. "
+            f"First occurrence: {asserted[0]['context']!r}"
         )
     return {
         "checked_phrases": list(FORBIDDEN_PHRASES),
+        "negation_markers": list(PHRASE_NEGATION_MARKERS),
+        "phrases_named_as_forbidden": sorted(set(ruled_out)),
+        "phrases_asserted": [],
         "required_phrase": CONVERGENCE_PHRASE,
         "required_phrase_present": CONVERGENCE_PHRASE in lowered,
         "passed": True,
