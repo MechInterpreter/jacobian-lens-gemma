@@ -324,15 +324,17 @@ def test_the_schematic_draws_how_the_model_is_asked():
 
     # The planned side: the open prompts, and the boundary the scorer sits on.
     for statement in (
-        "PLANNED — open prompt, candidates external to the model",
-        "mmpilot.open_identification.v1 / open_downstream_property.v1",
+        "PLANNED — open prompt, candidates external, domain declared",
+        "mmpilot.open_animal_identification.v1 / open_animal_legs.v1",
         "What animal is present in the evidence?",
         "How many legs does the animal typically have?",
         "no candidate list anywhere in the model-visible prompt",
         "candidates go only to the external teacher-forced scorer",
         "the swap target appears in no visible prompt and no transcript",
         "coordinate exchange (method B)",
-        "separate conditions with separate claims",
+        "ANIMAL-ONLY. Both questions presume an animal",
+        "toilet and microwave are refused",
+        "leg counts come from a registry (bird 2, cat 4), never a guess",
     ):
         assert statement in svg, statement
 
@@ -342,7 +344,12 @@ def test_the_schematic_does_not_imply_the_open_experiments_have_succeeded():
     assert "Not yet run. No result exists under any open protocol." in svg
     assert "No result under method B, and no result under any open protocol, exists yet." in svg
     assert "A hidden-intermediate test is a later, stronger stage" in svg
-    assert "It is not designed yet." in svg
+    assert "is not designed yet." in svg
+    # The animal scope and the separate general protocol are both stated.
+    assert "identity and legs experiment is ANIMAL-ONLY" in svg
+    assert "General object identification is a separate protocol" in svg
+    assert "mmpilot.open_entity_identification.v1" in svg
+    assert "supports no legs or multi-hop claim" in svg
 
 
 # --------------------------------------------------------- the documentation
