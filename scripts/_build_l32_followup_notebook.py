@@ -1950,6 +1950,7 @@ INTERVENTION_RECORDS = []
 IMAGE_LEVEL = None
 INDEPENDENCE = None
 CAUSAL_VERDICT = None
+CAUSAL_BREAKDOWN = None
 if BACKEND is None:
     print("skipped: no backend")
 elif CAPABILITY_VERDICT is None or CAPABILITY_VERDICT["verdict"] != "AUDIO_CAPABILITY_GO":
@@ -1964,6 +1965,10 @@ else:
         summarize_interventions_by_image,
     )
     from jlens.mmpilot.pipeline import stage_causal, stage_directions
+    from jlens.mmpilot.l32_reporting import (
+        causal_cell_breakdown,
+        format_causal_breakdown,
+    )
     from jlens.mmpilot.tri_modal import causal_transfer_verdict
 
     _dictionaries = build_dictionaries(
@@ -2050,6 +2055,14 @@ else:
     print(f"  capability-eligible    {_adm['eligible_concepts']}")
     print(f"  CAPABILITY_INELIGIBLE  {_adm['excluded_concept_names']}")
     print(f"\\n{_adm['no_post_hoc_replacement']}")
+
+    # Verdict C is decided on the AUDIO arm; verdict E counts every admissible
+    # off-diagonal cell. Both numbers are right and they differ by the
+    # text<->image replication cells, so the buckets are printed rather than
+    # left to look like a contradiction.
+    print()
+    CAUSAL_BREAKDOWN = causal_cell_breakdown(CAUSAL_VERDICT)
+    print(format_causal_breakdown(CAUSAL_BREAKDOWN, layer=CAUSAL_LAYER))
 '''
 )
 
@@ -2074,8 +2087,21 @@ float tolerance, probe by probe as singleton batches — comparing a batched
 `unembed` against a row-wise stack compares GEMM shapes, not readouts.
 
 The criterion is the **already predeclared two-sided rule** and its thresholds
-are not touched. Controls are the existing meaningful ones: permuted
-activations, permuted candidate-token assignments, and shuffled target labels.
+are not touched — but it is *printed for this audit*. The historical
+`CRITERION_TEXT` constant is titled "L35 / L38 / L40" and names layer 35 as the
+primary throughout; it is the completed three-modality study's protocol, it is
+the wrong document for a single-layer L32 audit, and it is left unedited because
+it is that run's record. `format_l32_criterion` states the same thresholds and
+the same digest under the correct scope, and says plainly that **no later-layer
+trajectory clause is applied here** — that clause needs a second layer and
+cannot be evaluated, or claimed, from one point.
+
+Controls are the existing meaningful ones: permuted activations, permuted
+candidate-token assignments, and shuffled target labels. All three are printed
+individually with the field each was compared on, and a variant that produced
+**no record refuses the cell rather than counting as a pass** —
+`summarize_controls` skips a variant with no rows, which would otherwise leave
+`all_controls_passed` True with the control never having run.
 
 > A literal wrong-layer output head is **not** technically meaningful here:
 > Gemma 4 has exactly one final normalization module and one unembedding, shared
@@ -2092,11 +2118,13 @@ is the scale-250 confirmation, passed in as a record rather than as a flag.
 code(
     '''
 # 15. The native readout at layer 32, audited against the model's own unembed.
+#
+# The criterion printed here is written for THIS audit. The historical
+# CRITERION_TEXT constant is titled "L35 / L38 / L40" and names layer 35 as the
+# primary throughout; it is the completed three-modality study's protocol and is
+# deliberately left untouched, because editing it would rewrite that run's
+# record. Same thresholds, same digest — only the scope statement differs.
 from jlens.mmpilot.convergence import (
-    CONTROL_VARIANTS,
-    CRITERION_TEXT,
-    INTERPRETATION_BOUNDARY,
-    WRONG_LAYER_CONTROL_NOTE,
     ConvergenceFingerprint,
     ConvergenceStore,
     NativeHead,
@@ -2111,19 +2139,30 @@ from jlens.mmpilot.l32_followup import (
     assert_native_head_agrees,
     run_single_layer_convergence,
 )
+from jlens.mmpilot.l32_reporting import (
+    L32_REPORTING_VERSION,
+    classification_detail,
+    control_rows,
+    convergence_cell_rows,
+    format_classification,
+    format_controls,
+    format_convergence_cells,
+    format_l32_criterion,
+)
 
 CONVERGENCE = None
 CONVERGENCE_CLASSIFICATION = None
 CONVERGENCE_CONTROLS = None
+CONVERGENCE_CELLS = None
+CONVERGENCE_DETAIL = None
+CONTROL_ROWS = None
 HEAD_AUDIT = None
 HEAD_AGREEMENT = None
+L32_CRITERION_TEXT = format_l32_criterion(layer=CAUSAL_LAYER)
 if BACKEND is None or not INTERVENTION_RECORDS:
     print("skipped: the causal stage produced no clean references to score against")
 else:
-    print(CRITERION_TEXT)
-    print()
-    print(WRONG_LAYER_CONTROL_NOTE)
-    print()
+    print(L32_CRITERION_TEXT)
 
     if RUN_REAL_L32_FOLLOWUP:
         HEAD = head_from_model(MODEL)
@@ -2220,30 +2259,31 @@ else:
     print(f"VERDICT D — L32_NATIVE_OUTPUT_CONVERGENCE: "
           f"{CONVERGENCE_CLASSIFICATION['classification']}")
     print("=" * 72)
-    _summary = CONVERGENCE["summary"]["per_layer"][str(CAUSAL_LAYER)]["per_modality"]
-    for _modality in ("text", "image", "spoken_audio"):
-        _cell = _summary.get(_modality) or {}
-        print(f"  {_modality:13s} n={_cell.get('n', 0):3d}  "
-              f"clean_agree_unique={_cell.get('clean_agreement_unique')}  "
-              f"clean_agree_argmax={_cell.get('clean_agreement_argmax')}  "
-              f"target_acc_unique={_cell.get('target_accuracy_unique')}  "
-              f"median_rank={_cell.get('median_target_rank')}  "
-              f"unique_top1={_cell.get('unique_top1_rate')}  "
-              f"margin={_cell.get('median_target_margin')}  "
-              f"entropy={_cell.get('median_entropy')}  "
-              f"top2_margin={_cell.get('median_top_two_margin')}")
-    print(f"\\n  deciding clause: {CONVERGENCE_CLASSIFICATION.get('decided_by')}")
-    print("\\nCONTROLS")
-    _per_layer = CONVERGENCE_CONTROLS.get("per_layer") or {}
-    _cell = _per_layer.get(str(CAUSAL_LAYER), _per_layer.get(CAUSAL_LAYER, {}))
-    for _variant in CONTROL_VARIANTS:
-        print(f"  {_variant:28s} {_cell.get(_variant)}")
-    print(f"\\n  all controls passed: "
-          f"{CONVERGENCE_CONTROLS.get('all_controls_passed')}")
-    print(f"  failed controls:     {CONVERGENCE_CONTROLS.get('failed_controls')}")
-    print(f"  {CONVERGENCE_CONTROLS.get('pass_rule')}")
+
+    # Every field below is read by the name summarize_cell actually stores it
+    # under. The first version of this cell asked for `unique_top1_rate` and
+    # `median_entropy`, which have never existed, and printed None for both —
+    # indistinguishable from a measurement that came back empty.
+    CONVERGENCE_CELLS = convergence_cell_rows(
+        CONVERGENCE["summary"], layer=CAUSAL_LAYER
+    )
+    print(format_convergence_cells(CONVERGENCE_CELLS, layer=CAUSAL_LAYER))
     print()
-    print(INTERPRETATION_BOUNDARY)
+
+    # classify_layer has no `decided_by` field; it records which clauses failed
+    # on each side. AMBIGUOUS means both lists are non-empty.
+    CONVERGENCE_DETAIL = classification_detail(CONVERGENCE_CLASSIFICATION)
+    print(format_classification(CONVERGENCE_DETAIL))
+    print()
+
+    # The variants live under per_layer[layer]["controls"][variant]. Reading one
+    # level too shallow printed None for all three. A variant that produced no
+    # rows is skipped by summarize_controls, leaving `all_controls_passed` True
+    # with the control never having run — so completeness is asserted first.
+    CONTROL_ROWS = control_rows(CONVERGENCE_CONTROLS, layer=CAUSAL_LAYER)
+    print(format_controls(
+        CONTROL_ROWS, controls=CONVERGENCE_CONTROLS, layer=CAUSAL_LAYER
+    ))
 '''
 )
 
@@ -2582,11 +2622,21 @@ REPORT = {
     "invariance": INVARIANCE,
     "native_head_audit": HEAD_AUDIT,
     "native_head_agreement": HEAD_AGREEMENT,
+    "reporting_version": L32_REPORTING_VERSION,
+    "l32_criterion_text": L32_CRITERION_TEXT,
+    # The per-modality table, the clause detail and the flattened controls are
+    # stored, not just printed, so a reader never has to re-derive them from the
+    # rows to see what was measured.
+    "convergence_cells": CONVERGENCE_CELLS,
+    "classification_detail": CONVERGENCE_DETAIL,
+    "controls": CONTROL_ROWS,
+    "causal_breakdown": CAUSAL_BREAKDOWN,
     "convergence": (
         {k: v for k, v in CONVERGENCE.items() if k != "summary"}
         if CONVERGENCE
         else None
     ),
+    "convergence_summary": (CONVERGENCE or {}).get("summary"),
     "followup_fingerprint": FOLLOWUP_FINGERPRINT,
     "run_fingerprint_digest": FINGERPRINT.digest,
     "representational": REPRESENTATIONAL,
@@ -2660,6 +2710,90 @@ else:
     print()
     print("Send back l32_followup_report.json, the section 13 pair table, the")
     print("section 14 causal table, and the section 15 convergence table.")
+'''
+)
+
+# ============================================ 19. the reporting amendment
+
+markdown(
+    """
+## 19. Reporting amendment for an already-completed run — **CPU only**
+
+Sections 1–18 above now print correctly, so a **new** run needs nothing from
+this section. It exists for runs that completed under the earlier, defective
+output: a run whose numbers are right and whose display was not.
+
+Set `AMEND_COMPLETED_RUN_DIR` to the finished run and run **sections 1, 2, 4 and
+19 only**. No Drive dataset is read, no model is loaded, no unit is computed, no
+run directory is created.
+
+What it does:
+
+* reads `l32_followup_report.json` **read-only** and checksums it;
+* re-derives the per-modality table, the classification and the controls from
+  the run's own checksum-validated readout rows, using the **same** frozen
+  functions at the **same** criterion digest — and **refuses** if the re-derived
+  classification differs from the recorded one, because then it would not be a
+  reporting pass;
+* binds the result to the original report's checksum, the run fingerprint, a
+  source-unit digest and the reporting version;
+* writes `l32_followup_report_reporting_v2.json` and `.md` **beside** the
+  original, atomically.
+
+The original report and every stored unit stay byte-identical. **No verdict
+moves.** Layer 32 stays whatever it was measured to be.
+"""
+)
+
+code(
+    '''
+# 19. CPU-only reporting amendment. Requires sections 1, 2 and 4 only.
+#
+# Set this to a completed run directory and run this cell. Leave it empty and
+# the cell does nothing.
+AMEND_COMPLETED_RUN_DIR = ""
+
+AMEND_COMPLETED_RUN_DIR = (
+    os.environ.get("MMPILOT_AMEND_L32_RUN_DIR") or AMEND_COMPLETED_RUN_DIR
+)
+# Optional: pin the exact bytes the amendment was reviewed against.
+AMEND_EXPECTED_REPORT_SHA256 = ""
+
+AMENDMENT = None
+AMENDMENT_PATHS = None
+if not AMEND_COMPLETED_RUN_DIR:
+    print("skipped: AMEND_COMPLETED_RUN_DIR is empty.")
+    print()
+    print("Sections 1-18 already print the corrected output, so a run completed")
+    print("with this notebook needs no amendment. Point this at a run that")
+    print("finished under the earlier output to re-render it.")
+else:
+    from jlens.mmpilot.l32_reporting import (
+        build_reporting_amendment,
+        render_amendment_markdown,
+        write_reporting_amendment,
+    )
+
+    AMENDMENT = build_reporting_amendment(
+        AMEND_COMPLETED_RUN_DIR,
+        layer=L32_PHYSICAL_LAYER,
+        expected_report_checksum=AMEND_EXPECTED_REPORT_SHA256 or None,
+    )
+    AMENDMENT_PATHS = write_reporting_amendment(AMEND_COMPLETED_RUN_DIR, AMENDMENT)
+
+    print(render_amendment_markdown(AMENDMENT))
+    print()
+    print("=" * 72)
+    print("WRITTEN")
+    for _name, _path in sorted(AMENDMENT_PATHS.items()):
+        print(f"  {_name:9s} {_path}")
+    print("UNCHANGED")
+    print(f"  {AMENDMENT['amends']['original_report']}  "
+          f"{AMENDMENT['amends']['original_report_checksum']}")
+    print("  every stored scientific unit")
+    print()
+    for _name, _value in AMENDMENT["verdicts_unchanged"].items():
+        print(f"  {_name:38s} {_value}")
 '''
 )
 
