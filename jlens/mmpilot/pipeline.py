@@ -156,6 +156,8 @@ def scientific_fingerprint(
     n_test_positive_images: int,
     n_test_negative_images: int,
     verdict_version: str,
+    prompt_protocol: str | None = None,
+    candidate_ordering_protocol: str | None = None,
 ) -> dict:
     """Everything about *what the experiment is* that a resume must match.
 
@@ -170,6 +172,19 @@ def scientific_fingerprint(
     Ordered sequences stay ordered on purpose: the ranking *order* decides the
     focal concepts, so a reordering is a different experiment even when the
     set is identical.
+
+    Args:
+        prompt_protocol: Which question the model was asked under. ``None``
+            keeps :data:`~jlens.mmpilot.capability.PROMPT_PROTOCOL_VERSION`, so
+            every completed run's digest is byte-identical to what it was
+            written with. A study under an open protocol passes its own
+            identifier here, and the differing digest is the point: a
+            candidate-listed run and an open run are not the same measurement
+            and must not resume from each other.
+        candidate_ordering_protocol: How candidate order was handled. ``None``
+            keeps the canonical/reversed pair. An open protocol has no candidate
+            order *in the prompt*, and says so here rather than claiming an
+            invariance it did not test.
     """
     profile = config.profile()
     return {
@@ -208,8 +223,10 @@ def scientific_fingerprint(
         "derived_cache_fingerprint": derived_cache_fingerprint,
         "split_provenance_checksum": split_provenance_checksum,
         # ---- how the model was asked
-        "capability_protocol": PROMPT_PROTOCOL_VERSION,
-        "candidate_ordering_protocol": "canonical_and_reversed_sorted_options.v1",
+        "capability_protocol": prompt_protocol or PROMPT_PROTOCOL_VERSION,
+        "candidate_ordering_protocol": (
+            candidate_ordering_protocol or "canonical_and_reversed_sorted_options.v1"
+        ),
         "n_candidates_scored": len(selected_concepts),
         "capability_threshold": config.capability_threshold,
         # ---- how it was intervened on
@@ -336,12 +353,28 @@ def stage_capability(
     media: MediaLoader,
     *,
     modalities: Sequence[str],
+    questions: Sequence[str] | None = None,
 ) -> tuple[StageOutcome, dict]:
-    """Score every positive group in every available modality."""
+    """Score every positive group in every available modality.
+
+    Args:
+        questions: The model-visible instruction(s) to ask under. ``None`` keeps
+            the completed runs' candidate-listed question and its canonical /
+            reversed order pair, byte for byte. An **open** protocol supplies
+            one question here, and it is one rather than two because
+            candidate-order invariance is not applicable to a prompt that names
+            no candidates — the order lives entirely in the external scorer.
+    """
     concepts = list(config.concepts) or sorted(
         {g["concept"] for g in subset["splits"]["train"] if g["concept"]}
     )
-    questions = build_ordered_questions(concepts)
+    questions = (
+        [str(item) for item in questions]
+        if questions is not None
+        else build_ordered_questions(concepts)
+    )
+    if not questions:
+        raise ValueError("at least one question is required")
     candidates = candidate_token_ids(backend, concepts)
     groups = [
         group
@@ -413,10 +446,22 @@ def stage_activations(
     modalities: Sequence[str],
     retained_concepts: Sequence[str],
     model_revision: str,
+    question: str | None = None,
 ) -> StageOutcome:
     """Capture the final-prompt-token residual for retained concepts and
-    matched negatives, one atomic unit per (sample, modality, layer)."""
-    question = build_question(list(config.concepts) or list(retained_concepts))
+    matched negatives, one atomic unit per (sample, modality, layer).
+
+    Args:
+        question: The model-visible instruction. ``None`` keeps the completed
+            runs' candidate-listed question. It must be the *same* question the
+            causal stage uses, or the captured residual is not the activation
+            the intervention edits.
+    """
+    question = (
+        str(question)
+        if question is not None
+        else build_question(list(config.concepts) or list(retained_concepts))
+    )
     outcome = StageOutcome()
     for split in ("train", "test"):
         for group in subset["splits"][split]:
@@ -778,6 +823,7 @@ def stage_causal(
     modalities: Sequence[str],
     all_concepts: Sequence[str],
     unrelated_controls: Mapping[str, str] | None = None,
+    question: str | None = None,
 ) -> tuple[StageOutcome, dict]:
     """The source x target transfer matrix, with all four controls.
 
@@ -785,8 +831,16 @@ def stage_causal(
         unrelated_controls: ``{focal concept: external unrelated concept}``,
             decided before the model ran. When absent the first non-focal
             concept is used, which is the pilot's rule.
+        question: The model-visible instruction. ``None`` keeps the completed
+            runs' candidate-listed question. Whatever is passed must be the same
+            string :func:`stage_activations` captured under: the clean and
+            edited passes have to differ only by the edit.
     """
-    question = build_question(list(config.concepts) or list(all_concepts))
+    question = (
+        str(question)
+        if question is not None
+        else build_question(list(config.concepts) or list(all_concepts))
+    )
     candidates = candidate_token_ids(backend, list(config.concepts) or list(all_concepts))
     groups = {group["group_id"]: group for group in subset["splits"]["test"]}
     outcome = StageOutcome()
