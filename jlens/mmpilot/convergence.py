@@ -109,7 +109,11 @@ AUDITED_LAYERS: tuple[int, ...] = (35, 38, 40)
 #: The layer the completed causal result belongs to.
 PRIMARY_LAYER = 35
 
-#: Layers whose lens failed confirmation. Never interpreted, never audited here.
+#: Layers whose lens failed the **scale-100** confirmation set. Never
+#: interpreted on the strength of that run. Layer 32 was later confirmed at
+#: scale 250 by the early-layer extension, so
+#: :func:`assert_lens_valid_layer` clears it for — and only for — a caller
+#: holding that artifact's passing validation record.
 LENS_INVALID_LAYERS: tuple[int, ...] = (32,)
 
 #: Modality names, byte-identical to the completed run's.
@@ -410,19 +414,51 @@ Verdict is exactly one of:
 # ------------------------------------------------------------ lens-validity gate
 
 
-def assert_lens_valid_layer(layer: int, *, audited: Sequence[int] = AUDITED_LAYERS) -> None:
+def assert_lens_valid_layer(
+    layer: int,
+    *,
+    audited: Sequence[int] = AUDITED_LAYERS,
+    confirmation_record: Mapping | None = None,
+) -> None:
     """Refuse to interpret a layer whose lens is not independently validated.
 
+    Args:
+        confirmation_record: A passing validation record from
+            :func:`jlens.mmpilot.published_lens.validate_published_artifact`
+            for *this* layer. This is the **only** thing that clears a layer in
+            :data:`LENS_INVALID_LAYERS`, and it must be positive evidence — a
+            record, not a flag. The scale-100 failure at layer 32 is a fact
+            about scale 100; the early-layer extension confirmed layer 32 at
+            scale 250 on its own untouched 256-prompt set, and an audit holding
+            that artifact may interpret that layer. An audit that merely *wants*
+            to cannot.
+
     Raises:
-        LensInvalidLayerError: For layer 32 (which failed the untouched
-            confirmation set) and for any layer outside the audited set.
+        LensInvalidLayerError: For a layer on :data:`LENS_INVALID_LAYERS` with
+            no passing confirmation record, for a record that is for a
+            different layer or did not pass, and for any layer outside
+            ``audited``.
     """
     if int(layer) in tuple(int(x) for x in LENS_INVALID_LAYERS):
-        raise LensInvalidLayerError(
-            f"layer {layer} failed the calibration run's untouched confirmation "
-            "set; it is not a validated lens layer and this audit refuses to "
-            "produce a causal or convergence interpretation for it"
-        )
+        if confirmation_record is None:
+            raise LensInvalidLayerError(
+                f"layer {layer} failed the scale-100 calibration run's untouched "
+                "confirmation set; it is not a validated lens layer at that "
+                "scale and this audit refuses to produce a causal or "
+                "convergence interpretation for it. A run holding a lens "
+                "confirmed at another scale must pass that artifact's "
+                "validation record as confirmation_record."
+            )
+        if int(confirmation_record.get("layer", -1)) != int(layer):
+            raise LensInvalidLayerError(
+                f"the confirmation record offered for layer {layer} is for layer "
+                f"{confirmation_record.get('layer')!r}"
+            )
+        if confirmation_record.get("passed") is not True:
+            raise LensInvalidLayerError(
+                f"the confirmation record offered for layer {layer} did not pass "
+                f"(failed checks {confirmation_record.get('failed_checks')!r})"
+            )
     if int(layer) not in tuple(int(x) for x in audited):
         raise LensInvalidLayerError(
             f"layer {layer} is not one of the independently validated layers "
@@ -3387,6 +3423,7 @@ def run_convergence_audit(
     run_probe: bool = False,
     write_figures: bool = True,
     control_seed: int = 20260806,
+    confirmation_records: Mapping[int, Mapping] | None = None,
 ) -> dict:
     """Score the population, apply the criterion, and write every artifact.
 
@@ -3394,9 +3431,21 @@ def run_convergence_audit(
     and not recomputed, so a disconnected Colab session picks up where it left
     off. Nothing is written into the completed run — ``store.root`` is a new
     audit directory.
+
+    Args:
+        confirmation_records: ``{layer: validation record}`` for any layer in
+            :data:`LENS_INVALID_LAYERS` this audit is entitled to interpret.
+            See :func:`assert_lens_valid_layer` — only a passing record from the
+            artifact itself clears one, and an audit that supplies none for
+            layer 32 is refused exactly as before.
     """
+    records = dict(confirmation_records or {})
     for layer in layers:
-        assert_lens_valid_layer(int(layer), audited=layers)
+        assert_lens_valid_layer(
+            int(layer),
+            audited=layers,
+            confirmation_record=records.get(int(layer)),
+        )
 
     config_hash = payload_checksum(
         {

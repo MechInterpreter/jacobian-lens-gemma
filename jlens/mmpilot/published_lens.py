@@ -6,9 +6,27 @@ The completed research-grade calibration run publishes one lens file per layer
 that earned it, with a metadata sidecar written by
 :func:`jlens.calibration.publication.build_artifact`. Three layers earned it at
 scale 100 — **35, 38 and 40**. Layer 32 and every earlier tested layer failed
-confirmation and were recorded with ``validated=false``; nothing in this module
-will load one of those, and nothing anywhere should describe layer 32 as
-validated.
+confirmation *at that scale* and were recorded with ``validated=false``.
+
+Scale is part of the fact, and this matters
+===========================================
+
+"Layer 32 failed confirmation" is a statement about **scale 100**, not about
+layer 32 forever. The research-grade early-layer extension refitted the same
+estimator at scale 250 and layer 32 passed its own untouched 256-prompt
+confirmation set (run ``rgext_real_c18f03f06e7b``,
+``EARLY_LAYER_CALIBRATION_GO``). :data:`CONFIRMED_LAYERS` and
+:data:`FAILED_CONFIRMATION_LAYERS` below are therefore **scale-100 defaults**,
+not a global registry, and they are the defaults of
+:class:`PublishedLensExpectations` fields rather than constants this module
+reads directly — every clause in :func:`validate_published_artifact` consults
+``expectations``. A study using the scale-250 artifact states its own
+expectations (see :mod:`jlens.mmpilot.l32_followup`), and gets the identical
+schema, checksum and confirmation clauses applied to them.
+
+What has not changed: nothing here loads a lens whose own sidecar says
+``validated=false``, and no layer is ever described as validated on the
+strength of a filename.
 
 Why a second loader
 ===================
@@ -55,13 +73,16 @@ PUBLISHED_LENS_PROTOCOL = "jlens.mmpilot.published_lens.v1"
 #: The artifact format this module knows how to read.
 EXPECTED_ARTIFACT_FORMAT = "jlens.calibration.artifact.v1"
 
-#: The layers the completed calibration run's untouched confirmation set
-#: passed. Stated here so a typo in a notebook cannot quietly widen it.
+#: The layers the completed **scale-100** calibration run's untouched
+#: confirmation set passed. Stated here so a typo in a notebook cannot quietly
+#: widen it. A study at another scale supplies its own tuple.
 CONFIRMED_LAYERS: tuple[int, ...] = (35, 38, 40)
 
-#: Layers that were tested and **failed** confirmation. Named explicitly
-#: because the failure is the informative part: layer 32 has diagnostics, and
-#: it is never a validated lens.
+#: Layers tested at **scale 100** that failed its confirmation. Named
+#: explicitly because the failure is the informative part: layer 32 has
+#: scale-100 diagnostics and no scale-100 lens. It is *not* a permanent
+#: exclusion — layer 32 passed at scale 250 under the early-layer extension,
+#: and a caller reading that artifact says so in its own expectations.
 FAILED_CONFIRMATION_LAYERS: tuple[int, ...] = (32,)
 
 #: Fields the sidecar must carry. Absence is a refusal, never a default.
@@ -665,11 +686,23 @@ def format_lens_report(loaded: LoadedPublishedLenses) -> str:
             f"    hook site   {recorded.get('hook_site')}",
             f"    checks      {len(record['checks'])} passed",
         ]
+    # Taken from what these artifacts were actually held to, not from the
+    # module defaults: a scale-250 study confirms layers the scale-100 defaults
+    # list as failures, and printing the defaults would contradict the lens
+    # that was just accepted.
+    first = loaded.validations[loaded.layers[0]]["expectations"]
+    refused = list(first["failed_confirmation_layers"])
     lines += [
         "",
-        f"  Layer 32 and every earlier tested layer failed confirmation "
-        f"({list(FAILED_CONFIRMATION_LAYERS)} is what this run is asked about). "
-        "They are never loaded and never described as validated.",
+        f"  Held to scale {first['scale_point']}: confirmed layers "
+        f"{list(first['confirmed_layers'])}"
+        + (
+            f", refused layers {refused} (tested at this scale, failed its "
+            "untouched confirmation set — never loaded, never described as "
+            "validated)."
+            if refused
+            else "; no layer is on this study's failed-confirmation list."
+        ),
     ]
     return "\n".join(lines)
 
