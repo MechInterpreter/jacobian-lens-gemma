@@ -1,7 +1,7 @@
 # The prompt protocol — what the model sees, and what only the scorer sees
 
 **Status: implemented and MOCK-validated. No real open-prompt run exists.** This
-document records the audit the module was built from, specifies the four
+document records the audit the module was built from, specifies the five
 protocols, and states what each one is allowed to support.
 
 ![Two J-space interventions](assets/intervention_methods.png)
@@ -69,30 +69,71 @@ Every answer below was read out of the repository, not assumed.
 
 ---
 
-## 3. The four protocols
+## 3. The five protocols, and the domain each presumes
 
-| identifier | candidates in prompt | source may appear | target may appear | supports |
-|---|---|---|---|---|
-| `mmpilot.candidate_listed_identification.v1` | yes (legacy) | yes | yes | candidate-conditioned identification |
-| `mmpilot.open_identification.v1` | no | yes, in natural evidence, **recorded** | never | open cross-modal identification |
-| `mmpilot.open_downstream_property.v1` | no | yes, recorded | never | downstream recomputation, with controls |
-| `mmpilot.hidden_intermediate.v1` | no | never | never | multi-hop reasoning, with controls |
+| identifier | task domain | property | candidates in prompt | source may appear | target may appear | supports |
+|---|---|---|---|---|---|---|
+| `mmpilot.candidate_listed_identification.v1` | — | — | yes (legacy) | yes | yes | candidate-conditioned identification |
+| `mmpilot.open_animal_identification.v1` | `animal` | — | no | yes, in natural evidence, **recorded** | never | open cross-modal **animal** identification |
+| `mmpilot.open_entity_identification.v1` | `entity` | — | no | yes, recorded | never | open cross-modal **entity** identification |
+| `mmpilot.open_animal_legs.v1` | `animal` | `animal_leg_count.v1` | no | yes, recorded | never | leg-count recomputation, with controls |
+| `mmpilot.hidden_animal_legs.v1` | `animal` | `animal_leg_count.v1` | no | never | never | multi-hop reasoning, with controls |
+
+### Why the domain is part of the protocol
+
+*"What animal is present in the evidence?"* presumes the answer is an animal.
+The pilot's six-concept set is `bird`, `cat`, `giraffe`, `microwave`, `toilet`,
+`zebra` — two of which are not. Scoring that set against that question would not
+be an open-identification test: it would measure what the model says when asked
+for an animal that is not there, which is a different experiment with a
+different interpretation. So an `animal`-domain protocol holds **every** source,
+target and externally scored identity to that domain, and an **unspecified**
+domain is a refusal rather than an assumption.
+
+A mixed category set belongs to `open_entity_identification`, whose question
+presumes nothing — and which in exchange supports **no** legs claim and **no**
+multi-hop claim, automatically or otherwise.
+
+"How many legs" is animal-specific for the same reason, and needs more: a
+**unique registered leg count** for both source and target. Unregistered and
+ambiguous are both refusals, because a count guessed at scoring time would
+silently decide the experiment's ground truth.
 
 **An open prompt is not hidden-intermediate reasoning merely because the
-candidate list is absent.** `open_identification` still permits the source in
-written evidence; `hidden_intermediate` does not, because there would then be no
-intermediate left to be hidden.
+candidate list is absent.** `open_animal_identification` still permits the
+source in written evidence; `hidden_animal_legs` does not, because there would
+then be no intermediate left to be hidden.
+
+### Retired identifiers
+
+Three names this module used briefly are refused, with their replacement named:
+
+| retired | replacement | why |
+|---|---|---|
+| `mmpilot.open_identification.v1` | `mmpilot.open_animal_identification.v1` | domain-blind name on an animal question |
+| `mmpilot.open_downstream_property.v1` | `mmpilot.open_animal_legs.v1` | "downstream property" implies a generality "how many legs" does not have |
+| `mmpilot.hidden_intermediate.v1` | `mmpilot.hidden_animal_legs.v1` | same |
+
+No run was ever recorded under any of them — they were MOCK-only — so they are
+**renamed rather than deprecated**.
 
 ### The model-visible prompts
 
-`open_identification` — identical bytes in every evidence channel:
+`open_animal_identification` — identical bytes in every evidence channel:
 
 ```
 What animal is present in the evidence? Answer with the animal name.
 Answer:
 ```
 
-`open_downstream_property` and `hidden_intermediate`:
+`open_entity_identification` — domain-neutral, presumes no category:
+
+```
+What is present in the evidence? Answer with its name.
+Answer:
+```
+
+`open_animal_legs` and `hidden_animal_legs`:
 
 ```
 How many legs does the animal typically have? Answer with a number.
@@ -159,7 +200,7 @@ must be registered as aliases.
 
 Eight categories, and a per-protocol policy of `refuse` or `record`:
 
-| category | candidate-listed | open identification | open property | hidden intermediate |
+| category | candidate-listed | open identification<br>(`animal` and `entity`) | `open_animal_legs` | `hidden_animal_legs` |
 |---|---|---|---|---|
 | `instruction_candidate_leakage` | record | refuse | refuse | refuse |
 | `candidate_enumeration_detected` | record | refuse | refuse | refuse |
@@ -175,10 +216,10 @@ Notes:
 - A `spoken_audio` condition with **no transcript** is `unauditable`, and that
   fails any protocol whose policy refuses transcript leakage. An unchecked
   transcript is not a clean one.
-- Under `open_downstream_property` the *source's* own property answer is
+- Under `open_animal_legs` the *source's* own property answer is
   permitted and recorded — a bird caption may say "standing on two legs" — while
   the target answer and every other answer choice are refused. Under
-  `hidden_intermediate` the source answer is refused too, because it trivially
+  `hidden_animal_legs` the source answer is refused too, because it trivially
   reveals the intermediate.
 - A refusal is a refusal. The protocol is never silently downgraded to a weaker
   one that would have passed.
@@ -233,9 +274,16 @@ stronger protocol and a new run.
 | protocol | may support | only if |
 |---|---|---|
 | `candidate_listed_identification` | a candidate-conditioned claim | — |
-| `open_identification` | open cross-modal identification | the target leakage checks pass |
-| `open_downstream_property` | downstream recomputation | identity replacement also succeeds **and** the direct-answer controls pass |
-| `hidden_intermediate` | multi-hop reasoning | both entity names absent under the registered audit **and** the direct-answer onset control passes |
+| `open_animal_identification` | open cross-modal **animal** identification | the target leakage checks pass |
+| `open_entity_identification` | open cross-modal **entity** identification | the target leakage checks pass. **Never** a legs or multi-hop claim |
+| `open_animal_legs` | leg-count recomputation | identity replacement also succeeds **and** the direct-answer controls pass |
+| `hidden_animal_legs` | multi-hop reasoning | both entity names absent under the registered audit **and** the direct-answer onset control passes |
+
+A domain-restricted protocol's claim is additionally **inadmissible without a
+task-domain record** showing the restriction held. A claim that says "animal"
+has to be able to show that every identity in play was one, and
+`protocol_claim_admissibility()` refuses when the record is absent or names a
+concept from another domain.
 
 **No MOCK result supports any scientific claim**, whatever else passed.
 `mode != "real"` makes every decision inadmissible on its own.
@@ -252,6 +300,13 @@ aliases checksum; the external candidate strings and their token ids; the
 candidate scoring version; the prompt-boundary rule; the modality; the model and
 processor revisions; the audio protocol fingerprint when the modality is
 `spoken_audio`; and the property answers.
+
+It also binds the **task domain** and the **property schema**, together with the
+checksums of the registries they were resolved against and the resolved domain
+of every concept in play. Both matter on their own: asking the same question of
+an animal-only set and of a mixed set is not the same experiment, and a
+corrected leg-count registry changes the ground truth a property run was scored
+against even when the prompt is byte-identical.
 
 `coordinate_swap_fingerprint()` carries that record whole, plus its version and
 digest, alongside the coordinate-swap method version, position rule, layer band,
@@ -272,19 +327,22 @@ protocol is bound, it is one of the three open protocols, its candidates were
 external, and its leakage audit passed. The candidate-listed prompt remains
 available as a **labelled comparison condition**, never as the primary.
 
-For the planned bird → cat example:
+For the planned bird → cat example — which is **animal-only**, and whose
+concepts come from `select_animal_concepts` (§10):
 
 **Identity condition**
 
 - Evidence: a bird image, a bird caption, or a spoken bird caption.
 - Visible question: *What animal is present in the evidence?*
-- Externally scored identities: `bird`, `cat`, and predeclared controls.
+- Externally scored identities: `bird`, `cat`, and predeclared controls —
+  every one of them in the `animal` domain, or the prompt is refused.
 
 **Downstream condition**
 
 - The same evidence and the identical bird → cat coordinate swap.
 - Visible question: *How many legs does the animal typically have?*
-- Externally scored answers: `two`, `four`, and predeclared controls.
+- Externally scored answers: `two`, `four`, and predeclared controls, drawn
+  from the registered leg counts (`bird` 2, `cat` 4) rather than written down.
 
 The model never sees a rendered list such as `bird, cat, giraffe, ...`. The swap
 stays restricted to original prompt and evidence positions; teacher-forced
@@ -294,3 +352,47 @@ identity and property-answer tokens remain outside the intervention boundary.
 identity replacement, downstream property recomputation, hidden-intermediate
 multi-hop reasoning, or multimodal coordinate swapping. A passing MOCK run is
 evidence about the implementation and about nothing else.
+
+---
+
+## 10. The predeclared animal concept set
+
+The first real coordinate-swap study is **animal-only**, so its concepts have to
+be animal-only — and chosen before any model result.
+`select_animal_concepts()` (`mmpilot.animal_concept_selection.v1`) takes the
+rows `jlens.mmpilot.expansion.rank_concepts` already produces — the existing
+deterministic ranking and evidence audit — and filters them. It re-implements
+neither.
+
+Three filters, in order, all pre-model:
+
+1. **domain** — the concept resolves to `animal` in the domain registry, which
+   is either this module's small explicit table or, better,
+   `domain_registry_from_universe()` reading COCO's own supercategories out of
+   the local annotation files;
+2. **feasibility** — the ranking row's own `feasible` flag, with its `unmet`
+   reasons carried into the exclusion record;
+3. **property** — a unique registered leg count, when the study needs one.
+
+Ranking order is preserved throughout and never re-sorted alphabetically, for
+the reason `select_focal_concepts` gives: the ranking *is* the deterministic
+pre-model statement of what the dataset supports best.
+
+**Coverage is never assumed.** `bird`, `cat`, `giraffe`, `zebra`, `sheep` and
+`cow` are the *likely* survivors from SpokenCOCO. If the local annotation files
+do not carry them they do not appear, and if fewer than `n_focal + 1` animals
+survive — `n_focal` focal concepts plus at least one external unrelated control
+— this refuses rather than filling the gap.
+
+Two further guards:
+
+- a ranking row carrying a **post-model field** (`accuracy`, `n_correct`,
+  `prediction`, `target_margin`, …) is refused outright, because choosing the
+  concept set from rows that already know how the model behaved would make the
+  selection depend on the outcome;
+- the whole selection is checksummed, so an artifact records exactly which set
+  was predeclared and from which ranking.
+
+The result is also *not* the mixed six-concept set, and cannot be: `toilet` and
+`microwave` are dropped at the domain filter with their COCO supercategories
+named in the exclusion record.

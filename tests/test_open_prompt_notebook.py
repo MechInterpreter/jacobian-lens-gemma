@@ -540,3 +540,97 @@ def test_the_animal_concept_set_is_predeclared_from_the_ranking(executed):
     # Coverage is never assumed, and the choice never sees a model result.
     assert "Coverage is" in selection["coverage_refusal"]
     assert "post-model field" in selection["post_model_refusal"]
+
+
+def test_the_protocol_doc_specifies_the_task_domains():
+    text = _flat(PROTOCOL_DOC.read_text(encoding="utf-8"))
+    for required in (
+        # the five identifiers and their domains
+        "mmpilot.open_animal_identification.v1",
+        "mmpilot.open_entity_identification.v1",
+        "mmpilot.open_animal_legs.v1",
+        "mmpilot.hidden_animal_legs.v1",
+        "animal_leg_count.v1",
+        # why the domain is part of the protocol at all
+        "Why the domain is part of the protocol",
+        "two of which are not",
+        "what the model says when asked for an animal that is not there",
+        "**unspecified** domain is a refusal rather than an assumption",
+        "unique registered leg count",
+        "Unregistered and ambiguous are both refusals",
+        # the domain-neutral alternative and what it costs
+        "supports **no** legs claim and **no** multi-hop claim",
+        # the retired names
+        "Retired identifiers",
+        "renamed rather than deprecated",
+        # the three questions, exactly
+        "What animal is present in the evidence? Answer with the animal name.",
+        "What is present in the evidence? Answer with its name.",
+        "How many legs does the animal typically have? Answer with a number.",
+        # the fingerprint
+        "binds the **task domain** and the **property schema**",
+        "corrected leg-count registry changes the ground truth",
+        # the claim rule
+        "inadmissible without a task-domain record",
+    ):
+        assert required in text, required
+
+
+def test_the_protocol_doc_specifies_the_animal_concept_selection():
+    text = _flat(PROTOCOL_DOC.read_text(encoding="utf-8"))
+    for required in (
+        "The predeclared animal concept set",
+        "mmpilot.animal_concept_selection.v1",
+        "It re-implements neither",
+        "domain_registry_from_universe()",
+        "Ranking order is preserved",
+        "**Coverage is never assumed.**",
+        "are the *likely* survivors",
+        "refuses rather than filling the gap",
+        "post-model field",
+        "cannot be: `toilet` and `microwave` are dropped at the domain filter",
+    ):
+        assert required in text, required
+
+
+def test_the_swap_doc_says_the_planned_study_is_animal_only():
+    text = _flat(SWAP_DOC.read_text(encoding="utf-8"))
+    assert "The planned study is animal-only.**" in text
+    assert "predeclared `animal` domain" in text
+    assert "`toilet` and `microwave`, which are in the pilot's six-concept set" in text
+    assert "leg counts come from a registry (`bird` 2, `cat` 4) rather than a guess" in text
+    assert "General object identification is a separate protocol**" in text
+    assert "mmpilot.open_entity_identification.v1" in text
+    assert "supports no legs or multi-hop claim" in text
+    assert "select_animal_concepts" in text
+
+
+def test_the_pilot_doc_says_the_follow_up_cannot_inherit_the_concept_set():
+    text = _flat(PILOT_DOC.read_text(encoding="utf-8"))
+    assert "cannot inherit is this concept set" in text
+    assert "`microwave` and `toilet` are not animals" in text
+    assert "the follow-up is **animal-only**" in text
+    assert "select_animal_concepts" in text
+    assert "mmpilot.open_entity_identification.v1" in text
+
+
+def test_no_document_still_advertises_a_retired_protocol_as_current():
+    """The old names may appear only in the retirement table that replaces them."""
+    for doc in (SWAP_DOC, PILOT_DOC, ADMISSIBILITY_DOC):
+        text = doc.read_text(encoding="utf-8")
+        for retired in (
+            "mmpilot.open_identification.v1",
+            "mmpilot.open_downstream_property.v1",
+            "mmpilot.hidden_intermediate.v1",
+        ):
+            assert retired not in text, f"{doc.name} still names {retired}"
+    protocol = PROTOCOL_DOC.read_text(encoding="utf-8")
+    retirement_table = protocol.split("### Retired identifiers", 1)[1].split(
+        "\n---\n", 1
+    )[0]
+    for retired in (
+        "mmpilot.open_identification.v1",
+        "mmpilot.open_downstream_property.v1",
+        "mmpilot.hidden_intermediate.v1",
+    ):
+        assert protocol.count(retired) == retirement_table.count(retired), retired

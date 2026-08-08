@@ -176,12 +176,22 @@ the strongest result available is the candidate-conditioned one the completed
 study already has.
 
 `assert_open_prompt_protocol()` enforces it, and refuses unless a prompt
-protocol is bound, it is one of `mmpilot.open_identification.v1`,
-`mmpilot.open_downstream_property.v1` or `mmpilot.hidden_intermediate.v1`, its
-candidates were external, and its registered leakage audit passed. The
-candidate-listed prompt remains available as a **labelled comparison
-condition**, never as the primary. Full specification:
-[`prompt_protocol.md`](prompt_protocol.md).
+protocol is bound, it is one of `mmpilot.open_animal_identification.v1`,
+`mmpilot.open_entity_identification.v1`, `mmpilot.open_animal_legs.v1` or
+`mmpilot.hidden_animal_legs.v1`, its candidates were external, and its
+registered leakage audit passed. The candidate-listed prompt remains available
+as a **labelled comparison condition**, never as the primary. Full
+specification: [`prompt_protocol.md`](prompt_protocol.md).
+
+**The planned study is animal-only.** Both of its questions presume an animal,
+so every source, target and externally scored identity must carry the
+predeclared `animal` domain — `toilet` and `microwave`, which are in the
+pilot's six-concept set, are refused — and the leg counts come from a registry
+(`bird` 2, `cat` 4) rather than a guess. Its concept set is chosen before any
+model result by `select_animal_concepts`, from the existing deterministic
+ranking and evidence audit. **General object identification is a separate
+protocol**: `mmpilot.open_entity_identification.v1` asks a domain-neutral
+question, takes a mixed category set, and supports no legs or multi-hop claim.
 
 For the planned bird → cat example:
 
@@ -197,7 +207,7 @@ stays restricted to original prompt and evidence positions; the teacher-forced
 identity and property-answer tokens remain outside the intervention boundary by
 `PROMPT_BOUNDARY_RULE`, for every position rule.
 
-The `hidden_intermediate` protocol — neither entity label nor any registered
+The `hidden_animal_legs` protocol — neither entity label nor any registered
 alias in any model-visible text, and for spoken audio neither in the offline
 transcript — is a **later, stronger stage**. It is not designed yet.
 

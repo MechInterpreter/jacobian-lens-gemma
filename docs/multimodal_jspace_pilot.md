@@ -895,6 +895,14 @@ supports, stated exactly:
 - the coordinate-swap follow-up will use **open prompts, with the candidates
   external to the model**.
 
+One thing the follow-up cannot inherit is this concept set. Its identity
+question is *"What animal is present in the evidence?"*, and `microwave` and
+`toilet` are not animals — so the follow-up is **animal-only**, with its
+concepts chosen from the same deterministic ranking and evidence audit by
+`select_animal_concepts`. General object identification across a mixed set is a
+separate protocol, `mmpilot.open_entity_identification.v1`, with a
+domain-neutral question and no property or multi-hop claim.
+
 Nothing here changes a number, a verdict, or a fingerprint. No completed
 artifact was edited, and the legacy question keeps its bytes and its recorded
 `gemma-it-chat-balanced-options-v1` protocol string so completed runs resume
