@@ -32,6 +32,8 @@ REQUIRED_SECTIONS = [
     "the legacy candidate-listed mode still functions",
     "the open prompt names no candidate",
     "every refusal, exercised",
+    "the task domain, which the question already committed to",
+    "the predeclared animal concept set",
     "the transcript is audited and never reaches the model",
     "the candidates are scored externally",
     "order must not move the fingerprint",
@@ -438,3 +440,96 @@ def test_the_admissibility_doc_separates_the_two_rule_versions():
     assert "separately** from `mmpilot.claim_admissibility.v1`" in text
     assert "cannot change the rule checksum" in text
     assert "candidate-conditioned cross-modal causal steering" in text
+
+
+# ------------------------------------------------- the task domain, in MOCK
+
+
+def test_the_notebook_states_the_five_protocols_and_their_domains(notebook):
+    text = _source(notebook)
+    for identifier in (
+        "mmpilot.candidate_listed_identification.v1",
+        "mmpilot.open_animal_identification.v1",
+        "mmpilot.open_entity_identification.v1",
+        "mmpilot.open_animal_legs.v1",
+        "mmpilot.hidden_animal_legs.v1",
+    ):
+        assert identifier in text, identifier
+    # The old, domain-blind names may appear only as retired ones.
+    assert "The task domain is not decoration" in text
+    assert "cannot screen `toilet` or `microwave`" in text
+    assert "unique registered leg count" in text
+
+
+def test_the_notebook_never_asks_the_animal_question_of_the_mixed_set(notebook):
+    """Requirement: the mixed six-concept set is never *tested* with the animal
+    question. It appears only as the thing being refused."""
+    code = _code_source(notebook)
+    assert "MIXED_SIX" in code
+    for line in code.splitlines():
+        if "MIXED_SIX" in line and "external_candidates" in line:
+            # Every such call site must be inside a refusal or the entity protocol.
+            assert "OPEN_ENTITY_IDENTIFICATION" in code
+    assert "except TaskDomainError" in code
+
+
+def test_the_mixed_set_is_refused_by_name(executed):
+    domain = executed["summary"]["task_domain"]
+    assert "toilet is domain 'furniture'" in domain["mixed_set_refusal"]
+    assert "microwave is domain 'appliance'" in domain["mixed_set_refusal"]
+    assert "wombat has no registered domain" in domain["unspecified_domain_refusal"]
+    assert domain["animal_question_domain"] == "animal"
+
+
+def test_the_domain_neutral_protocol_took_the_mixed_set(executed):
+    domain = executed["summary"]["task_domain"]
+    assert domain["entity_question"] == (
+        "What is present in the evidence? Answer with its name.\nAnswer:"
+    )
+    assert "animal" not in domain["entity_question"].lower()
+    assert domain["entity_observed_domains"] == ["animal", "appliance", "furniture"]
+    assert domain["entity_maximum_claim"] == "open_cross_modal_entity_identification"
+    for excluded in ("downstream property recomputation", "multi-hop reasoning"):
+        assert excluded in domain["entity_excluded_claims"]
+
+
+def test_the_legs_protocol_refusals_all_fired(executed):
+    refusals = executed["summary"]["task_domain"]["domain_refusals"]
+    assert set(refusals) == {
+        "ambiguous leg count",
+        "animal with no registered leg count",
+        "non-animal target",
+        "unregistered answer choice",
+        "retired mmpilot.open_identification.v1",
+        "retired mmpilot.open_downstream_property.v1",
+        "retired mmpilot.hidden_intermediate.v1",
+    }
+    assert "TaskDomainError" in refusals["non-animal target"]
+    assert "PropertyAnswerError" in refusals["ambiguous leg count"]
+    for old, new in (
+        ("mmpilot.open_identification.v1", "mmpilot.open_animal_identification.v1"),
+        ("mmpilot.open_downstream_property.v1", "mmpilot.open_animal_legs.v1"),
+        ("mmpilot.hidden_intermediate.v1", "mmpilot.hidden_animal_legs.v1"),
+    ):
+        assert new in refusals[f"retired {old}"]
+    assert executed["summary"]["task_domain"]["legs_property_schema"] == "animal_leg_count.v1"
+    assert executed["summary"]["task_domain"]["legs_answers"] == {
+        "source": ["two", "2"],
+        "target": ["four", "4"],
+    }
+
+
+def test_the_animal_concept_set_is_predeclared_from_the_ranking(executed):
+    selection = executed["summary"]["animal_concept_selection"]
+    assert selection["selection_version"] == "mmpilot.animal_concept_selection.v1"
+    assert selection["animal_concepts"] == ["bird", "cat", "zebra", "sheep", "cow"]
+    assert selection["focal"] == ["bird", "cat"]
+    assert selection["non_focal"] == ["zebra", "sheep", "cow"]
+    assert selection["leg_counts"]["bird"] == 2
+    assert selection["leg_counts"]["cat"] == 4
+    dropped = {row["concept"]: row["stage"] for row in selection["excluded"]}
+    assert dropped == {"toilet": "domain", "microwave": "domain", "giraffe": "evidence_audit"}
+    assert selection["selection_checksum"].startswith("sha256:")
+    # Coverage is never assumed, and the choice never sees a model result.
+    assert "Coverage is" in selection["coverage_refusal"]
+    assert "post-model field" in selection["post_model_refusal"]

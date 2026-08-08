@@ -52,18 +52,33 @@ coordinate-swap study ask the same way: the neutral question and the scored
 candidate answers are **separate objects**, and only the question is ever built
 into a prompt.
 
-## The four protocols
+## The five protocols, and the domain each one presumes
 
-| identifier | candidates in prompt | source may appear | target may appear | supports |
-|---|---|---|---|---|
-| `mmpilot.candidate_listed_identification.v1` | yes (legacy) | yes | yes | candidate-conditioned identification |
-| `mmpilot.open_identification.v1` | no | yes, in natural evidence, recorded | never | open cross-modal identification |
-| `mmpilot.open_downstream_property.v1` | no | yes, recorded | never | downstream recomputation *(with controls)* |
-| `mmpilot.hidden_intermediate.v1` | no | never | never | multi-hop reasoning *(with controls)* |
+| identifier | domain | candidates in prompt | source may appear | target may appear | supports |
+|---|---|---|---|---|---|
+| `mmpilot.candidate_listed_identification.v1` | — | yes (legacy) | yes | yes | candidate-conditioned identification |
+| `mmpilot.open_animal_identification.v1` | `animal` | no | yes, in natural evidence, recorded | never | open cross-modal **animal** identification |
+| `mmpilot.open_entity_identification.v1` | `entity` | no | yes, recorded | never | open cross-modal **entity** identification |
+| `mmpilot.open_animal_legs.v1` | `animal` | no | yes, recorded | never | leg-count recomputation *(with controls)* |
+| `mmpilot.hidden_animal_legs.v1` | `animal` | no | never | never | multi-hop reasoning *(with controls)* |
+
+**The task domain is not decoration.** *"What animal is present in the
+evidence?"* cannot screen `toilet` or `microwave`, and both are in the pilot's
+six-concept set: scoring them against that question measures what the model says
+when asked for an animal that is not there, which is a different experiment with
+a different interpretation. So every source, target and externally scored
+identity under an `animal` protocol must carry the predeclared domain, and an
+unspecified domain is a refusal rather than an assumption. A mixed category set
+belongs to `open_entity_identification`, whose question presumes nothing — and
+which supports no legs or multi-hop claim in exchange.
+
+"How many legs" is animal-specific for the same reason, and it needs more: a
+**unique registered leg count** for both the source and the target. An
+unregistered or ambiguous concept has no ground truth and is refused.
 
 An open prompt is **not** hidden-intermediate reasoning merely because the
-candidate list is absent — `open_identification` still lets the source appear in
-the evidence.
+candidate list is absent — `open_animal_identification` still lets the source
+appear in the evidence.
 
 ## What this notebook is not
 
@@ -245,14 +260,22 @@ from jlens.mmpilot.coordinate_swap_mock import (
     mock_concept_tokens,
 )
 from jlens.mmpilot.prompt_protocol import (
+    ANIMAL_LEGS_QUESTION,
     CANDIDATE_LISTED_IDENTIFICATION,
-    HIDDEN_INTERMEDIATE,
-    OPEN_DOWNSTREAM_PROPERTY,
-    OPEN_IDENTIFICATION,
-    OPEN_IDENTIFICATION_QUESTION,
-    OPEN_PROPERTY_QUESTION,
+    CONCEPT_DOMAINS,
+    DOMAIN_ANIMAL,
+    HIDDEN_ANIMAL_LEGS,
+    OPEN_ANIMAL_IDENTIFICATION,
+    OPEN_ANIMAL_IDENTIFICATION_QUESTION,
+    OPEN_ANIMAL_LEGS,
+    OPEN_ENTITY_IDENTIFICATION,
+    OPEN_ENTITY_IDENTIFICATION_QUESTION,
+    RETIRED_PROTOCOLS,
     Evidence,
     PromptLeakageError,
+    PromptProtocolError,
+    PropertyAnswerError,
+    TaskDomainError,
     backend_input_kwargs,
     build_protocol_prompt,
     claim_admissibility_rule_record,
@@ -260,6 +283,8 @@ from jlens.mmpilot.prompt_protocol import (
     normalize,
     prompt_protocol_fingerprint,
     protocol_claim_admissibility,
+    resolve_leg_count,
+    select_animal_concepts,
 )
 
 BACKEND = SwapMockBackend()
@@ -269,8 +294,10 @@ IDENTITY_CANDIDATES = ("bird", "cat")
 PROPERTY_CANDIDATES = ("two", "four")
 LEGACY_CONCEPTS = ["bird", "cat", "giraffe", "microwave", "toilet", "zebra"]
 
-print(f"source {SOURCE.name!r} aliases {SOURCE.aliases}")
-print(f"target {TARGET.name!r} aliases {TARGET.aliases}")
+print(f"source {SOURCE.name!r} domain {SOURCE.domain!r} aliases {SOURCE.aliases}")
+print(f"target {TARGET.name!r} domain {TARGET.domain!r} aliases {TARGET.aliases}")
+print(f"legs   {SOURCE.name} {resolve_leg_count(SOURCE.name)}, "
+      f"{TARGET.name} {resolve_leg_count(TARGET.name)}")
 """
 )
 
@@ -358,7 +385,7 @@ EVIDENCE = {
 
 OPEN = {
     name: build_protocol_prompt(
-        protocol=OPEN_IDENTIFICATION,
+        protocol=OPEN_ANIMAL_IDENTIFICATION,
         evidence=evidence,
         external_candidates=IDENTITY_CANDIDATES,
         source=SOURCE,
@@ -370,17 +397,17 @@ OPEN = {
 }
 
 print("question (identical in every channel):")
-print(OPEN_IDENTIFICATION_QUESTION)
+print(OPEN_ANIMAL_IDENTIFICATION_QUESTION)
 print()
 for name, built in OPEN.items():
     _tokens = normalize(built.model_visible_prompt).split()
     _named = sorted(c for c in IDENTITY_CANDIDATES if c in _tokens)
     print(f"{name:<13} visible prompt = question: "
-          f"{built.model_visible_prompt == OPEN_IDENTIFICATION_QUESTION}")
+          f"{built.model_visible_prompt == OPEN_ANIMAL_IDENTIFICATION_QUESTION}")
     print(f"{'':<13} candidate names in the visible prompt: {_named or 'none'}")
 assert all("cat" not in normalize(b.model_visible_prompt).split() for b in OPEN.values())
-assert OPEN["image"].model_visible_prompt == OPEN_IDENTIFICATION_QUESTION
-assert OPEN["spoken_audio"].model_visible_prompt == OPEN_IDENTIFICATION_QUESTION
+assert OPEN["image"].model_visible_prompt == OPEN_ANIMAL_IDENTIFICATION_QUESTION
+assert OPEN["spoken_audio"].model_visible_prompt == OPEN_ANIMAL_IDENTIFICATION_QUESTION
 '''
 )
 
@@ -446,7 +473,7 @@ def _refused(label, exception_type, thunk):
 
 def _open(**overrides):
     kwargs = {
-        "protocol": OPEN_IDENTIFICATION,
+        "protocol": OPEN_ANIMAL_IDENTIFICATION,
         "evidence": Evidence(modality="text", text="A small bird on a branch."),
         "external_candidates": IDENTITY_CANDIDATES,
         "source": SOURCE,
@@ -458,14 +485,13 @@ def _open(**overrides):
 
 def _hidden(**overrides):
     kwargs = {
-        "protocol": HIDDEN_INTERMEDIATE,
+        "protocol": HIDDEN_ANIMAL_LEGS,
         "evidence": Evidence(
             modality="text", text="The animal in the evidence is the one that spins webs."
         ),
         "external_candidates": ("six", "eight"),
         "source": concept_spec("spider"),
         "target": concept_spec("ant"),
-        "property_answers": {"source": ("eight",), "target": ("six",)},
     }
     kwargs.update(overrides)
     return build_protocol_prompt(**kwargs)
@@ -528,12 +554,11 @@ _refused(
     "property_answer_in_prompt",
     PromptLeakageError,
     lambda: build_protocol_prompt(
-        protocol=OPEN_DOWNSTREAM_PROPERTY,
+        protocol=OPEN_ANIMAL_LEGS,
         evidence=Evidence(modality="text", text="An animal with four legs."),
         external_candidates=PROPERTY_CANDIDATES,
         source=SOURCE,
         target=TARGET,
-        property_answers={"source": ("two", "2"), "target": ("four", "4")},
     ),
 )
 _refused(
@@ -577,7 +602,7 @@ code(
 # 6b. One caption, two protocols, two outcomes.
 _caption = Evidence(modality="text", text="A small bird on a branch.")
 _permitted = build_protocol_prompt(
-    protocol=OPEN_IDENTIFICATION,
+    protocol=OPEN_ANIMAL_IDENTIFICATION,
     evidence=_caption,
     external_candidates=IDENTITY_CANDIDATES,
     source=SOURCE,
@@ -587,17 +612,213 @@ print(f"open_identification : passed={_permitted.leakage['passed']}, "
       f"recorded={_permitted.leakage['recorded']}")
 try:
     build_protocol_prompt(
-        protocol=HIDDEN_INTERMEDIATE,
+        protocol=HIDDEN_ANIMAL_LEGS,
         evidence=_caption,
         external_candidates=PROPERTY_CANDIDATES,
         source=SOURCE,
         target=TARGET,
-        property_answers={"source": ("two",), "target": ("four",)},
     )
 except PromptLeakageError as error:
     PROTOCOL_SEPARATION = str(error).splitlines()[1].strip()
 print(f"hidden_intermediate : {PROTOCOL_SEPARATION}")
 assert "source_in_visible_evidence" in PROTOCOL_SEPARATION
+'''
+)
+
+markdown(
+    """
+## 6c. The task domain, which the question already committed to
+
+`What animal is present in the evidence?` presumes the answer is an animal. The
+pilot's six-concept set contains `toilet` and `microwave`, so scoring that set
+against that question would not be an open-identification test at all — it would
+be a test of what the model says when asked for an animal that is not there.
+
+The domain is therefore **declared, resolved and refused** rather than assumed,
+and a mixed set goes to the domain-neutral protocol instead.
+"""
+)
+
+code(
+    '''
+# 6c. The animal question refuses the mixed six-concept set, by name.
+MIXED_SIX = ("bird", "cat", "giraffe", "microwave", "toilet", "zebra")
+try:
+    build_protocol_prompt(
+        protocol=OPEN_ANIMAL_IDENTIFICATION,
+        evidence=Evidence(modality="image", media="<pixels>"),
+        external_candidates=MIXED_SIX,
+        source=SOURCE,
+        target=TARGET,
+    )
+except TaskDomainError as error:
+    MIXED_SET_REFUSAL = str(error).splitlines()[0]
+
+print("declared domains:")
+for _name in MIXED_SIX:
+    print(f"  {_name:<10} {CONCEPT_DOMAINS.get(_name) or '(unspecified)'}")
+print()
+print(f"open_animal_identification -> {MIXED_SET_REFUSAL[:160]}")
+assert "toilet is domain 'furniture'" in MIXED_SET_REFUSAL
+assert "microwave is domain 'appliance'" in MIXED_SET_REFUSAL
+
+# An unspecified domain is refused too - it is not read as "probably fine".
+try:
+    build_protocol_prompt(
+        protocol=OPEN_ANIMAL_IDENTIFICATION,
+        evidence=Evidence(modality="image", media="<pixels>"),
+        external_candidates=("bird", "cat", "wombat"),
+        source=SOURCE,
+        target=TARGET,
+    )
+except TaskDomainError as error:
+    UNSPECIFIED_DOMAIN_REFUSAL = str(error).splitlines()[0]
+print(f"unregistered concept       -> "
+      f"{UNSPECIFIED_DOMAIN_REFUSAL.split('must be in it.')[-1].strip()[:110]}")
+assert "wombat has no registered domain" in UNSPECIFIED_DOMAIN_REFUSAL
+'''
+)
+
+code(
+    '''
+# 6d. The same mixed set under the domain-neutral protocol: accepted, recorded.
+ENTITY = build_protocol_prompt(
+    protocol=OPEN_ENTITY_IDENTIFICATION,
+    evidence=Evidence(modality="image", media="<pixels>"),
+    external_candidates=MIXED_SIX,
+    source=SOURCE,
+    target=TARGET,
+    encode_candidate=BACKEND.encode_candidate,
+)
+print(f"question: {ENTITY.model_visible_prompt.splitlines()[0]}")
+print(f"passed:   {ENTITY.leakage['passed']}")
+print(f"domains observed and recorded: {ENTITY.task_domain['observed_domains']}")
+print()
+ENTITY_CLAIM = protocol_claim_admissibility(
+    protocol=OPEN_ENTITY_IDENTIFICATION, leakage=ENTITY.leakage, mode="real"
+)
+print(f"maximum claim: {ENTITY_CLAIM['maximum_claim']}")
+for _excluded in ENTITY_CLAIM["excluded_claims"]:
+    print(f"  never        {_excluded}")
+assert "animal" not in normalize(ENTITY.model_visible_prompt).split()
+assert ENTITY.task_domain["observed_domains"] == ["animal", "appliance", "furniture"]
+assert "multi-hop reasoning" in ENTITY_CLAIM["excluded_claims"]
+'''
+)
+
+code(
+    '''
+# 6e. The legs protocols need an animal AND a unique registered leg count.
+DOMAIN_REFUSALS = {}
+
+
+def _legs(**overrides):
+    kwargs = {
+        "protocol": OPEN_ANIMAL_LEGS,
+        "evidence": Evidence(modality="image", media="<pixels>"),
+        "external_candidates": PROPERTY_CANDIDATES,
+        "source": SOURCE,
+        "target": TARGET,
+    }
+    kwargs.update(overrides)
+    return build_protocol_prompt(**kwargs)
+
+
+for _label, _kwargs, _expected in (
+    ("non-animal target", {"target": concept_spec("toilet")}, TaskDomainError),
+    (
+        "animal with no registered leg count",
+        {"target": concept_spec("dolphin", domain=DOMAIN_ANIMAL)},
+        PropertyAnswerError,
+    ),
+    (
+        "ambiguous leg count",
+        {"leg_counts": {"bird": (2,), "cat": (2, 4)}},
+        PropertyAnswerError,
+    ),
+    ("unregistered answer choice", {"external_candidates": ("two", "seven")}, PropertyAnswerError),
+):
+    try:
+        _legs(**_kwargs)
+        raise AssertionError(f"{_label} was NOT refused")
+    except _expected as error:
+        DOMAIN_REFUSALS[_label] = f"{type(error).__name__}: {str(error).splitlines()[0]}"
+
+# And the retired, domain-blind names name their replacements.
+for _old, _new in RETIRED_PROTOCOLS.items():
+    try:
+        _legs(protocol=_old)
+        raise AssertionError(f"{_old} was NOT refused")
+    except PromptProtocolError as error:
+        DOMAIN_REFUSALS[f"retired {_old}"] = str(error).splitlines()[0]
+
+for _label, _message in sorted(DOMAIN_REFUSALS.items()):
+    print(f"{_label:<46} {_message[:100]}")
+assert len(DOMAIN_REFUSALS) == 7
+'''
+)
+
+markdown(
+    """
+## 6f. The predeclared animal concept set
+
+The first real coordinate-swap study needs animal-only concepts, and they have
+to be chosen **before** any model result. `select_animal_concepts` filters the
+rows the existing deterministic ranking and evidence audit already produce — it
+re-implements neither — by domain, by feasibility, and by whether a unique leg
+count is registered, preserving ranking order throughout.
+
+`bird`, `cat`, `giraffe`, `zebra`, `sheep` and `cow` are the *likely* survivors
+from SpokenCOCO. They are **not assumed**: coverage is whatever the local
+annotation files support, and short coverage is a refusal rather than a gap to
+fill. The rows below are synthetic, standing in for the real ranking.
+"""
+)
+
+code(
+    '''
+# 6f. Domain, feasibility, property - applied to a stand-in ranking.
+MOCK_RANKING = [
+    {"concept": "bird", "feasible": True, "unmet": []},
+    {"concept": "toilet", "feasible": True, "unmet": []},
+    {"concept": "cat", "feasible": True, "unmet": []},
+    {"concept": "microwave", "feasible": True, "unmet": []},
+    {"concept": "giraffe", "feasible": False, "unmet": ["distinct_images 3 < 8"]},
+    {"concept": "zebra", "feasible": True, "unmet": []},
+    {"concept": "sheep", "feasible": True, "unmet": []},
+    {"concept": "cow", "feasible": True, "unmet": []},
+]
+ANIMAL_SELECTION = select_animal_concepts(MOCK_RANKING, n_focal=2)
+
+print(f"ranked input      {ANIMAL_SELECTION['ranked_input']}")
+print(f"animal concepts   {ANIMAL_SELECTION['animal_concepts']}   (ranking order kept)")
+print(f"focal             {ANIMAL_SELECTION['focal']}")
+print(f"unrelated control {ANIMAL_SELECTION['non_focal']}")
+print(f"leg counts        {ANIMAL_SELECTION['leg_counts']}")
+print()
+for _row in ANIMAL_SELECTION["excluded"]:
+    print(f"  dropped {_row['concept']:<10} at {_row['stage']:<14} {_row['reason'][:60]}")
+print()
+print(f"selection checksum {ANIMAL_SELECTION['selection_checksum']}")
+
+# Coverage is never assumed: too few animals is a refusal, not a smaller study.
+try:
+    select_animal_concepts(
+        [{"concept": "bird", "feasible": True}, {"concept": "toilet", "feasible": True}]
+    )
+except PromptProtocolError as error:
+    COVERAGE_REFUSAL = str(error).splitlines()[0]
+print(f"short coverage -> {COVERAGE_REFUSAL[:120]}")
+
+# And it cannot be chosen from rows that already know how the model behaved.
+try:
+    select_animal_concepts([{"concept": "bird", "feasible": True, "accuracy": 0.875}])
+except PromptProtocolError as error:
+    POST_MODEL_REFUSAL = str(error).splitlines()[0]
+print(f"post-model rows -> {POST_MODEL_REFUSAL[:120]}")
+assert ANIMAL_SELECTION["animal_concepts"] == ["bird", "cat", "zebra", "sheep", "cow"]
+assert "Coverage is" in COVERAGE_REFUSAL
+assert "post-model field" in POST_MODEL_REFUSAL
 '''
 )
 
@@ -688,7 +909,7 @@ code(
 # 8b. Reversing the candidate order also leaves the prompt itself alone.
 def _built(candidates):
     return build_protocol_prompt(
-        protocol=OPEN_IDENTIFICATION,
+        protocol=OPEN_ANIMAL_IDENTIFICATION,
         evidence=Evidence(modality="image", media="<pixels>"),
         external_candidates=candidates,
         source=SOURCE,
@@ -873,12 +1094,11 @@ code(
     '''
 # 11. Identity and property under the open prompts. Synthetic, by construction.
 PROPERTY_PROMPT = build_protocol_prompt(
-    protocol=OPEN_DOWNSTREAM_PROPERTY,
+    protocol=OPEN_ANIMAL_LEGS,
     evidence=Evidence(modality="image", media="<pixels>"),
     external_candidates=PROPERTY_CANDIDATES,
     source=SOURCE,
     target=TARGET,
-    property_answers={"source": ("two", "2"), "target": ("four", "4")},
     encode_candidate=BACKEND.encode_candidate,
 )
 PROPERTY_INPUTS = BACKEND.build_inputs(
@@ -904,11 +1124,11 @@ MOCK_EFFECTS = {
     "property_swapped": prediction_and_margin(_swapped_property, "four")["prediction"],
 }
 print("open identification question:")
-print(f"  {OPEN_IDENTIFICATION_QUESTION.splitlines()[0]}")
+print(f"  {OPEN_ANIMAL_IDENTIFICATION_QUESTION.splitlines()[0]}")
 print(f"  clean -> {MOCK_EFFECTS['identity_clean']},  "
       f"bird->cat swap -> {MOCK_EFFECTS['identity_swapped']}")
 print("open downstream-property question:")
-print(f"  {OPEN_PROPERTY_QUESTION.splitlines()[0]}")
+print(f"  {ANIMAL_LEGS_QUESTION.splitlines()[0]}")
 print(f"  clean -> {MOCK_EFFECTS['property_clean']},  "
       f"same swap -> {MOCK_EFFECTS['property_swapped']}")
 print()
@@ -937,8 +1157,8 @@ MOCK_CLAIMS = {
         direct_answer_onset_control_passed=True,
     )
     for protocol, leakage in (
-        (OPEN_IDENTIFICATION, OPEN["image"].leakage),
-        (OPEN_DOWNSTREAM_PROPERTY, PROPERTY_PROMPT.leakage),
+        (OPEN_ANIMAL_IDENTIFICATION, OPEN["image"].leakage),
+        (OPEN_ANIMAL_LEGS, PROPERTY_PROMPT.leakage),
     )
 }
 for protocol, decision in MOCK_CLAIMS.items():
@@ -973,7 +1193,7 @@ SUMMARY = {
         "maximum_claim": LEGACY_CLAIM["maximum_claim"],
     },
     "open_identification": {
-        "question": OPEN_IDENTIFICATION_QUESTION,
+        "question": OPEN_ANIMAL_IDENTIFICATION_QUESTION,
         "visible_prompt_by_modality": {
             name: built.model_visible_prompt for name, built in OPEN.items()
         },
@@ -990,9 +1210,32 @@ SUMMARY = {
             for name, built in OPEN.items()
         },
     },
-    "open_downstream_property_question": OPEN_PROPERTY_QUESTION,
+    "open_downstream_property_question": ANIMAL_LEGS_QUESTION,
     "refusals": dict(sorted(REFUSALS.items())),
     "protocol_separation": PROTOCOL_SEPARATION,
+    "task_domain": {
+        "mixed_set_refusal": MIXED_SET_REFUSAL,
+        "unspecified_domain_refusal": UNSPECIFIED_DOMAIN_REFUSAL,
+        "domain_refusals": dict(sorted(DOMAIN_REFUSALS.items())),
+        "entity_question": ENTITY.model_visible_prompt,
+        "entity_observed_domains": ENTITY.task_domain["observed_domains"],
+        "entity_maximum_claim": ENTITY_CLAIM["maximum_claim"],
+        "entity_excluded_claims": ENTITY_CLAIM["excluded_claims"],
+        "animal_question_domain": OPEN["image"].task_domain["task_domain"],
+        "legs_property_schema": PROPERTY_PROMPT.property_schema,
+        "legs_answers": PROPERTY_PROMPT.property_answers,
+    },
+    "animal_concept_selection": {
+        "selection_version": ANIMAL_SELECTION["selection_version"],
+        "animal_concepts": ANIMAL_SELECTION["animal_concepts"],
+        "focal": ANIMAL_SELECTION["focal"],
+        "non_focal": ANIMAL_SELECTION["non_focal"],
+        "leg_counts": ANIMAL_SELECTION["leg_counts"],
+        "excluded": ANIMAL_SELECTION["excluded"],
+        "selection_checksum": ANIMAL_SELECTION["selection_checksum"],
+        "coverage_refusal": COVERAGE_REFUSAL,
+        "post_model_refusal": POST_MODEL_REFUSAL,
+    },
     "transcript_reached_backend": TRANSCRIPT_CROSSED,
     "external_scoring": {
         "candidate_token_ids": {k: list(v) for k, v in FORWARD_IDS.items()},
@@ -1022,7 +1265,11 @@ print(f"candidate set moved the fingerprint      "
       f"{FINGERPRINT_SENSITIVITY['set_changes_digest']}")
 print(f"candidate positions patched              "
       f"{not CANDIDATE_TAIL_BIT_IDENTICAL}")
-print(f"refusals exercised                       {len(REFUSALS)}")
+print(f"refusals exercised                       "
+      f"{len(REFUSALS) + len(DOMAIN_REFUSALS)}")
+print(f"animal question screened the mixed set   True")
+print(f"predeclared animal concepts              "
+      f"{ANIMAL_SELECTION['animal_concepts']}")
 print()
 print("MOCK SUCCESS IS NOT SCIENTIFIC EVIDENCE. This says the plumbing is")
 print("correct and nothing at all about Gemma, about any modality, or about")
