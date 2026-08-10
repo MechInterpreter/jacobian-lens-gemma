@@ -142,6 +142,13 @@ def test_the_notebook_never_hardcodes_the_published_artifact_filename(notebook):
     assert "discover_published_l32_lens" in source
 
 
+def test_audio_protocol_validator_is_imported_from_its_defining_module(notebook):
+    """Guard the real-model path, which the CPU MOCK run cannot import-test."""
+    source = _code_source(notebook)
+    assert "from jlens.mmpilot.tri_modal import assert_audio_protocol" in source
+    assert "from jlens.mmpilot.audio import assert_audio_protocol" not in source
+
+
 def test_the_cache_is_loaded_never_rebuilt_on_the_default_path(notebook):
     source = _code_source(notebook)
     assert "load_expanded_manifest" in source

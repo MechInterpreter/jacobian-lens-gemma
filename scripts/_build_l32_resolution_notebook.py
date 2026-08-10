@@ -1959,9 +1959,9 @@ if not MODEL_STAGE_ENABLED:
         print("(PREPROCESSING_ONLY is True, so every model gate is forced shut.)")
     print("Nothing below this cell computes a result.")
 elif RUN_REAL_L32_CONVERGENCE_RESOLUTION:
-    from jlens.mmpilot.audio import assert_audio_protocol
     from jlens.mmpilot.preflight import preflight
     from jlens.mmpilot.real_backend import load_real_bundle
+    from jlens.mmpilot.tri_modal import assert_audio_protocol
 
     PREFLIGHT = preflight(
         model_repo_id=MODEL_REPO_ID,
