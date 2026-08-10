@@ -234,6 +234,7 @@ downloads nothing and spends nothing.
 | switch | what it unlocks |
 |---|---|
 | `RUN_REAL_L32_CONVERGENCE_RESOLUTION` | the real Drive artifacts, the real cached manifest and the real published L32 lens instead of the deterministic MOCK world |
+| `PREPROCESSING_ONLY` | stops after section 8. Preprocessing is CPU work over Drive; this is the switch that lets it run on a free CPU runtime and be resumed on an L4 |
 | `RUN_MODEL_STAGE` | allows Gemma to be loaded at all |
 | `CONFIRM_MODEL_LOAD` | acknowledges the ~16 GB download |
 | `CONFIRM_STAGE_A_BUDGET` | acknowledges the Stage-A pass budget printed in section 10 |
@@ -243,6 +244,20 @@ downloads nothing and spends nothing.
 The gates are **re-derived from the raw switches inside every cell that can
 spend a pass**, so editing this cell and re-running it can never leave a stale
 gate behind: section 2 defines `refresh_gates()` and every such cell calls it.
+`PREPROCESSING_ONLY` closes all three of them, so it can never be set alongside
+a model switch and quietly spend an L4 hour anyway.
+
+### The two-session workflow this notebook is built for
+
+| session | runtime | switches | what happens |
+|---|---|---|---|
+| 1 | **free CPU** | `RUN_REAL_… = True`, `PREPROCESSING_ONLY = True` | section 8 harvests, checkpoints and persists the whole preparation to Drive. Stop it whenever you like: at most the one in-flight batch of ≤25 files is repeated. |
+| 2 | **L4** | `RUN_REAL_… = True`, `PREPROCESSING_ONLY = False`, model switches on | section 8 loads and verifies the preparation cache in minutes without re-reading a single source unit, then Stage A starts. |
+
+Nothing required survives only in Python memory: `GROUPS`, `EXCLUSION`, `POOL`,
+the ranking, the frozen-concept feasibility check, the selected population, its
+provenance and every digest are reconstructed from persisted artifacts in a
+fresh process, and each is checked against a digest rather than trusted.
 
 ### The Stage-B rule, fixed here and not revisited
 
@@ -269,6 +284,13 @@ code(
 # 2. Configuration. Requires section 1 (it imports from the repository).
 # Nothing here mounts Drive, reads data, or loads a model.
 RUN_REAL_L32_CONVERGENCE_RESOLUTION = False
+
+# Stop after section 8 with the whole preparation persisted to Drive. This is
+# the CPU-session switch: preprocessing reads thousands of small files off a
+# Drive mount, which a GPU cannot make faster, and section 11 refuses to load
+# Gemma until the preparation is complete and verified anyway.
+PREPROCESSING_ONLY = False
+
 RUN_MODEL_STAGE = False
 CONFIRM_MODEL_LOAD = False
 CONFIRM_STAGE_A_BUDGET = False
@@ -320,6 +342,19 @@ CACHED_EXPANDED_MANIFEST = (
     f"{COMPLETED_RUN_DIRS[0]}/expanded_manifest.json"
 )
 EXPECTED_CACHED_GROUP_COUNT = 125198
+
+# ------------------------------------------------- the preparation cache root
+# Preprocessing artifacts are DERIVED data, never a run. The directory under
+# this root is named by the preparation fingerprint alone, so a CPU session and
+# an L4 session that agree on every pre-model input land in the same place
+# without either of them having to name a timestamped run directory.
+PREP_CACHE_ROOT = "/content/drive/MyDrive/datasets/cstf_spokencoco_derived"
+
+# Bounded work units, per the resumability contract. Stopping the runtime at any
+# moment repeats at most ONE batch of this size and never rescans from zero.
+PREP_BATCH_FILES = 25
+PREP_CHECKPOINT_SECONDS = 30.0
+PREP_PROGRESS_SECONDS = 30.0
 
 MODEL_REPO_ID = "google/gemma-4-E4B-it"
 MODEL_REVISION = "fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd"
@@ -453,6 +488,7 @@ SWITCHES = {
     name: globals()[name]
     for name in (
         "RUN_REAL_L32_CONVERGENCE_RESOLUTION",
+        "PREPROCESSING_ONLY",
         "RUN_MODEL_STAGE",
         "CONFIRM_MODEL_LOAD",
         "CONFIRM_STAGE_A_BUDGET",
@@ -460,6 +496,13 @@ SWITCHES = {
         "CONFIRM_STAGE_B_BUDGET",
     )
 }
+
+
+def _apply_gates(gates):
+    globals().update(gates)
+    return gates
+
+
 def refresh_gates():
     """Re-derive the three gates from the raw switches, MOCK override included.
 
@@ -475,6 +518,12 @@ def refresh_gates():
     in BOTH modes, because it is the switch that changes what is claimed.
     """
     gates = derive_resolution_gates(globals())
+    if PREPROCESSING_ONLY:
+        # One switch, and it closes everything a model could be loaded through.
+        # Overloading the MOCK/real switch to mean "CPU session" instead would
+        # make a preprocessing run indistinguishable from a MOCK run in the
+        # artifacts, which is exactly the confusion this study cannot afford.
+        return _apply_gates({name: False for name in gates})
     if not RUN_REAL_L32_CONVERGENCE_RESOLUTION:
         gates = {
             **gates,
@@ -488,13 +537,20 @@ def refresh_gates():
                 RUN_STAGE_B_CAUSAL_REPLICATION and CONFIRM_STAGE_B_BUDGET
             ),
         }
-    globals().update(gates)
-    return gates
+    return _apply_gates(gates)
 
 
 GATES = refresh_gates()
 
 print(format_resolution_gates(GATES, switches=SWITCHES))
+print()
+print(f"preprocessing only  {PREPROCESSING_ONLY}")
+if PREPROCESSING_ONLY:
+    print("  every model gate is forced closed. Section 8 runs, persists the")
+    print("  whole preparation to Drive and the notebook stops there.")
+print(f"prep cache root     {PREP_CACHE_ROOT}")
+print(f"prep work unit      {PREP_BATCH_FILES} files or "
+      f"{PREP_CHECKPOINT_SECONDS:.0f}s, whichever comes first")
 print()
 print(f"protocol            {L32_RESOLUTION_PROTOCOL}")
 print(f"run family          {RESOLUTION_RUN_PREFIX}_*")
@@ -554,6 +610,18 @@ if RUN_REAL_L32_CONVERGENCE_RESOLUTION:
         )
     for name, path in sorted(_required.items()):
         print(f"  ok  {name:26s} {path}")
+    # The preparation cache is DERIVED data this notebook creates. Its parent
+    # must exist; the cache itself is created by section 8 and is the one
+    # location outside this study's run directory that is ever written to.
+    _prep_parent = Path(PREP_CACHE_ROOT).parent
+    if not _prep_parent.is_dir():
+        raise RuntimeError(
+            f"the preparation cache's parent directory {_prep_parent} does not "
+            "exist, so preprocessing has nowhere durable to checkpoint to"
+        )
+    print(f"  ok  {'prep cache parent':26s} {_prep_parent}")
+    print(f"      prep cache root        {PREP_CACHE_ROOT} "
+          f"(exists={Path(PREP_CACHE_ROOT).is_dir()}, created if absent)")
 print(f"drive: {DRIVE_STATUS}")
 '''
 )
@@ -593,6 +661,10 @@ if torch.cuda.is_available():
     _properties = torch.cuda.get_device_properties(0)
     print(f"gpu           {_properties.name} "
           f"({_properties.total_memory / 1e9:.1f} GB)")
+print()
+print("Section 8 (preprocessing) is CPU and Drive I/O only. A GPU makes none of")
+print("it faster; section 8a says so again once it knows whether the")
+print("preparation cache is already complete.")
 
 if RUN_REAL_L32_CONVERGENCE_RESOLUTION and TRANSFORMERS_VERSION != (
     TRANSFORMERS_VERSION_EXPECTED
@@ -979,45 +1051,101 @@ print(f"build_expanded_manifest called on this path: "
 
 markdown(
     """
-## 8. The fresh population — filtered before selection, **proven** after it
+## 8. The fresh population — preprocessed once, resumable, **proven** afterwards
 
-### 8a. Harvest what must be avoided
+This section is CPU work over a Google Drive mount, and it is the section that
+used to take four hours with nothing to show for an interruption. It is now a
+**checkpointed preparation** stored under a deterministic cache directory keyed
+by a pre-model fingerprint. Stop the runtime whenever you like: at most one
+bounded batch of ≤25 files (or ≤30 seconds) is repeated, and the scan never
+restarts from file zero while a valid checkpoint exists.
 
-Every completed run is walked read-only. `image_id`, `group_id`, `sample_id`,
-`audio_path`, `caption` and `media_checksum` are pulled out of unit payloads
-wherever they appear, plus the `source_sample_ids` / `target_sample_ids` lists
-in a fingerprint. Recovering nothing is a **refusal**: "no overlap found" and
-"nothing was looked at" are indistinguishable in the artifact otherwise.
+### 8a. The preparation fingerprint and where its cache lives
 
-### 8b. Resolve the media the unit files do not store
+The cache path is a function of every input upstream of the model that can
+change which media are excluded or which are selected — the harvest protocol,
+the completed runs' basenames, their own fingerprints, their summary checksums,
+the cached expanded manifest's checksum and schema, the evidence lexicon hash,
+the frozen concepts, the sample-size rule and plan digest, the selection
+seed/profile/algorithm, the identity families, the source-artifact strategy and
+the fallback rule. Change any one of them and you get a different cache
+directory, never a silently reused one.
+
+No timestamped run directory is involved. A CPU session and an L4 session that
+agree on those inputs land in the same cache without either having to name a run.
+
+### 8b. Harvest the identities this population must avoid — resumably
+
+**One** enumeration of exactly the identity-bearing artifacts, reused for source
+integrity, identity harvesting and the after-the-fact immutability check. The old
+code took a whole-tree name/size/mtime digest and *then* walked the tree again to
+read identities.
+
+Sources are chosen minimally and the choice is **proven**, not assumed: a bulk
+population manifest when a run wrote one, otherwise the activation unit family,
+whose superset property over the capability, J-space, direction, intervention and
+readout families is stated in the proof *and checked* against each run's own
+`split_provenance.json`. Capability units are never treated as a population
+source — they are capped per concept and cover positives only. A shortfall
+escalates to a separately checkpointed fallback scan of the skipped families
+rather than narrowing the exclusion set.
+
+Every batch is written as one atomically replaced, checksummed gzip shard
+*before* the cursor advances. A torn shard is quarantined and only its own batch
+is recomputed. Progress prints at least every 30 seconds with the run, the
+family, files done, the current shard, identities recovered, elapsed time and a
+remaining estimate from measured throughput — and says whether the work is being
+computed or reused.
+
+### 8c. Resolve the media the unit files do not store
 
 Unit files carry ids, not recordings or captions. A `group_id` is a hash of
 exactly `image_id|caption|audio`, so mapping the excluded ids back through the
 manifest recovers both — and every sibling caption of an excluded photograph is
-excluded with it.
+excluded with it. The pool is then filtered **before** any selection rule runs.
 
-### 8c. Filter, then select, then prove
+### 8d. The frozen concepts, checked individually — never re-ranked
 
-The pool is filtered **before** the selection rule runs, so the chosen set does
-not depend on where excluded groups sat in the ranking. Disjointness is then
-verified over the population that was actually built, by a different predicate
-than the one that did the filtering: a proof derived from the filter proves only
-that the filter agrees with itself.
+The six candidates and the three focal concepts were fixed by the completed
+studies. They are set **directly**, in frozen order. The independent pool's
+ranking is computed and printed because it is informative, and it is
+**descriptive only**: removing the photographs a completed run spent changes the
+ranking legitimately without making any frozen concept infeasible, so refusing
+unless the fresh top six equals the frozen six would refuse for the wrong reason.
+
+What is checked instead is each frozen concept against each predeclared
+requirement — distinct images, synchronized groups, source positives, held-out
+positives, matched negatives. A concept that genuinely falls short is a
+**refusal** with its exact shortfall printed. No concept is ever substituted,
+before or after any result.
+
+### 8e. Build the population, then prove it
+
+Disjointness is verified over the population that was actually built, by a
+different predicate than the one that did the filtering: a proof derived from the
+filter proves only that the filter agrees with itself.
+
+### 8f. Persist everything, so a fresh process needs none of this memory
+
+`GROUPS`, `EXCLUSION`, `POOL`, the ranking, the feasibility record, the selected
+population, its provenance and every digest are written to the preparation cache
+and reloaded — and re-verified against their digests — by the GPU session.
 """
 )
 
 code(
     '''
-# 8a. Harvest the identities this population must avoid. Read-only.
+# 8a. Resolve the deterministic preparation cache. NO source file is read here.
 from datetime import datetime, timezone
 
+from jlens.mmpilot import prep_cache as prep
 from jlens.mmpilot.l32_resolution import (
+    POPULATION_SELECTION_VERSION,
     RESOLUTION_RUN_PREFIX,
+    SAMPLE_SIZE_RULE_VERSION,
     assert_fresh_run_namespace,
-    harvest_excluded_identities,
     independent_pool,
     resolve_excluded_media,
-    run_tree_digest,
 )
 
 if not RUN_REAL_L32_CONVERGENCE_RESOLUTION:
@@ -1053,9 +1181,88 @@ if not RUN_REAL_L32_CONVERGENCE_RESOLUTION:
             _mock_completed, _spent, layer=RESOLUTION_LAYER,
         )
     COMPLETED_RUN_DIRS = (str(_mock_completed),)
+    PREP_CACHE_ROOT = str(SCRATCH / "prep_cache_root")
 
-COMPLETED_TREES_BEFORE = [run_tree_digest(d) for d in COMPLETED_RUN_DIRS]
-EXCLUSION = harvest_excluded_identities(COMPLETED_RUN_DIRS, require=True)
+# What each completed run IS, for fingerprinting: its basename, the digest its
+# own fingerprint.json records, and a checksum of each summary/report it wrote.
+# Never its absolute path — a remounted Drive is not a different experiment.
+COMPLETED_RUN_IDENTITIES = [
+    prep.completed_run_identity(_dir) for _dir in COMPLETED_RUN_DIRS
+]
+
+PREPARATION_FINGERPRINT = prep.preparation_fingerprint(
+    **prep.default_fingerprint_constants(),
+    completed_run_basenames=[_e["run"] for _e in COMPLETED_RUN_IDENTITIES],
+    completed_run_fingerprints=[
+        _e["fingerprint_digest"] for _e in COMPLETED_RUN_IDENTITIES
+    ],
+    completed_summary_checksums=[
+        _e["summary_checksums"] for _e in COMPLETED_RUN_IDENTITIES
+    ],
+    cached_expanded_manifest_checksum=DERIVED_MANIFEST_CHECKSUM,
+    cache_schema_version=CACHE_LOAD["schema_version"],
+    evidence_lexicon_hash=CACHE_LOAD["evidence_lexicon_hash"],
+    frozen_selected_concepts=list(FROZEN_SELECTED_CONCEPTS),
+    frozen_focal_concepts=list(FROZEN_FOCAL_CONCEPTS),
+    sample_size_rule_version=SAMPLE_SIZE_RULE_VERSION,
+    sample_size_plan_digest=SAMPLE_PLAN_RECORD["plan_digest"],
+    selection_algorithm_version=POPULATION_SELECTION_VERSION,
+    selection_seed=SPLIT_SEED,
+    selection_profile_version=PROFILE.version,
+    n_train_positive_images=N_TRAIN_POSITIVE_IMAGES,
+    n_test_positive_images=N_TEST_POSITIVE_IMAGES,
+    n_train_negative_images=N_TRAIN_NEGATIVE_IMAGES,
+    n_test_negative_images=N_TEST_NEGATIVE_IMAGES,
+)
+PREP_DIR = prep.preparation_cache_dir(PREP_CACHE_ROOT, PREPARATION_FINGERPRINT)
+PREP_COMPLETE_ON_ENTRY = prep.preparation_is_complete(PREP_DIR)
+PROGRESS = prep.ProgressReporter(interval=PREP_PROGRESS_SECONDS)
+
+print("PREPARATION CACHE")
+print(f"  preparation version  {prep.PREPARATION_VERSION}")
+print(f"  preparation digest   {PREPARATION_FINGERPRINT['preparation_digest']}")
+print(f"  cache directory      {PREP_DIR}")
+print(f"  already complete     {PREP_COMPLETE_ON_ENTRY is not None}")
+for _entry in COMPLETED_RUN_IDENTITIES:
+    print(f"  avoided run          {_entry['run']}  "
+          f"fingerprint {str(_entry['fingerprint_digest'])[:23]}...  "
+          f"summaries {len(_entry['summary_checksums'])}")
+
+# Runtime safeguard. Preprocessing is Drive I/O on thousands of small files; a
+# GPU makes none of it faster and an L4 hour spent here is an L4 hour wasted.
+print()
+print(f"CUDA present: {torch.cuda.is_available()}")
+if PREP_COMPLETE_ON_ENTRY is None and torch.cuda.is_available():
+    print("!" * 72)
+    print("PREPROCESSING IS NOT COMPLETE AND THIS RUNTIME HAS A GPU.")
+    print("A GPU provides NO benefit to section 8: it is Drive I/O over many")
+    print("small files. Recommended: stop this runtime, switch to a free CPU")
+    print("runtime, set PREPROCESSING_ONLY = True and let section 8 finish and")
+    print("checkpoint. Section 11 will refuse to load Gemma until it has.")
+    print("Everything section 8 completes here is still durable and reusable —")
+    print("nothing is lost either way, only GPU time.")
+    print("!" * 72)
+'''
+)
+
+code(
+    '''
+# 8b. Harvest the exclusion identities, resumably. THIS is the long cell, and it
+# is the one that checkpoints. Stop it whenever you like.
+PREP = prep.run_exclusion_preparation(
+    PREP_DIR,
+    COMPLETED_RUN_DIRS,
+    fingerprint=PREPARATION_FINGERPRINT,
+    batch_files=PREP_BATCH_FILES,
+    checkpoint_seconds=PREP_CHECKPOINT_SECONDS,
+    progress=PROGRESS,
+    protected_prefixes=PROTECTED_RUN_PREFIXES,
+)
+EXCLUSION = PREP["exclusion"]
+COMPLETENESS = prep.assert_complete(PREP["completeness"])
+SOURCE_FAMILIES = PREP["families_by_run"]
+
+print()
 print("EXCLUSION SET — harvested from the completed runs' own artifacts")
 for _entry in EXCLUSION.sources:
     print(f"  {_entry['run_dir']}")
@@ -1065,12 +1272,38 @@ for _entry in EXCLUSION.sources:
 for _name, _count in sorted(EXCLUSION.counts().items()):
     print(f"  {_name:18s} {_count:>7,}")
 print(f"  exclusion digest   {EXCLUSION.digest}")
+print(f"  content digest     {COMPLETENESS['content_digest']}")
+print()
+print("COMPLETENESS PROOF — the exclusion set covers the whole spent population")
+for _row in COMPLETENESS["runs"]:
+    print(f"  {_row['run']}")
+    print(f"    strategy          {_row['strategy']}")
+    print(f"    expected groups   {_row['expected_group_count']} "
+          f"(from {_row['expected_from']})")
+    print(f"    groups recovered  {_row['group_ids_recovered']}")
+    print(f"    images recovered  {_row['image_ids_recovered']} "
+          f"(expected {_row['expected_image_count']})")
+    print(f"    sources read      {_row['source_artifacts']}")
+    print(f"    families skipped  {_row['families_skipped']}")
+    print(f"    files read        {_row['n_files_read']}")
+    print(f"    complete          {_row['complete']}  shortfall {_row['shortfall']}")
+print(f"  fallback scan required: {COMPLETENESS['fallback_required']}")
+print(f"  missing/invalid units:  {COMPLETENESS['n_missing_or_invalid_units']}")
+print()
+print(f"  files computed this session: {PREP['files_computed_this_session']}")
+print(f"  files reused from Drive:     {PREP['files_reused_from_drive']}")
+print()
+print("WHY THE SKIPPED FAMILIES CANNOT HOLD AN IDENTITY THE READ ONES MISSED:")
+print(f"  {COMPLETENESS['why_skipped_families_cannot_add_identities']}")
 '''
 )
 
 code(
     '''
-# 8b. Recover the recordings and captions behind the excluded group ids.
+# 8c. Recover the recordings and captions behind the excluded group ids, then
+# filter the pool BEFORE any selection rule runs.
+from jlens.mmpilot.store import payload_checksum
+
 MEDIA_RESOLUTION = resolve_excluded_media(EXCLUSION, GROUPS)
 print(f"excluded group ids           {MEDIA_RESOLUTION['n_excluded_group_ids']:,}")
 print(f"resolved in this manifest    {MEDIA_RESOLUTION['n_resolved_in_manifest']:,}")
@@ -1079,12 +1312,32 @@ print(f"audio paths added            {MEDIA_RESOLUTION['audio_paths_added']:,}")
 print(f"captions added               {MEDIA_RESOLUTION['captions_added']:,}")
 print(f"  {MEDIA_RESOLUTION['sibling_expansion_note']}")
 
+# The pool is a deterministic function of GROUPS and EXCLUSION, so it is
+# recomputed in every process rather than deserialized — and its digest is
+# compared against the one preprocessing recorded. Loading a pool would make
+# the file the authority; recomputing and checking makes the identities the
+# authority and catches a cache that has drifted from the manifest.
 POOL, POOL_RECORD = independent_pool(GROUPS, EXCLUSION)
+POOL_DIGEST = payload_checksum(sorted(str(_g["group_id"]) for _g in POOL))
+POOL_RECORD["pool_digest"] = POOL_DIGEST
+
+prep.atomic_write_json(
+    PREP_DIR / "media_resolution.json",
+    MEDIA_RESOLUTION,
+    protected_prefixes=PROTECTED_RUN_PREFIXES,
+)
+prep.atomic_write_json(
+    PREP_DIR / "independent_pool.json",
+    POOL_RECORD,
+    protected_prefixes=PROTECTED_RUN_PREFIXES,
+)
+
 print()
 print(f"groups available             {POOL_RECORD['n_groups_available']:,}")
 print(f"groups excluded              {POOL_RECORD['n_groups_excluded']:,}")
 print(f"independent pool             {POOL_RECORD['n_groups_in_independent_pool']:,}")
 print(f"distinct images in pool      {POOL_RECORD['n_distinct_images_in_pool']:,}")
+print(f"pool digest                  {POOL_DIGEST}")
 print(f"  by identity: {POOL_RECORD['excluded_by_identity']}")
 if not POOL:
     raise RuntimeError(
@@ -1098,95 +1351,141 @@ if not POOL:
 
 code(
     '''
-# 8c. Rank the pool, take the six candidates IN ORDER, and open the run dir.
+# 8d. Rank the pool DESCRIPTIVELY, then check the FROZEN concepts one by one.
+#
+# The ranking decides nothing here. Excluding the photographs a completed run
+# spent removes coverage unevenly, so the fresh ranking can reorder while all
+# six frozen concepts stay comfortably feasible; refusing unless the fresh top
+# six equals the frozen six would refuse for the wrong reason. What is checked
+# is each frozen concept against each predeclared requirement.
+from jlens.mmpilot.l32_resolution import (
+    assert_frozen_concepts_feasible,
+    format_frozen_feasibility,
+    frozen_concept_feasibility,
+    ranking_digest,
+)
 from jlens.mmpilot.selection import select_focal_concepts, unrelated_control_assignment
 
-EVIDENCE_INDEX = evidence_module.build_evidence_index(
-    POOL, tuple(CONCEPT_CANDIDATES), EVIDENCE_CONFIG
-)
+PREPARED = prep.load_prepared_selection(PREP_DIR)
 REQUIREMENTS = expansion_module.ConceptRequirements(
     min_distinct_images=N_TRAIN_POSITIVE_IMAGES + N_TEST_POSITIVE_IMAGES,
     min_groups=N_TRAIN_POSITIVE_IMAGES + N_TEST_POSITIVE_IMAGES,
     min_train_positives=N_TRAIN_POSITIVE_IMAGES,
     min_test_positives=N_TEST_POSITIVE_IMAGES,
 )
-RANKING = expansion_module.rank_concepts(
-    POOL,
-    CONCEPT_CANDIDATES,
-    requirements=REQUIREMENTS,
-    groups_per_concept=N_TRAIN_POSITIVE_IMAGES + N_TEST_POSITIVE_IMAGES,
-    max_groups_per_image=PROFILE.max_groups_per_image,
-    seed=SPLIT_SEED,
-    evidence_config=EVIDENCE_CONFIG,
-    profile=PROFILE,
-    evidence_index=EVIDENCE_INDEX,
-)
+EVIDENCE_INDEX = None
+SELECTION_REUSED = False
+
+if PREPARED is not None and PREPARED.get("pool_digest") == POOL_DIGEST:
+    # A fresh process reloads the ranking and feasibility record instead of
+    # rebuilding the evidence index over the whole pool. The pool digest above
+    # is what makes that safe: a different pool cannot reach this branch.
+    RANKING = PREPARED["ranking"]
+    FEASIBILITY = PREPARED["feasibility"]
+    SELECTION_REUSED = True
+    print(f"reusing the prepared ranking and feasibility from {PREP_DIR}")
+else:
+    EVIDENCE_INDEX = evidence_module.build_evidence_index(
+        POOL, tuple(CONCEPT_CANDIDATES), EVIDENCE_CONFIG
+    )
+    RANKING = expansion_module.rank_concepts(
+        POOL,
+        CONCEPT_CANDIDATES,
+        requirements=REQUIREMENTS,
+        groups_per_concept=N_TRAIN_POSITIVE_IMAGES + N_TEST_POSITIVE_IMAGES,
+        max_groups_per_image=PROFILE.max_groups_per_image,
+        seed=SPLIT_SEED,
+        evidence_config=EVIDENCE_CONFIG,
+        profile=PROFILE,
+        evidence_index=EVIDENCE_INDEX,
+    )
+    FEASIBILITY = None
+
 RANKED_CONCEPTS = [row["concept"] for row in RANKING]
-SELECTED_NAMES = expansion_module.select_concepts(
-    RANKING, n_concepts=6, max_concepts=6, requirements=REQUIREMENTS,
-)
-FOCAL_CONCEPTS, NON_FOCAL_CONCEPTS = select_focal_concepts(SELECTED_NAMES, n_focal=3)
+RANKING_DIGEST = ranking_digest(RANKING)
+
+if RUN_REAL_L32_CONVERGENCE_RESOLUTION:
+    # Set directly, in frozen order. Never re-derived from this pool.
+    SELECTED_NAMES = list(SELECTED_CONCEPTS_EXPECTED)
+    FOCAL_CONCEPTS = list(FOCAL_CONCEPTS_EXPECTED)
+    NON_FOCAL_CONCEPTS = [c for c in SELECTED_NAMES if c not in FOCAL_CONCEPTS]
+else:
+    # MOCK has its own six-concept world; the frozen names do not exist in it,
+    # so MOCK exercises the selection machinery and the real path exercises the
+    # freeze. Neither branch ever substitutes a concept after a result.
+    SELECTED_NAMES = expansion_module.select_concepts(
+        RANKING, n_concepts=6, max_concepts=6, requirements=REQUIREMENTS,
+    )
+    FOCAL_CONCEPTS, NON_FOCAL_CONCEPTS = select_focal_concepts(
+        SELECTED_NAMES, n_focal=3
+    )
+
+if FEASIBILITY is None or FEASIBILITY["frozen_selected_concepts"] != list(
+    SELECTED_NAMES
+):
+    # Recomputed rather than trusted whenever the persisted record is not about
+    # exactly these concepts. The check costs nothing and it is the difference
+    # between reusing a result and inheriting one.
+    FEASIBILITY = frozen_concept_feasibility(
+        RANKING,
+        concepts=SELECTED_NAMES,
+        focal=FOCAL_CONCEPTS,
+        requirements=REQUIREMENTS.to_dict(),
+    )
+assert_frozen_concepts_feasible(FEASIBILITY)
+FEASIBILITY_DIGEST = FEASIBILITY["feasibility_digest"]
+
 UNRELATED_CONTROLS = unrelated_control_assignment(FOCAL_CONCEPTS, NON_FOCAL_CONCEPTS)
 CONFIG.concepts = tuple(SELECTED_NAMES)
 CONFIG.causal_concepts = tuple(FOCAL_CONCEPTS)
 
-# On the real path the concepts are FROZEN in ranking order by the completed
-# studies and are not re-derived into something else. A pool that no longer
-# supports them is a refusal, never a substitution.
-if RUN_REAL_L32_CONVERGENCE_RESOLUTION:
-    if SELECTED_NAMES != SELECTED_CONCEPTS_EXPECTED:
-        raise RuntimeError(
-            f"the independent pool ranks {SELECTED_NAMES}, but the frozen "
-            f"candidate set is {SELECTED_CONCEPTS_EXPECTED}. Concepts are not "
-            "re-selected for this study; if the fresh pool cannot support them "
-            "the population cannot be built and the study refuses."
-        )
-    if FOCAL_CONCEPTS != FOCAL_CONCEPTS_EXPECTED:
-        raise RuntimeError(
-            f"focal concepts {FOCAL_CONCEPTS} != frozen {FOCAL_CONCEPTS_EXPECTED}"
-        )
-
-RUN_ID = (
-    f"{RESOLUTION_RUN_PREFIX}_{CONFIG.mode}_"
-    f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
-)
-RUN_DIR = Path(os.environ.get("MMPILOT_RUN_DIR") or (RESOLVED_RUNS_ROOT / RUN_ID))
-assert_fresh_run_namespace(RUN_DIR, protected_prefixes=PROTECTED_RUN_PREFIXES)
-RUN_DIR.mkdir(parents=True, exist_ok=True)
-
+print(format_frozen_feasibility(FEASIBILITY))
+print()
 print("SELECTION — fixed before any model result exists")
-print(f"  selected (ranking order) {SELECTED_NAMES}")
+print(f"  selected (frozen order)  {SELECTED_NAMES}")
 print(f"  focal concepts           {FOCAL_CONCEPTS}")
 print(f"  non-focal (controls)     {NON_FOCAL_CONCEPTS}")
 for _focal, _control in sorted(UNRELATED_CONTROLS.items()):
     print(f"    {_focal:12s} -> {_control}")
-print(f"  run directory            {RUN_DIR}")
+print(f"  ranking digest           {RANKING_DIGEST}")
+print(f"  feasibility digest       {FEASIBILITY_DIGEST}")
+print(f"  concepts substituted     False")
 '''
 )
 
 code(
     '''
-# 8d. Build the population, then PROVE it is independent and unreplicated.
+# 8e. Build the population, then PROVE it is independent and unreplicated.
 from jlens.mmpilot.l32_resolution import (
     assert_one_unit_per_photograph,
     audit_population_disjointness,
     selection_digest,
 )
 
-SUBSET = manifest_module.build_subset(
-    POOL,
-    {name: CONCEPT_CANDIDATES[name] for name in SELECTED_NAMES},
-    groups_per_concept=N_TRAIN_POSITIVE_IMAGES + N_TEST_POSITIVE_IMAGES,
-    negatives_per_concept=N_TRAIN_NEGATIVE_IMAGES + N_TEST_NEGATIVE_IMAGES,
-    seed=SPLIT_SEED,
-    evidence_config=EVIDENCE_CONFIG,
-    profile=PROFILE,
-    evidence_index=EVIDENCE_INDEX,
-)
+if SELECTION_REUSED and PREPARED is not None:
+    SUBSET = PREPARED["subset"]
+    print(f"reusing the prepared population from {PREP_DIR}")
+else:
+    if EVIDENCE_INDEX is None:
+        EVIDENCE_INDEX = evidence_module.build_evidence_index(
+            POOL, tuple(CONCEPT_CANDIDATES), EVIDENCE_CONFIG
+        )
+    SUBSET = manifest_module.build_subset(
+        POOL,
+        {name: CONCEPT_CANDIDATES[name] for name in SELECTED_NAMES},
+        groups_per_concept=N_TRAIN_POSITIVE_IMAGES + N_TEST_POSITIVE_IMAGES,
+        negatives_per_concept=N_TRAIN_NEGATIVE_IMAGES + N_TEST_NEGATIVE_IMAGES,
+        seed=SPLIT_SEED,
+        evidence_config=EVIDENCE_CONFIG,
+        profile=PROFILE,
+        evidence_index=EVIDENCE_INDEX,
+    )
 LEAKAGE = manifest_module.check_split_leakage(SUBSET)
 if not LEAKAGE["ok"]:
     raise RuntimeError(f"split leakage detected, refusing to continue: {LEAKAGE}")
 
+# Recomputed in EVERY process, never loaded: the disjointness proof is the
+# study's central claim, and a loaded proof proves only that a file says so.
 DISJOINTNESS = audit_population_disjointness(SUBSET, EXCLUSION, require=True)
 PSEUDOREPLICATION = assert_one_unit_per_photograph(SUBSET)
 POPULATION_DIGEST = selection_digest(SUBSET)
@@ -1235,35 +1534,39 @@ print(f"\\nsplit provenance checksum {SPLIT_PROVENANCE_CHECKSUM}")
 
 code(
     '''
-# 8e. Determinism: the same pool in a different order gives the same population.
+# 8f. Determinism, persistence, and the end of preprocessing.
 #
 # Selection has to be a function of the identities, not of the order the cache
-# happened to list them in. This re-runs the whole selection on a reversed pool
-# and compares the digests. It costs nothing and it is the only way the claim
-# "deterministic selection" is checked rather than asserted.
+# happened to list them in. The permutation replay re-runs the whole selection
+# on a shuffled pool and compares the digests — the only way "deterministic
+# selection" is checked rather than asserted. It is done once, during
+# preprocessing, and its result is persisted with everything else.
 import random as _random
 
-_shuffled = list(POOL)
-_random.Random(20260809).shuffle(_shuffled)
-_shuffled_index = evidence_module.build_evidence_index(
-    _shuffled, tuple(CONCEPT_CANDIDATES), EVIDENCE_CONFIG
-)
-_replay = manifest_module.build_subset(
-    _shuffled,
-    {name: CONCEPT_CANDIDATES[name] for name in SELECTED_NAMES},
-    groups_per_concept=N_TRAIN_POSITIVE_IMAGES + N_TEST_POSITIVE_IMAGES,
-    negatives_per_concept=N_TRAIN_NEGATIVE_IMAGES + N_TEST_NEGATIVE_IMAGES,
-    seed=SPLIT_SEED,
-    evidence_config=EVIDENCE_CONFIG,
-    profile=PROFILE,
-    evidence_index=_shuffled_index,
-)
-SELECTION_DETERMINISM = {
-    "population_digest": POPULATION_DIGEST,
-    "permuted_pool_digest": selection_digest(_replay),
-    "deterministic": selection_digest(_replay) == POPULATION_DIGEST,
-    "check": "identical selection under a permuted manifest order",
-}
+if SELECTION_REUSED and PREPARED is not None:
+    SELECTION_DETERMINISM = PREPARED["selection_determinism"]
+else:
+    _shuffled = list(POOL)
+    _random.Random(20260809).shuffle(_shuffled)
+    _shuffled_index = evidence_module.build_evidence_index(
+        _shuffled, tuple(CONCEPT_CANDIDATES), EVIDENCE_CONFIG
+    )
+    _replay = manifest_module.build_subset(
+        _shuffled,
+        {name: CONCEPT_CANDIDATES[name] for name in SELECTED_NAMES},
+        groups_per_concept=N_TRAIN_POSITIVE_IMAGES + N_TEST_POSITIVE_IMAGES,
+        negatives_per_concept=N_TRAIN_NEGATIVE_IMAGES + N_TEST_NEGATIVE_IMAGES,
+        seed=SPLIT_SEED,
+        evidence_config=EVIDENCE_CONFIG,
+        profile=PROFILE,
+        evidence_index=_shuffled_index,
+    )
+    SELECTION_DETERMINISM = {
+        "population_digest": POPULATION_DIGEST,
+        "permuted_pool_digest": selection_digest(_replay),
+        "deterministic": selection_digest(_replay) == POPULATION_DIGEST,
+        "check": "identical selection under a permuted manifest order",
+    }
 print(f"selection determinism: {SELECTION_DETERMINISM['deterministic']}")
 if not SELECTION_DETERMINISM["deterministic"]:
     raise RuntimeError(
@@ -1271,6 +1574,85 @@ if not SELECTION_DETERMINISM["deterministic"]:
         "groups in, so it is not reproducible from the identities alone. "
         f"{SELECTION_DETERMINISM}"
     )
+
+PREPARED_SELECTION = prep.save_prepared_selection(
+    PREP_DIR,
+    {
+        "preparation_digest": PREPARATION_FINGERPRINT["preparation_digest"],
+        "pool_digest": POOL_DIGEST,
+        "pool_record": POOL_RECORD,
+        "ranking": RANKING,
+        "ranking_digest": RANKING_DIGEST,
+        "feasibility": FEASIBILITY,
+        "requirements": REQUIREMENTS.to_dict(),
+        "selected_concepts": list(SELECTED_NAMES),
+        "focal_concepts": list(FOCAL_CONCEPTS),
+        "non_focal_concepts": list(NON_FOCAL_CONCEPTS),
+        "unrelated_controls": dict(sorted(UNRELATED_CONTROLS.items())),
+        "subset": SUBSET,
+        "population_digest": POPULATION_DIGEST,
+        "split_provenance": SPLIT_PROVENANCE,
+        "split_provenance_checksum": SPLIT_PROVENANCE_CHECKSUM,
+        "selection_determinism": SELECTION_DETERMINISM,
+        "media_resolution": MEDIA_RESOLUTION,
+    },
+    protected_prefixes=PROTECTED_RUN_PREFIXES,
+)
+
+# The completion marker is also the immutability check: recomputing this
+# preparation from the same inputs and getting a different digest is a refusal,
+# not an overwrite.
+PREPARATION_COMPLETE = prep.finalize_preparation(
+    PREP_DIR,
+    {
+        "preparation_digest": PREPARATION_FINGERPRINT["preparation_digest"],
+        "exclusion_digest": EXCLUSION.digest,
+        "population_digest": POPULATION_DIGEST,
+        "pool_digest": POOL_DIGEST,
+        "ranking_digest": RANKING_DIGEST,
+        "frozen_concept_feasibility_digest": FEASIBILITY_DIGEST,
+        "completeness_complete": COMPLETENESS["complete"],
+        "content_digest": COMPLETENESS["content_digest"],
+    },
+    protected_prefixes=PROTECTED_RUN_PREFIXES,
+)
+PREPROCESSING_REPORT = prep.render_preprocessing_report({
+    "cache_dir": str(PREP_DIR),
+    "preparation_digest": PREPARATION_FINGERPRINT["preparation_digest"],
+    "exclusion_digest": EXCLUSION.digest,
+    "completeness": COMPLETENESS,
+    "files_computed_this_session": PREP["files_computed_this_session"],
+    "files_reused_from_drive": PREP["files_reused_from_drive"],
+    "batch_files": PREP_BATCH_FILES,
+    "checkpoint_seconds": PREP_CHECKPOINT_SECONDS,
+})
+prep.atomic_write_text(
+    PREP_DIR / "preprocessing_report.md",
+    PREPROCESSING_REPORT,
+    protected_prefixes=PROTECTED_RUN_PREFIXES,
+)
+
+print()
+print("PREPROCESSING COMPLETE AND PERSISTED")
+print(f"  cache directory   {PREP_DIR}")
+for _name in sorted(p.name for p in PREP_DIR.iterdir()):
+    print(f"    {_name}")
+print(f"  exclusion digest  {PREPARATION_COMPLETE['exclusion_digest']}")
+print(f"  population digest {PREPARATION_COMPLETE['population_digest']}")
+print(f"  pool digest       {PREPARATION_COMPLETE['pool_digest']}")
+print()
+print("A fresh Python process reconstructs GROUPS, EXCLUSION, POOL, the ranking,")
+print("the feasibility record, the subset, its provenance and every fingerprint")
+print("from these artifacts alone. Nothing required lives only in this kernel.")
+if PREPROCESSING_ONLY:
+    print()
+    print("=" * 72)
+    print("PREPROCESSING_ONLY IS TRUE — STOP HERE.")
+    print("Every cell below is a no-op in this session. Switch to an L4 runtime,")
+    print("set PREPROCESSING_ONLY = False with the same scientific configuration,")
+    print("and section 8 will load and verify this cache without re-reading a")
+    print("single source unit.")
+    print("=" * 72)
 '''
 )
 
@@ -1458,7 +1840,19 @@ print(format_stage_budget(BUDGET_STAGE_A))
 print()
 print(format_stage_budget(BUDGET_STAGE_B))
 print()
-TIMING = derive_seconds_per_pass(COMPLETED_RUN_DIRS[0])
+# Measured once and cached with the rest of the preprocessing. The measurement
+# stats every capability, activation and intervention unit of a completed run,
+# which is cheap next to reading them but is still a Drive traversal — and it is
+# a budget estimate, so paying for it once per preparation is enough.
+_timing_path = PREP_DIR / "completed_run_timing.json"
+if _timing_path.is_file():
+    TIMING = json.loads(_timing_path.read_text(encoding="utf-8"))
+    print(f"timing reused from {_timing_path}")
+else:
+    TIMING = derive_seconds_per_pass(COMPLETED_RUN_DIRS[0])
+    prep.atomic_write_json(
+        _timing_path, TIMING, protected_prefixes=PROTECTED_RUN_PREFIXES
+    )
 if TIMING.get("available"):
     _mid = float(TIMING["median_seconds_per_unit"])
     print(f"measured from the completed run's own unit-file inter-arrival times:")
@@ -1547,8 +1941,22 @@ INVARIANCE = None
 MEDIA = None
 MEDIA_RETRY_JOURNAL = RetryJournal()
 
+# Gemma is not loaded until preprocessing is complete AND verified. A 16 GB
+# download in front of a scan that has not finished is an L4 hour spent on Drive
+# I/O, and a model loaded against a half-built population is worse than that.
+if MODEL_STAGE_ENABLED and prep.preparation_is_complete(PREP_DIR) is None:
+    raise RuntimeError(
+        f"preprocessing is not complete in {PREP_DIR}, so the model is not "
+        "loaded. Run section 8 to completion first — on a free CPU runtime "
+        "with PREPROCESSING_ONLY = True, because a GPU makes Drive I/O over "
+        "thousands of small files no faster. Everything section 8 has already "
+        "finished is durable and will be reused."
+    )
+
 if not MODEL_STAGE_ENABLED:
     print("skipped: RUN_MODEL_STAGE and CONFIRM_MODEL_LOAD are not both True.")
+    if PREPROCESSING_ONLY:
+        print("(PREPROCESSING_ONLY is True, so every model gate is forced shut.)")
     print("Nothing below this cell computes a result.")
 elif RUN_REAL_L32_CONVERGENCE_RESOLUTION:
     from jlens.mmpilot.audio import assert_audio_protocol
@@ -1658,7 +2066,30 @@ rule.
 
 Changing **any** of them refuses the resume rather than mixing units. That is
 what makes an interrupted Colab session lose at most the in-flight unit.
+
+The `mml32res_*` run directory is created **here**, not in section 8. A
+preprocessing session must not leave an empty timestamped run directory behind
+for a study it is not going to run.
 """
+)
+
+code(
+    '''
+# 12a. Open this study's own run directory. Never inside a completed run.
+RUN_DIR = None
+if PREPROCESSING_ONLY:
+    print("skipped: PREPROCESSING_ONLY is True — no scientific run directory is")
+    print("created by a preprocessing session.")
+else:
+    RUN_ID = (
+        f"{RESOLUTION_RUN_PREFIX}_{CONFIG.mode}_"
+        f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
+    )
+    RUN_DIR = Path(os.environ.get("MMPILOT_RUN_DIR") or (RESOLVED_RUNS_ROOT / RUN_ID))
+    assert_fresh_run_namespace(RUN_DIR, protected_prefixes=PROTECTED_RUN_PREFIXES)
+    RUN_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"run directory {RUN_DIR}")
+'''
 )
 
 code(
@@ -1687,110 +2118,142 @@ from jlens.mmpilot.tri_modal import TRI_MODAL_VERDICT_VERSION, audio_capability_
 CONTROL_SEED = 20260809
 _recorded = L32_VALIDATION["recorded"]
 
-RESOLUTION_FINGERPRINT = resolution_fingerprint(
-    protocol=L32_RESOLUTION_PROTOCOL,
-    stage_plan_version=STAGE_PLAN_VERSION,
-    conditional_stage_b_rule_digest=payload_checksum(STAGE_PLAN),
-    intervention_family=INTERVENTION_FAMILY,
-    model_repo_id=(
-        MODEL_REPO_ID if RUN_REAL_L32_CONVERGENCE_RESOLUTION else "mock/gemma-like"
-    ),
-    model_revision=MODEL_REVISION_USED,
-    processor_revision=PROCESSOR_REVISION_USED,
-    transformers_version=TRANSFORMERS_VERSION,
-    torch_version=TORCH_VERSION,
-    audio_protocol_version=AUDIO_PROTOCOL["protocol_version"],
-    audio_protocol_fingerprint=AUDIO_PROTOCOL["protocol_fingerprint"],
-    lens_path=DISCOVERED.lens_path,
-    lens_checksum=DISCOVERED.lens_checksum,
-    lens_confirmation_status="passed" if L32_VALIDATION["passed"] else "failed",
-    lens_confirmation_set_checksum=DISCOVERED.extension_sidecar_path,
-    publication_metadata_checksum=DISCOVERED.extension_artifact_checksum,
-    physical_layer=RESOLUTION_LAYER,
-    hook_site=CONVENTIONS["hook_site"],
-    d_model=L32_LENSES.d_model,
-    residual_convention=_recorded.get("residual_convention"),
-    final_prompt_token_position=CONVENTIONS["position"],
-    dictionary_orientation=CONVENTIONS["dictionary"],
-    dictionary_normalization=CONVENTIONS["code_orientation"],
-    calibration_modality=_recorded.get("calibration_modality"),
-    selected_scale=LENS_FITTED_SCALE,
-    original_manifest_checksum=ORIGINAL_MANIFEST_CHECKSUM,
-    expanded_manifest_checksum=DERIVED_MANIFEST_CHECKSUM,
-    cache_schema_version=CACHE_LOAD["schema_version"],
-    evidence_lexicon_hash=CACHE_LOAD["evidence_lexicon_hash"],
-    exclusion_run_dirs=sorted(str(d) for d in COMPLETED_RUN_DIRS),
-    exclusion_run_checksum=EXCLUSION.digest,
-    prompt_protocol=OPEN_PROMPT_PROTOCOL,
-    prompt_hash=PROMPT_RECORDS["text"].prompt_hash,
-    prompt_protocol_digest=PROMPT_PROTOCOL_DIGEST,
-    selected_concepts=list(SELECTED_NAMES),
-    focal_concepts=list(FOCAL_CONCEPTS),
-    capability_admissible_concepts=None,
-    capability_protocol=OPEN_PROMPT_PROTOCOL,
-    admissibility_rule_version=TRI_MODAL_VERDICT_VERSION,
-    selection_algorithm_version=POPULATION_SELECTION_VERSION,
-    selection_seed=SPLIT_SEED,
-    selection_profile_version=PROFILE.version,
-    selected_population_digest=POPULATION_DIGEST,
-    sample_size_rule_version=SAMPLE_SIZE_RULE_VERSION,
-    sample_size_plan_digest=SAMPLE_PLAN_RECORD["plan_digest"],
-    convergence_criterion_version=CONVERGENCE_PROTOCOL,
-    convergence_criterion_digest=CONVERGENCE_CRITERION.digest,
-    control_variants=list(CONTROL_VARIANTS),
-    control_seed=CONTROL_SEED,
-    media_io_version=MEDIA_IO_VERSION,
-    jlens_version=COMMIT,
-)
+STORE = None
+RUN_STATE = "not_opened"
+RESOLUTION_FINGERPRINT = None
+SELECTION_FINGERPRINT = None
+FINGERPRINT = None
 
-# ``capability_admissible_concepts`` is deliberately None: admissibility is a
-# RESULT of Stage A, and binding a result into the fingerprint that gates
-# Stage A's own units would make the store refuse to resume itself the moment
-# the first capability unit landed.
-SELECTION_FINGERPRINT = scientific_fingerprint(
-    CONFIG,
-    ranked_concepts=RANKED_CONCEPTS,
-    selected_concepts=SELECTED_NAMES,
-    focal_concepts=FOCAL_CONCEPTS,
-    unrelated_controls=UNRELATED_CONTROLS,
-    derived_cache_fingerprint=DERIVED_MANIFEST_CHECKSUM,
-    split_provenance_checksum=SPLIT_PROVENANCE_CHECKSUM,
-    n_train_positive_images=N_TRAIN_POSITIVE_IMAGES,
-    n_train_negative_images=N_TRAIN_NEGATIVE_IMAGES,
-    n_test_positive_images=N_TEST_POSITIVE_IMAGES,
-    n_test_negative_images=N_TEST_NEGATIVE_IMAGES,
-    verdict_version=TRI_MODAL_VERDICT_VERSION,
-    prompt_protocol=OPEN_PROMPT_PROTOCOL,
-    candidate_ordering_protocol="external_scorer_only_no_prompt_order.v1",
-)
-FINGERPRINT = RunFingerprint(
-    mode=CONFIG.mode,
-    model_repo_id=(
-        MODEL_REPO_ID if RUN_REAL_L32_CONVERGENCE_RESOLUTION else "mock/gemma-like"
-    ),
-    model_revision=MODEL_REVISION_USED,
-    processor_revision=PROCESSOR_REVISION_USED,
-    layers=tuple(CONFIG.layers),
-    lens_checksum=L32_LENSES.combined_checksum,
-    manifest_checksum=ORIGINAL_MANIFEST_CHECKSUM,
-    split_id=SPLIT_SEED,
-    intervention_config={
-        "alphas": list(CONFIG.alphas),
-        "causal_layer": RESOLUTION_LAYER,
-        "off_diagonal_causal_only": True,
-        "intervention_family": INTERVENTION_FAMILY,
-    },
-    selection_config=SELECTION_FINGERPRINT,
-    extra={"resolution_fingerprint": RESOLUTION_FINGERPRINT},
-)
-STORE = UnitStore(RUN_DIR, FINGERPRINT)
-RUN_STATE = STORE.open()
-print(f"run state              {RUN_STATE}")
-print(f"run fingerprint        {FINGERPRINT.digest}")
-print(f"resolution fingerprint {RESOLUTION_FINGERPRINT['fingerprint_digest']}")
-print("  no unit from any other population, protocol or criterion can be reused")
-print("  here: the exclusion digest and the selected population digest are both")
-print("  bound into this fingerprint.")
+if RUN_DIR is None or BACKEND is None:
+    print("skipped: there is no model configuration to bind a fingerprint to.")
+    print("A fingerprint that recorded 'no model' would be a fingerprint another")
+    print("run could resume from, so none is written at all.")
+else:
+    RESOLUTION_FINGERPRINT = resolution_fingerprint(
+        protocol=L32_RESOLUTION_PROTOCOL,
+        stage_plan_version=STAGE_PLAN_VERSION,
+        conditional_stage_b_rule_digest=payload_checksum(STAGE_PLAN),
+        intervention_family=INTERVENTION_FAMILY,
+        model_repo_id=(
+            MODEL_REPO_ID
+            if RUN_REAL_L32_CONVERGENCE_RESOLUTION
+            else "mock/gemma-like"
+        ),
+        model_revision=MODEL_REVISION_USED,
+        processor_revision=PROCESSOR_REVISION_USED,
+        transformers_version=TRANSFORMERS_VERSION,
+        torch_version=TORCH_VERSION,
+        audio_protocol_version=AUDIO_PROTOCOL["protocol_version"],
+        audio_protocol_fingerprint=AUDIO_PROTOCOL["protocol_fingerprint"],
+        lens_path=DISCOVERED.lens_path,
+        lens_checksum=DISCOVERED.lens_checksum,
+        lens_confirmation_status="passed" if L32_VALIDATION["passed"] else "failed",
+        lens_confirmation_set_checksum=DISCOVERED.extension_sidecar_path,
+        publication_metadata_checksum=DISCOVERED.extension_artifact_checksum,
+        physical_layer=RESOLUTION_LAYER,
+        hook_site=CONVENTIONS["hook_site"],
+        d_model=L32_LENSES.d_model,
+        residual_convention=_recorded.get("residual_convention"),
+        final_prompt_token_position=CONVENTIONS["position"],
+        dictionary_orientation=CONVENTIONS["dictionary"],
+        dictionary_normalization=CONVENTIONS["code_orientation"],
+        calibration_modality=_recorded.get("calibration_modality"),
+        selected_scale=LENS_FITTED_SCALE,
+        original_manifest_checksum=ORIGINAL_MANIFEST_CHECKSUM,
+        expanded_manifest_checksum=DERIVED_MANIFEST_CHECKSUM,
+        cache_schema_version=CACHE_LOAD["schema_version"],
+        evidence_lexicon_hash=CACHE_LOAD["evidence_lexicon_hash"],
+        exclusion_run_dirs=sorted(str(d) for d in COMPLETED_RUN_DIRS),
+        exclusion_run_checksum=EXCLUSION.digest,
+        # The whole preprocessing stage is bound in: which artifacts were read,
+        # what proved the exclusion set complete, which groups survived the
+        # filter, how the pool ranked and how the frozen concepts fared against
+        # it. Change any preparation input and this digest moves.
+        preparation_version=prep.PREPARATION_VERSION,
+        preparation_digest=PREPARATION_FINGERPRINT["preparation_digest"],
+        exclusion_completeness_digest=payload_checksum(COMPLETENESS),
+        independent_pool_digest=POOL_DIGEST,
+        concept_ranking_digest=RANKING_DIGEST,
+        frozen_concept_feasibility_digest=FEASIBILITY_DIGEST,
+        prompt_protocol=OPEN_PROMPT_PROTOCOL,
+        prompt_hash=PROMPT_RECORDS["text"].prompt_hash,
+        prompt_protocol_digest=PROMPT_PROTOCOL_DIGEST,
+        selected_concepts=list(SELECTED_NAMES),
+        focal_concepts=list(FOCAL_CONCEPTS),
+        capability_admissible_concepts=None,
+        capability_protocol=OPEN_PROMPT_PROTOCOL,
+        admissibility_rule_version=TRI_MODAL_VERDICT_VERSION,
+        selection_algorithm_version=POPULATION_SELECTION_VERSION,
+        selection_seed=SPLIT_SEED,
+        selection_profile_version=PROFILE.version,
+        selected_population_digest=POPULATION_DIGEST,
+        sample_size_rule_version=SAMPLE_SIZE_RULE_VERSION,
+        sample_size_plan_digest=SAMPLE_PLAN_RECORD["plan_digest"],
+        convergence_criterion_version=CONVERGENCE_PROTOCOL,
+        convergence_criterion_digest=CONVERGENCE_CRITERION.digest,
+        control_variants=list(CONTROL_VARIANTS),
+        control_seed=CONTROL_SEED,
+        media_io_version=MEDIA_IO_VERSION,
+        jlens_version=COMMIT,
+    )
+
+    # ``capability_admissible_concepts`` is deliberately None: admissibility is
+    # a RESULT of Stage A, and binding a result into the fingerprint that gates
+    # Stage A's own units would make the store refuse to resume itself the
+    # moment the first capability unit landed.
+    SELECTION_FINGERPRINT = scientific_fingerprint(
+        CONFIG,
+        ranked_concepts=RANKED_CONCEPTS,
+        selected_concepts=SELECTED_NAMES,
+        focal_concepts=FOCAL_CONCEPTS,
+        unrelated_controls=UNRELATED_CONTROLS,
+        derived_cache_fingerprint=DERIVED_MANIFEST_CHECKSUM,
+        split_provenance_checksum=SPLIT_PROVENANCE_CHECKSUM,
+        n_train_positive_images=N_TRAIN_POSITIVE_IMAGES,
+        n_train_negative_images=N_TRAIN_NEGATIVE_IMAGES,
+        n_test_positive_images=N_TEST_POSITIVE_IMAGES,
+        n_test_negative_images=N_TEST_NEGATIVE_IMAGES,
+        verdict_version=TRI_MODAL_VERDICT_VERSION,
+        prompt_protocol=OPEN_PROMPT_PROTOCOL,
+        candidate_ordering_protocol="external_scorer_only_no_prompt_order.v1",
+    )
+    FINGERPRINT = RunFingerprint(
+        mode=CONFIG.mode,
+        model_repo_id=(
+            MODEL_REPO_ID
+            if RUN_REAL_L32_CONVERGENCE_RESOLUTION
+            else "mock/gemma-like"
+        ),
+        model_revision=MODEL_REVISION_USED,
+        processor_revision=PROCESSOR_REVISION_USED,
+        layers=tuple(CONFIG.layers),
+        lens_checksum=L32_LENSES.combined_checksum,
+        manifest_checksum=ORIGINAL_MANIFEST_CHECKSUM,
+        split_id=SPLIT_SEED,
+        intervention_config={
+            "alphas": list(CONFIG.alphas),
+            "causal_layer": RESOLUTION_LAYER,
+            "off_diagonal_causal_only": True,
+            "intervention_family": INTERVENTION_FAMILY,
+        },
+        selection_config=SELECTION_FINGERPRINT,
+        extra={"resolution_fingerprint": RESOLUTION_FINGERPRINT},
+    )
+    STORE = UnitStore(RUN_DIR, FINGERPRINT)
+    RUN_STATE = STORE.open()
+    print(f"run state              {RUN_STATE}")
+    print(f"run fingerprint        {FINGERPRINT.digest}")
+    print(f"resolution fingerprint {RESOLUTION_FINGERPRINT['fingerprint_digest']}")
+    print(f"preparation digest     "
+          f"{PREPARATION_FINGERPRINT['preparation_digest']}")
+    print("  no unit from any other population, protocol, criterion or "
+          "preparation")
+    print("  can be reused here: the exclusion digest, the completeness proof, "
+          "the")
+    print("  pool digest, the ranking digest, the frozen-concept feasibility "
+          "digest")
+    print("  and the selected population digest are all bound into this "
+          "fingerprint.")
 '''
 )
 
@@ -2415,136 +2878,165 @@ code(
 from jlens.mmpilot.l32_followup import assert_report_phrasing
 from jlens.mmpilot.l32_resolution import build_summary, render_report
 
-POPULATION_MANIFEST = {
-    "schema": "jlens.mmpilot.l32_resolution_population_manifest.v1",
-    "selection_version": POPULATION_SELECTION_VERSION,
-    "seed": SPLIT_SEED,
-    "profile": PROFILE.to_dict(),
-    "population_digest": POPULATION_DIGEST,
-    "determinism_check": SELECTION_DETERMINISM,
-    "sample_size_plan": SAMPLE_PLAN_RECORD,
-    "selected_concepts": list(SELECTED_NAMES),
-    "focal_concepts": list(FOCAL_CONCEPTS),
-    "unrelated_controls": dict(sorted(UNRELATED_CONTROLS.items())),
-    "split_provenance": SPLIT_PROVENANCE,
-    "pool": POOL_RECORD,
-    "media_resolution": MEDIA_RESOLUTION,
-    "units": [
-        {
-            "group_id": str(row["group_id"]),
-            "image_id": str(row["image_id"]),
-            "audio_path": str(row["audio_path"]),
-            "caption": str(row["caption"]),
-            "concept": row["concept"],
-            "split": row["split"],
-        }
-        for row in sorted(_all_rows, key=lambda r: str(r["group_id"]))
-    ],
-    "media_retry_journal": MEDIA_RETRY_JOURNAL.to_dict(),
-}
-
-RESUME = {
-    "schema": "jlens.mmpilot.l32_resolution_resume.v1",
-    "run_state": RUN_STATE,
-    "run_dir": str(RUN_DIR),
-    "convergence_store_state": globals().get("CONVERGENCE_STORE_STATE"),
-    "invalid_units": list(STORE.invalid_units),
-    "invalid_convergence_units": list(
-        getattr(globals().get("CONVERGENCE_STORE"), "invalid_units", [])
-    ),
-    "units_computed": (CONVERGENCE or {}).get("units_computed"),
-    "units_reused": (CONVERGENCE or {}).get("units_reused"),
-    "atomicity": (
-        "every unit is written atomically with a checksum of its own payload "
-        "and the run fingerprint's digest; an interrupted session loses at most "
-        "the in-flight unit, and a changed scientific configuration refuses the "
-        "resume rather than mixing units"
-    ),
-}
-
-COMPLETED_TREES_AFTER = [run_tree_digest(d) for d in COMPLETED_RUN_DIRS]
-from jlens.mmpilot.l32_resolution import assert_completed_runs_unchanged
-
-IMMUTABILITY = assert_completed_runs_unchanged(
-    COMPLETED_TREES_BEFORE, COMPLETED_TREES_AFTER
-)
-
-SUMMARY = build_summary(
-    fingerprint=RESOLUTION_FINGERPRINT,
-    verdict=VERDICT or {"verdict": "REFUSED_INVALID", "rationale": "Stage A did not run"},
-    synthesis=SYNTHESIS,
-    sample_plan=SAMPLE_PLAN_RECORD,
-    disjointness=DISJOINTNESS,
-    pseudoreplication=PSEUDOREPLICATION,
-    pool=POOL_RECORD,
-    exclusion=EXCLUSION.to_dict(),
-    convergence={
-        k: v for k, v in (CONVERGENCE or {}).items() if k != "summary"
-    },
-    controls=CONTROLS_RECORD or {},
-    capability=CAPABILITY_VERDICT or {},
-    stage_plan_record=STAGE_PLAN,
-    stage_b=STAGE_B,
-    immutability=IMMUTABILITY,
-    cache=CACHE_LOAD,
-    resume=RESUME,
-    mode=CONFIG.mode,
-)
-SUMMARY["mock_proves_pipeline_only"] = not RUN_REAL_L32_CONVERGENCE_RESOLUTION
-REPORT_MARKDOWN = render_report(SUMMARY)
-PHRASING = assert_report_phrasing(REPORT_MARKDOWN)
-
 ARTIFACT_PATHS = {}
-for _name, _payload in (
-    ("l32_convergence_resolution_summary.json", SUMMARY),
-    ("population_manifest.json", POPULATION_MANIFEST),
-    ("disjointness_audit.json", DISJOINTNESS),
-    ("convergence_tables.json", {
-        "cells": CONVERGENCE_CELLS,
-        "summary": (CONVERGENCE or {}).get("summary"),
-        "classification": CONVERGENCE_CLASSIFICATION,
-    }),
-    ("convergence_controls.json", {
-        "record": CONTROLS_RECORD,
-        "raw": CONVERGENCE_CONTROLS,
-    }),
-    ("run_state.json", RESUME),
-    ("completed_run_immutability.json", IMMUTABILITY),
-):
-    _path = RUN_DIR / _name
-    _path.write_text(
-        json.dumps(_payload, indent=2, ensure_ascii=False, default=str),
-        encoding="utf-8",
+SUMMARY = None
+RESUME = None
+IMMUTABILITY = prep.assert_sources_unchanged(
+    prep.verify_sources_unchanged(
+        COMPLETED_RUN_DIRS,
+        PREP["inventory"],
+        SOURCE_FAMILIES,
     )
-    ARTIFACT_PATHS[_name] = str(_path)
+)
 
-_report_path = RUN_DIR / "l32_convergence_resolution_report.md"
-_report_path.write_text(REPORT_MARKDOWN, encoding="utf-8")
-ARTIFACT_PATHS["l32_convergence_resolution_report.md"] = str(_report_path)
-
-if STAGE_B["runs"]:
-    _causal_path = RUN_DIR / "stage_b_causal_report.json"
-    _causal_path.write_text(
-        json.dumps(
+if RUN_DIR is None or RESOLUTION_FINGERPRINT is None:
+    print("skipped: no run directory and no run fingerprint, so there is no")
+    print("scientific result to write. Preprocessing artifacts are already on")
+    print(f"Drive at {PREP_DIR}.")
+else:
+    POPULATION_MANIFEST = {
+        "schema": "jlens.mmpilot.l32_resolution_population_manifest.v1",
+        "selection_version": POPULATION_SELECTION_VERSION,
+        "seed": SPLIT_SEED,
+        "profile": PROFILE.to_dict(),
+        "population_digest": POPULATION_DIGEST,
+        "determinism_check": SELECTION_DETERMINISM,
+        "sample_size_plan": SAMPLE_PLAN_RECORD,
+        "selected_concepts": list(SELECTED_NAMES),
+        "focal_concepts": list(FOCAL_CONCEPTS),
+        "concept_ranking_is_descriptive_only": True,
+        "concept_ranking_digest": RANKING_DIGEST,
+        "frozen_concept_feasibility": FEASIBILITY,
+        "unrelated_controls": dict(sorted(UNRELATED_CONTROLS.items())),
+        "split_provenance": SPLIT_PROVENANCE,
+        "pool": POOL_RECORD,
+        "media_resolution": MEDIA_RESOLUTION,
+        "preparation": {
+            "cache_dir": str(PREP_DIR),
+            "fingerprint": PREPARATION_FINGERPRINT,
+            "completeness_proof": COMPLETENESS,
+            "source_families_read": SOURCE_FAMILIES,
+            "files_computed_this_session": PREP["files_computed_this_session"],
+            "files_reused_from_drive": PREP["files_reused_from_drive"],
+        },
+        "units": [
             {
-                "schema": "jlens.mmpilot.l32_resolution_stage_b_report.v1",
-                "decision": STAGE_B,
-                "intervention_family": INTERVENTION_FAMILY,
-                "prompt_protocol": OPEN_PROMPT_PROTOCOL,
-                "causal_verdict": CAUSAL_VERDICT,
-                "image_level": CAUSAL_IMAGE_LEVEL,
-                "image_independence": CAUSAL_INDEPENDENCE,
-                "separate_from_convergence": True,
-            },
-            indent=2, ensure_ascii=False, default=str,
-        ),
-        encoding="utf-8",
-    )
-    ARTIFACT_PATHS["stage_b_causal_report.json"] = str(_causal_path)
+                "group_id": str(row["group_id"]),
+                "image_id": str(row["image_id"]),
+                "audio_path": str(row["audio_path"]),
+                "caption": str(row["caption"]),
+                "concept": row["concept"],
+                "split": row["split"],
+            }
+            for row in sorted(_all_rows, key=lambda r: str(r["group_id"]))
+        ],
+        "media_retry_journal": MEDIA_RETRY_JOURNAL.to_dict(),
+    }
 
-print(f"phrasing check passed: {PHRASING['passed']}")
-for _name, _path in sorted(ARTIFACT_PATHS.items()):
-    print(f"  {_name:44s} {_path}")
+    RESUME = {
+        "schema": "jlens.mmpilot.l32_resolution_resume.v1",
+        "run_state": RUN_STATE,
+        "run_dir": str(RUN_DIR),
+        "preparation_cache_dir": str(PREP_DIR),
+        "convergence_store_state": globals().get("CONVERGENCE_STORE_STATE"),
+        "invalid_units": list(STORE.invalid_units),
+        "invalid_convergence_units": list(
+            getattr(globals().get("CONVERGENCE_STORE"), "invalid_units", [])
+        ),
+        "units_computed": (CONVERGENCE or {}).get("units_computed"),
+        "units_reused": (CONVERGENCE or {}).get("units_reused"),
+        "preprocessing_files_computed": PREP["files_computed_this_session"],
+        "preprocessing_files_reused": PREP["files_reused_from_drive"],
+        "atomicity": (
+            "every unit is written atomically with a checksum of its own payload "
+            "and the run fingerprint's digest; preprocessing is committed the "
+            "same way in bounded shards. An interrupted session loses at most "
+            "the in-flight unit or the in-flight preprocessing batch, and a "
+            "changed scientific configuration refuses the resume rather than "
+            "mixing units"
+        ),
+    }
+
+    SUMMARY = build_summary(
+        fingerprint=RESOLUTION_FINGERPRINT,
+        verdict=VERDICT
+        or {"verdict": "REFUSED_INVALID", "rationale": "Stage A did not run"},
+        synthesis=SYNTHESIS,
+        sample_plan=SAMPLE_PLAN_RECORD,
+        disjointness=DISJOINTNESS,
+        pseudoreplication=PSEUDOREPLICATION,
+        pool=POOL_RECORD,
+        exclusion=EXCLUSION.to_dict(),
+        convergence={
+            k: v for k, v in (CONVERGENCE or {}).items() if k != "summary"
+        },
+        controls=CONTROLS_RECORD or {},
+        capability=CAPABILITY_VERDICT or {},
+        stage_plan_record=STAGE_PLAN,
+        stage_b=STAGE_B,
+        immutability=IMMUTABILITY,
+        cache=CACHE_LOAD,
+        resume=RESUME,
+        mode=CONFIG.mode,
+        preparation=POPULATION_MANIFEST["preparation"],
+        frozen_concept_feasibility=FEASIBILITY,
+    )
+    SUMMARY["mock_proves_pipeline_only"] = not RUN_REAL_L32_CONVERGENCE_RESOLUTION
+    REPORT_MARKDOWN = render_report(SUMMARY)
+    PHRASING = assert_report_phrasing(REPORT_MARKDOWN)
+
+    for _name, _payload in (
+        ("l32_convergence_resolution_summary.json", SUMMARY),
+        ("population_manifest.json", POPULATION_MANIFEST),
+        ("disjointness_audit.json", DISJOINTNESS),
+        ("frozen_concept_feasibility.json", FEASIBILITY),
+        ("exclusion_completeness_proof.json", COMPLETENESS),
+        ("convergence_tables.json", {
+            "cells": CONVERGENCE_CELLS,
+            "summary": (CONVERGENCE or {}).get("summary"),
+            "classification": CONVERGENCE_CLASSIFICATION,
+        }),
+        ("convergence_controls.json", {
+            "record": CONTROLS_RECORD,
+            "raw": CONVERGENCE_CONTROLS,
+        }),
+        ("run_state.json", RESUME),
+        ("completed_run_immutability.json", IMMUTABILITY),
+    ):
+        _path = RUN_DIR / _name
+        _path.write_text(
+            json.dumps(_payload, indent=2, ensure_ascii=False, default=str),
+            encoding="utf-8",
+        )
+        ARTIFACT_PATHS[_name] = str(_path)
+
+    _report_path = RUN_DIR / "l32_convergence_resolution_report.md"
+    _report_path.write_text(REPORT_MARKDOWN, encoding="utf-8")
+    ARTIFACT_PATHS["l32_convergence_resolution_report.md"] = str(_report_path)
+
+    if STAGE_B["runs"]:
+        _causal_path = RUN_DIR / "stage_b_causal_report.json"
+        _causal_path.write_text(
+            json.dumps(
+                {
+                    "schema": "jlens.mmpilot.l32_resolution_stage_b_report.v1",
+                    "decision": STAGE_B,
+                    "intervention_family": INTERVENTION_FAMILY,
+                    "prompt_protocol": OPEN_PROMPT_PROTOCOL,
+                    "causal_verdict": CAUSAL_VERDICT,
+                    "image_level": CAUSAL_IMAGE_LEVEL,
+                    "image_independence": CAUSAL_INDEPENDENCE,
+                    "separate_from_convergence": True,
+                },
+                indent=2, ensure_ascii=False, default=str,
+            ),
+            encoding="utf-8",
+        )
+        ARTIFACT_PATHS["stage_b_causal_report.json"] = str(_causal_path)
+
+    print(f"phrasing check passed: {PHRASING['passed']}")
+    for _name, _path in sorted(ARTIFACT_PATHS.items()):
+        print(f"  {_name:44s} {_path}")
 '''
 )
 
@@ -2554,35 +3046,72 @@ markdown(
     """
 ## 18. Resume state, and the proof that nothing outside this run was written
 
-Every completed run is digested (name, size, mtime over the whole tree) before
-section 8 reads it and again after section 17 writes. A difference — including a
-file that appeared — is a refusal.
+The completed runs are protected two ways, and the stronger one is structural:
+every write path in `jlens.mmpilot.prep_cache` passes `assert_write_allowed`,
+which **refuses** a path through a protected run prefix outright rather than
+noticing afterwards that one changed.
+
+The check that runs here is the re-enumeration half. The identity-bearing
+families — and only those — are enumerated again and compared to the inventory
+section 8 built, by name, size and mtime, against sha256 content digests taken
+during the single harvest read. That is at least as strong as the old whole-tree
+digest **for the artifacts this study actually depends on**: it covers the same
+three facts for every one of them, adds a content hash the old scan never took
+(an edit preserving size and mtime is invisible to mtime and impossible to hide
+from sha256), and still catches a *new* identity-bearing file. What it
+deliberately does not do is re-walk tens of thousands of intervention units that
+cannot influence anything here — the old scan's coverage of those bought no
+scientific strength and cost hours on a Drive mount.
 """
 )
 
 code(
     '''
 # 18. Resume state and the read-only proof.
-print("RESUME")
-print(f"  run state             {RESUME['run_state']}")
-print(f"  convergence store     {RESUME['convergence_store_state']}")
-print(f"  units computed        {RESUME['units_computed']}")
-print(f"  units reused          {RESUME['units_reused']}")
-print(f"  invalid units         {len(RESUME['invalid_units'])}")
-print(f"  invalid readout units {len(RESUME['invalid_convergence_units'])}")
-print(f"  {RESUME['atomicity']}")
+print("PREPROCESSING")
+print(f"  cache directory       {PREP_DIR}")
+print(f"  preparation digest    "
+      f"{PREPARATION_FINGERPRINT['preparation_digest']}")
+print(f"  files computed        {PREP['files_computed_this_session']}")
+print(f"  files reused          {PREP['files_reused_from_drive']}")
+print(f"  checkpoint unit       {PREP_BATCH_FILES} files or "
+      f"{PREP_CHECKPOINT_SECONDS:.0f}s, whichever comes first")
+print("  stopping the runtime repeats at most ONE in-flight bounded unit and")
+print("  never rescans from file zero while a valid checkpoint exists.")
+print()
+if RESUME is None:
+    print("RESUME: no scientific stage ran in this session.")
+else:
+    print("RESUME")
+    print(f"  run state             {RESUME['run_state']}")
+    print(f"  convergence store     {RESUME['convergence_store_state']}")
+    print(f"  units computed        {RESUME['units_computed']}")
+    print(f"  units reused          {RESUME['units_reused']}")
+    print(f"  invalid units         {len(RESUME['invalid_units'])}")
+    print(f"  invalid readout units {len(RESUME['invalid_convergence_units'])}")
+    print(f"  {RESUME['atomicity']}")
 print()
 print("COMPLETED RUNS — READ-ONLY")
-for _name in IMMUTABILITY["runs_checked"]:
-    print(f"  unchanged  {_name}")
-    print(f"             {IMMUTABILITY['digests'][_name]}")
+for _run, _families in sorted(IMMUTABILITY["families_verified"].items()):
+    print(f"  unchanged  {_run}")
+    print(f"             families {_families}")
+print(f"  files before/after    {IMMUTABILITY['n_files_before']}/"
+      f"{IMMUTABILITY['n_files_after']}")
+print(f"  appeared/vanished/modified  {len(IMMUTABILITY['appeared'])}/"
+      f"{len(IMMUTABILITY['vanished'])}/{len(IMMUTABILITY['modified'])}")
 print(f"  method: {IMMUTABILITY['method']}")
+print("  plus: every preprocessing write path refuses a protected run prefix")
+print("  outright, so a completed run cannot be written to in the first place.")
 print()
 print("=" * 72)
-if not RUN_REAL_L32_CONVERGENCE_RESOLUTION:
+if PREPROCESSING_ONLY:
+    print("PREPROCESSING ONLY — no model ran and no verdict exists.")
+elif not RUN_REAL_L32_CONVERGENCE_RESOLUTION:
     print("MOCK RUN — this proves the pipeline, and nothing about Gemma.")
-else:
+elif SUMMARY is not None:
     print(f"PRIMARY VERDICT: {SUMMARY['primary_verdict']}")
+else:
+    print("NO VERDICT: the model stage did not run.")
 print("=" * 72)
 '''
 )

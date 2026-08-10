@@ -122,6 +122,23 @@ def main() -> int:
         ("POOL_RECORD", ("n_groups_excluded", "n_groups_in_independent_pool")),
         ("HEAD_AGREEMENT", ("passed", "comparison_ran")),
         ("RESUME", ("run_state", "units_computed", "units_reused")),
+        (
+            "PREP",
+            ("files_computed_this_session", "files_reused_from_drive",
+             "reused_complete_cache"),
+        ),
+        (
+            "COMPLETENESS",
+            ("complete", "fallback_required", "n_files_read", "n_shards",
+             "unit_families_skipped"),
+        ),
+        (
+            "FEASIBILITY",
+            ("all_feasible", "infeasible_concepts", "descriptive_top_n",
+             "descriptive_ranking_matches_frozen_order",
+             "concepts_reselected_from_this_pool"),
+        ),
+        ("IMMUTABILITY", ("unchanged", "appeared", "vanished", "modified")),
     ):
         value = namespace.get(name)
         if isinstance(value, dict):
@@ -147,6 +164,21 @@ def main() -> int:
     paths = namespace.get("ARTIFACT_PATHS")
     if isinstance(paths, dict):
         result["artifact_names"] = sorted(paths)
+
+    if namespace.get("PREP_DIR") is not None:
+        result["PREP_DIR"] = str(namespace["PREP_DIR"])
+    fingerprint = namespace.get("PREPARATION_FINGERPRINT")
+    if isinstance(fingerprint, dict):
+        result["preparation_digest"] = fingerprint.get("preparation_digest")
+    resolution = namespace.get("RESOLUTION_FINGERPRINT")
+    if isinstance(resolution, dict):
+        result["resolution_fingerprint_digest"] = resolution.get("fingerprint_digest")
+    if namespace.get("POOL_DIGEST") is not None:
+        result["POOL_DIGEST"] = namespace["POOL_DIGEST"]
+    if namespace.get("RANKING_DIGEST") is not None:
+        result["RANKING_DIGEST"] = namespace["RANKING_DIGEST"]
+    if namespace.get("FEASIBILITY_DIGEST") is not None:
+        result["FEASIBILITY_DIGEST"] = namespace["FEASIBILITY_DIGEST"]
 
     print(json.dumps(result, default=str))
     return 0

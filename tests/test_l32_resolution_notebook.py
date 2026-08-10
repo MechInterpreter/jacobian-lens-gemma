@@ -34,6 +34,7 @@ RUNNER = Path(__file__).resolve().parent / "_l32_resolution_notebook_runner.py"
 #: Every switch the brief names. All must be committed as ``False``.
 SWITCHES = (
     "RUN_REAL_L32_CONVERGENCE_RESOLUTION",
+    "PREPROCESSING_ONLY",
     "RUN_MODEL_STAGE",
     "CONFIRM_MODEL_LOAD",
     "CONFIRM_STAGE_A_BUDGET",
@@ -121,8 +122,18 @@ def test_required_sections_are_present(notebook, section):
 
 @pytest.mark.parametrize("switch", SWITCHES)
 def test_every_switch_is_committed_false(notebook, switch):
-    assert f"{switch} = False" in _code_source(notebook)
-    assert f"{switch} = True" not in _code_source(notebook)
+    """Assignments only — the switch names also appear in advice the cells print.
+
+    Anchored at the start of a line, which is exactly what the notebook runner
+    rewrites when a test flips a switch, so the two agree about what an
+    assignment is.
+    """
+    assignments = [
+        line.strip()
+        for line in _code_source(notebook).splitlines()
+        if line.startswith(f"{switch} = ")
+    ]
+    assert assignments == [f"{switch} = False"], assignments
 
 
 def test_the_notebook_never_hardcodes_the_published_artifact_filename(notebook):
@@ -136,11 +147,36 @@ def test_the_cache_is_loaded_never_rebuilt_on_the_default_path(notebook):
     assert "load_expanded_manifest" in source
     assert "ALLOW_MANIFEST_REBUILD = False" in source
     assert 'f"{COMPLETED_RUN_DIRS[0]}/expanded_manifest.json"' in source
-    assert "cstf_spokencoco_derived" not in source
     # The only build_expanded_manifest call sits inside the MOCK-only cache
     # manufacturing branch, which the real path never enters.
     assert source.count("expansion_module.build_expanded_manifest(") == 1
     assert "if not RUN_REAL_L32_CONVERGENCE_RESOLUTION and not Path(" in source
+
+
+def test_the_guessed_dataset_level_manifest_path_is_gone(notebook):
+    """The derived namespace is where PREPROCESSING writes, never the manifest.
+
+    The bug this guards was a manifest path guessed at
+    ``.../cstf_spokencoco_derived/jlens_mmpilot_v1/expanded_manifest.json``,
+    which does not exist. The preparation cache lives under the same derived
+    root on purpose — it is derived data — so the check is on the specific
+    wrong path, not on the directory name.
+    """
+    source = _code_source(notebook)
+    assert "jlens_mmpilot_v1" not in source
+    assert "cstf_spokencoco_derived/jlens_mmpilot_v1" not in source
+    for line in source.splitlines():
+        if "expanded_manifest.json" in line and "cstf_spokencoco_derived" in line:
+            raise AssertionError(f"manifest path guessed from the cache root: {line}")
+
+
+def test_the_preparation_cache_is_deterministic_and_not_a_run(notebook):
+    source = _code_source(notebook)
+    assert 'PREP_CACHE_ROOT = "/content/drive/MyDrive/datasets/cstf_spokencoco_derived"' in source
+    assert "preparation_cache_dir(PREP_CACHE_ROOT, PREPARATION_FINGERPRINT)" in source
+    # The cache must not be keyed by a timestamped run directory: a preparation
+    # that needed a run name could not be reused across sessions.
+    assert "MMPILOT_RUN_DIR" not in source.split("# 8a.")[1].split("# 9.")[0]
 
 
 def test_the_universe_is_recovered_from_the_cache(notebook):
@@ -152,11 +188,54 @@ def test_disjointness_is_proven_over_all_four_identity_families(notebook):
     source = _code_source(notebook)
     assert "audit_population_disjointness" in source
     assert "assert_one_unit_per_photograph" in source
-    assert "harvest_excluded_identities" in source
+    assert "run_exclusion_preparation" in source
     assert "resolve_excluded_media" in source
     text = _source(notebook).lower()
     for family in ("image id", "group id", "recording", "caption text"):
         assert family in text
+
+
+def test_preprocessing_is_checkpointed_resumable_and_proven_complete(notebook):
+    source = _code_source(notebook)
+    for name in (
+        "preparation_fingerprint",
+        "preparation_cache_dir",
+        "run_exclusion_preparation",
+        "assert_complete",
+        "save_prepared_selection",
+        "load_prepared_selection",
+        "finalize_preparation",
+        "render_preprocessing_report",
+        "ProgressReporter",
+    ):
+        assert name in source, name
+    assert "PREP_BATCH_FILES = 25" in source
+    assert "PREP_CHECKPOINT_SECONDS = 30.0" in source
+    assert "PREP_PROGRESS_SECONDS = 30.0" in source
+    # The uncheckpointed double traversal is gone for good.
+    assert "run_tree_digest" not in source
+    assert "COMPLETED_TREES_BEFORE" not in source
+    assert "assert_completed_runs_unchanged" not in source
+
+
+def test_the_notebook_warns_against_preprocessing_on_a_gpu(notebook):
+    source = _code_source(notebook)
+    assert "torch.cuda.is_available()" in source
+    text = _source(notebook).lower()
+    assert "a gpu makes none of it faster" in text or "gpu provides no benefit" in text
+    # Gemma is not loaded until the preparation is complete and verified.
+    assert "if MODEL_STAGE_ENABLED and prep.preparation_is_complete(PREP_DIR) is None:" in source
+
+
+def test_the_frozen_concepts_are_set_directly_and_only_checked(notebook):
+    source = _code_source(notebook)
+    assert "SELECTED_NAMES = list(SELECTED_CONCEPTS_EXPECTED)" in source
+    assert "FOCAL_CONCEPTS = list(FOCAL_CONCEPTS_EXPECTED)" in source
+    assert "assert_frozen_concepts_feasible" in source
+    # The old rule refused unless a re-ranked top six matched the frozen six.
+    assert "the independent pool ranks" not in source
+    text = _source(notebook).lower()
+    assert "descriptive only" in text
 
 
 def test_the_frozen_criterion_digest_is_checked_not_recomputed(notebook):
@@ -211,7 +290,11 @@ def test_completed_runs_are_named_as_protected_and_proven_unchanged(notebook):
         assert f'"{prefix}"' in source
     assert "PROTECTED_RUN_PREFIXES" in source
     assert "assert_fresh_run_namespace" in source
-    assert "assert_completed_runs_unchanged" in source
+    # The proof is now the inventory re-enumeration, and the stronger guarantee
+    # is structural: every preparation write path refuses a protected prefix.
+    assert "assert_sources_unchanged" in source
+    assert "verify_sources_unchanged" in source
+    assert source.count("protected_prefixes=PROTECTED_RUN_PREFIXES") >= 5
 
 
 def test_the_media_loaders_retry_drive_io(notebook):
@@ -462,9 +545,17 @@ def test_an_interrupted_run_resumes_and_reuses_its_units(tmp_path_factory):
         )
         return json.loads(result.stdout.strip().splitlines()[-1])
 
-    # Cell 26 is 13b, the convergence-scoring cell. Anything at or past it
-    # leaves a partially populated run directory behind.
-    interrupted = _go(stop_after=26)
+    # 13b is the convergence-scoring cell and the only one that writes readout
+    # units. Located by content rather than by index, because inserting a cell
+    # above it used to silently turn this test into "run the whole notebook".
+    payload = json.loads(NOTEBOOK_PATH.read_text(encoding="utf-8"))
+    cells = [c for c in payload["cells"] if c["cell_type"] == "code"]
+    stop = 1 + next(
+        index
+        for index, cell in enumerate(cells)
+        if "run_single_layer_convergence(" in "".join(cell["source"])
+    )
+    interrupted = _go(stop_after=stop)
     assert interrupted.get("ok"), interrupted
     assert (run_dir / "convergence" / "readout_units").is_dir()
     n_units = len(list((run_dir / "convergence" / "readout_units").glob("*.json")))
@@ -474,6 +565,71 @@ def test_an_interrupted_run_resumes_and_reuses_its_units(tmp_path_factory):
     assert resumed["RESUME.run_state"] == "resuming"
     assert resumed["RESUME.units_reused"] == n_units
     assert resumed["RESUME.units_computed"] == 0
+
+
+def test_cpu_preprocessing_then_a_fresh_gpu_stage_reuses_the_preparation(
+    tmp_path_factory,
+):
+    """The two-session workflow, in two genuinely separate processes.
+
+    Session 1 is the CPU run: ``PREPROCESSING_ONLY`` closes every model gate,
+    no run directory is created and nothing is scored. Session 2 is the
+    Stage-A run against the same scratch: it must read **zero** source files,
+    reconstruct the same population from Drive alone, and reach a verdict.
+    """
+    workspace = tmp_path_factory.mktemp("cpu_then_gpu")
+    scratch = workspace / "s"
+
+    cpu = _ok(_run(workspace, "PREPROCESSING_ONLY=True", scratch=scratch))
+    assert cpu["MODEL_STAGE_ENABLED"] is False
+    assert cpu["STAGE_A_ENABLED"] is False
+    assert cpu["STAGE_B_REQUESTED"] is False
+    assert cpu["RUN_STATE"] == "not_opened"
+    assert cpu["artifact_names"] == []
+    assert "primary_verdict" not in cpu
+    assert cpu["PREP.files_computed_this_session"] > 0
+
+    gpu = _ok(_run(workspace, scratch=scratch))
+    assert gpu["PREP.files_computed_this_session"] == 0, (
+        "a compatible completed preparation must perform zero source reads"
+    )
+    assert gpu["PREP.files_reused_from_drive"] == cpu["PREP.files_computed_this_session"]
+    assert gpu["POPULATION_DIGEST"] == cpu["POPULATION_DIGEST"]
+    assert gpu["exclusion_digest"] == cpu["exclusion_digest"]
+    assert gpu["SELECTED_NAMES"] == cpu["SELECTED_NAMES"]
+    assert gpu["primary_verdict"] in {
+        "L32_INDEPENDENT_CONVERGED",
+        "L32_INDEPENDENT_NOT_CONVERGED",
+        "L32_INDEPENDENT_AMBIGUOUS",
+    }
+
+
+def test_preprocessing_only_writes_every_declared_preparation_artifact(
+    tmp_path_factory,
+):
+    workspace = tmp_path_factory.mktemp("prep_artifacts")
+    scratch = workspace / "s"
+    payload = _ok(_run(workspace, "PREPROCESSING_ONLY=True", scratch=scratch))
+    cache = Path(payload["PREP_DIR"])
+    for name in (
+        "preparation_fingerprint.json",
+        "source_plan.json",
+        "exclusion_set.json",
+        "exclusion_set_checksum.json",
+        "completeness_proof.json",
+        "media_resolution.json",
+        "independent_pool.json",
+        "prepared_selection.json",
+        "preparation_complete.json",
+        "preprocessing_report.md",
+    ):
+        assert (cache / name).is_file(), name
+    assert (cache / "harvest_minimal" / "harvest_state.json").is_file()
+    assert (cache / "harvest_minimal" / "source_inventory.json").is_file()
+    assert list((cache / "harvest_minimal" / "shards").glob("*.json.gz"))
+    report = (cache / "preprocessing_report.md").read_text(encoding="utf-8")
+    assert "no model output" in report
+    assert "at most the single in-flight unit" in report
 
 
 def test_a_changed_scientific_configuration_refuses_the_resume(tmp_path_factory):
