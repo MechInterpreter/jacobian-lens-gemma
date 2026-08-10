@@ -20,7 +20,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 NOTEBOOK_PATH = (
-    REPO_ROOT / "notebooks" / "gemma4_native_spoken_audio_feasibility_colab.ipynb"
+    REPO_ROOT / "notebooks" / "archive" / "completed_studies" / "gemma4_native_spoken_audio_feasibility_colab.ipynb"
 )
 RUNNER = Path(__file__).resolve().parent / "_audio_feasibility_notebook_runner.py"
 BUILDER = REPO_ROOT / "scripts" / "_build_audio_feasibility_notebook.py"

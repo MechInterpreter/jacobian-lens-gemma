@@ -6,7 +6,7 @@ identify the same concept across written text, images, and spoken captions —
 and can a concept direction estimated in one modality causally move that concept
 in another, with no cross-modal alignment learned anywhere?
 
-Notebook: [`notebooks/multimodal_jspace_spokencoco_pilot_colab.ipynb`](../notebooks/multimodal_jspace_spokencoco_pilot_colab.ipynb).
+Notebook: [`notebooks/archive/completed_studies/multimodal_jspace_spokencoco_pilot_colab.ipynb`](../notebooks/archive/completed_studies/multimodal_jspace_spokencoco_pilot_colab.ipynb).
 Code: [`jlens/mmpilot/`](../jlens/mmpilot).
 
 This is a go/no-go probe, not a framework. If it says GO, the larger project is
@@ -368,7 +368,7 @@ transcribed as a substitute.
 > chat-template audio content block. See
 > [native_spoken_audio.md](native_spoken_audio.md) — the protocol is now
 > implemented and probed in `jlens/mmpilot/audio.py`, and
-> `notebooks/gemma4_native_spoken_audio_feasibility_colab.ipynb` audits it.
+> `notebooks/archive/completed_studies/gemma4_native_spoken_audio_feasibility_colab.ipynb` audits it.
 >
 > **This changes nothing about the completed text-and-image results.** Audio was
 > genuinely absent from them, and the probe-based support check is opt-in
@@ -603,7 +603,7 @@ An image appearing in both splits, or sibling groups of one image landing on
 opposite sides of the split, are **hard failures**: no re-aggregation repairs
 them, because they make every held-out claim in the run untrue.
 
-`notebooks/mmpilot_image_independence_audit_colab.ipynb` runs the whole audit on
+`notebooks/archive/engineering_audits/mmpilot_image_independence_audit_colab.ipynb` runs the whole audit on
 a free CPU runtime against a completed run directory. It loads no model, no
 processor and no media, needs no Hugging Face token, writes only new versioned
 artifacts, and records the originals' checksums before and after. Its verdict is
@@ -724,7 +724,7 @@ representations that causally transfer between written text and images. Layer 38
 sits at ~90% of depth, close enough to the output that a final-prompt-token edit
 cannot separate "concept representation" from "answer-language convergence".
 
-`notebooks/multimodal_jspace_layer_localization_colab.ipynb` and
+`notebooks/archive/completed_studies/multimodal_jspace_layer_localization_colab.ipynb` and
 `jlens/mmlocalize/` ask the one follow-up that earns: **how early?** Four
 predetermined physical layers — 20, 26, 32, 38 (~normalized 48, 62, 76, 90) —
 two concepts that already replicated bidirectionally (cat, toilet), off-diagonal

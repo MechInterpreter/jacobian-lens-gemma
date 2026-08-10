@@ -1,6 +1,6 @@
 # Causal steering smoke run — guide
 
-Notebook: [`notebooks/gemma_4_e4b_jspace_causal_smoke.ipynb`](../notebooks/gemma_4_e4b_jspace_causal_smoke.ipynb)
+Notebook: [`notebooks/archive/legacy_prototypes/gemma_4_e4b_jspace_causal_smoke.ipynb`](../notebooks/archive/legacy_prototypes/gemma_4_e4b_jspace_causal_smoke.ipynb)
 · Config: [`configs/gemma_jspace_causal_smoke.yaml`](../configs/gemma_jspace_causal_smoke.yaml)
 · Manifest: [`configs/causal_smoke_examples.json`](../configs/causal_smoke_examples.json)
 · Backend: [`jlens/interventions.py`](../jlens/interventions.py)

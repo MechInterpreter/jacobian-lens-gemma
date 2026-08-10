@@ -131,7 +131,7 @@ verdict:
   later numbers untrustworthy. This is the dangerous state: it looks like
   success.
 
-`notebooks/gemma4_native_spoken_audio_feasibility_colab.ipynb` runs it, with
+`notebooks/archive/completed_studies/gemma4_native_spoken_audio_feasibility_colab.ipynb` runs it, with
 `RUN_REAL_AUDIO_AUDIT`, `RUN_MODEL_STAGE` and `CONFIRM_MODEL_LOAD` all False.
 
 ## Candidate scoring: validity is not capability

@@ -35,7 +35,7 @@ package:
   and a plain-text fitting corpus separated from chat-templated evaluation
   prompts.
 - `scripts/fit_gemma.py` / `scripts/apply_gemma.py` CLI entry points.
-- `notebooks/gemma_4_e4b_text_jlens.ipynb`, the end-to-end pilot notebook.
+- `notebooks/archive/legacy_prototypes/gemma_4_e4b_text_jlens.ipynb`, the end-to-end pilot notebook.
 - 47 new CPU-only tests (`tests/test_gemma4_adapter.py`,
   `test_controls.py`, `test_finite_difference.py`, `test_metadata.py`,
   `test_scripts.py`, `mock_gemma4.py`), bringing the suite to 79 tests total,
@@ -179,7 +179,7 @@ explicitly unavailable rather than reconstructed.
 Two GPU notebooks were prepared (not executed — no model download, no GPU in
 this pass), both consuming the frozen fingerprint-verified pilot lens:
 
-- `notebooks/gemma_4_e4b_jspace_causal_smoke.ipynb` +
+- `notebooks/archive/legacy_prototypes/gemma_4_e4b_jspace_causal_smoke.ipynb` +
   `jlens/interventions.py`: measured residual-stream interventions
   (`h' = h + m·delta`) at the exact block_output sites, layers 35/38,
   multipliers −1/0/+1, three targeted families from the recorded k=10 cones
@@ -190,7 +190,7 @@ this pass), both consuming the frozen fingerprint-verified pilot lens:
   append-safe resume, completed-run refusal. The 4-example manifest
   (`configs/causal_smoke_examples.json`) pins strong/semantic/chat/weak cases
   chosen from measured records, reasons recorded.
-- `notebooks/gemma_4_e4b_multimodal_jlens_capture.ipynb`: first
+- `notebooks/archive/legacy_prototypes/gemma_4_e4b_multimodal_jlens_capture.ipynb`: first
   image-/audio-conditioned records (layer 38, k=10, position −1) with
   processor-interface inspection, clear failure on unsupported modalities,
   and explorer-ready bundles — recorded throughout as an exploratory

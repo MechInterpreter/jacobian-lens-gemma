@@ -1,6 +1,6 @@
 # Multimodal capture — guide
 
-Notebook: [`notebooks/gemma_4_e4b_multimodal_jlens_capture.ipynb`](../notebooks/gemma_4_e4b_multimodal_jlens_capture.ipynb)
+Notebook: [`notebooks/archive/legacy_prototypes/gemma_4_e4b_multimodal_jlens_capture.ipynb`](../notebooks/archive/legacy_prototypes/gemma_4_e4b_multimodal_jlens_capture.ipynb)
 · Config: [`configs/gemma_multimodal_jlens_capture.yaml`](../configs/gemma_multimodal_jlens_capture.yaml)
 
 ## What it captures

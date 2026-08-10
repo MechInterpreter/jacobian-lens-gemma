@@ -13,7 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = REPO_ROOT / "configs" / "gemma_layer21_diagnostic.yaml"
 PILOT_CONFIG_PATH = REPO_ROOT / "configs" / "gemma_text_pilot.yaml"
 NOTEBOOK_PATH = (
-    REPO_ROOT / "notebooks" / "gemma_4_e4b_layer21_diagnostic.ipynb"
+    REPO_ROOT / "notebooks" / "archive" / "engineering_audits" / "gemma_4_e4b_layer21_diagnostic.ipynb"
 )
 JSPACE_CONFIG_PATH = REPO_ROOT / "configs" / "gemma_jspace_pursuit.yaml"
 

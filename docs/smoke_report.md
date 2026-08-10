@@ -50,7 +50,7 @@ untouched):
 - [`jlens/metadata.py`](../jlens/metadata.py) — config validation,
   fingerprinting, and the `write_metadata` mechanism that produced every
   JSON artifact referenced in this report.
-- [`notebooks/gemma_4_e4b_text_jlens.ipynb`](../notebooks/gemma_4_e4b_text_jlens.ipynb)
+- [`notebooks/archive/legacy_prototypes/gemma_4_e4b_text_jlens.ipynb`](../notebooks/archive/legacy_prototypes/gemma_4_e4b_text_jlens.ipynb)
   — the notebook actually executed to produce this run, including a Google
   Drive persistence section that wrote this run's artifacts to a
   run-scoped directory.
@@ -191,7 +191,7 @@ full fit's. See Limitations.
 ## Validation
 
 - **Local CPU test suite**: 79/79 tests passed inside the Colab session that
-  produced this run (cell output, `notebooks/gemma_4_e4b_text_jlens.ipynb`),
+  produced this run (cell output, `notebooks/archive/legacy_prototypes/gemma_4_e4b_text_jlens.ipynb`),
   before any model loading — layout auto-detection, Jacobian orientation
   (analytic + finite-difference), checkpoint/resume, controls, config
   validation, and the mock fit→apply pipeline.

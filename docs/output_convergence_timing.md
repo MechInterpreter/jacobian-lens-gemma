@@ -7,7 +7,7 @@ nothing from that study and modifies nothing in it.
 - Code: [`jlens/mmpilot/convergence.py`](../jlens/mmpilot/convergence.py),
   [`jlens/mmpilot/convergence_mock.py`](../jlens/mmpilot/convergence_mock.py)
 - Notebook:
-  [`notebooks/multimodal_jspace_output_convergence_audit_colab.ipynb`](../notebooks/multimodal_jspace_output_convergence_audit_colab.ipynb)
+  [`notebooks/archive/completed_studies/multimodal_jspace_output_convergence_audit_colab.ipynb`](../notebooks/archive/completed_studies/multimodal_jspace_output_convergence_audit_colab.ipynb)
 - Generator: `scripts/_build_convergence_notebook.py`
 - Tests: `tests/test_mmpilot_convergence.py`,
   `tests/test_mmpilot_convergence_notebook.py`

@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-NOTEBOOK_PATH = REPO_ROOT / "notebooks" / "open_prompt_protocol_mock_colab.ipynb"
+NOTEBOOK_PATH = REPO_ROOT / "notebooks" / "archive" / "protocol_mocks" / "open_prompt_protocol_mock_colab.ipynb"
 BUILDER = REPO_ROOT / "scripts" / "_build_open_prompt_notebook.py"
 RUNNER = Path(__file__).resolve().parent / "_open_prompt_notebook_runner.py"
 

@@ -27,6 +27,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 NOTEBOOK_PATH = (
     REPO_ROOT
     / "notebooks"
+    / "archive"
+    / "completed_studies"
     / "multimodal_jspace_output_convergence_audit_colab.ipynb"
 )
 RUNNER = Path(__file__).resolve().parent / "_mmpilot_convergence_notebook_runner.py"

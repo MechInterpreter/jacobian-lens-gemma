@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
-NOTEBOOK = ROOT / "notebooks" / "gemma_4_e4b_layer32_confirmatory_validation_colab.ipynb"
+NOTEBOOK = ROOT / "notebooks" / "archive" / "completed_studies" / "gemma_4_e4b_layer32_confirmatory_validation_colab.ipynb"
 
 
 def _payload():

@@ -648,6 +648,8 @@ def test_the_notebook_constants_match_the_package_expectations():
     source = (
         Path(__file__).resolve().parent.parent
         / "notebooks"
+        / "archive"
+        / "completed_studies"
         / "multimodal_jspace_spokencoco_robustness_colab.ipynb"
     ).read_text(encoding="utf-8")
     assert "google/gemma-4-E4B-it" in source

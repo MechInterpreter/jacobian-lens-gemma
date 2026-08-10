@@ -8,7 +8,7 @@ from pathlib import Path
 from jlens.metadata import load_config
 
 ROOT = Path(__file__).resolve().parent.parent
-NOTEBOOK = ROOT / "notebooks" / "gemma_4_e4b_text_jlens_recalibration_colab.ipynb"
+NOTEBOOK = ROOT / "notebooks" / "archive" / "legacy_prototypes" / "gemma_4_e4b_text_jlens_recalibration_colab.ipynb"
 CONFIG = ROOT / "configs" / "gemma_text_early_layer_recalibration.yaml"
 
 

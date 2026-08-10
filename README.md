@@ -184,7 +184,7 @@ The bundle format is versioned and documented:
 
 ### Running the causal smoke notebook (Colab L4)
 
-`notebooks/gemma_4_e4b_jspace_causal_smoke.ipynb` — measured residual-stream
+`notebooks/archive/legacy_prototypes/gemma_4_e4b_jspace_causal_smoke.ipynb` — measured residual-stream
 interventions (`h' = h + multiplier·delta`) at layers 35/38 on four
 manifest-pinned examples, with a baseline-parity gate, deterministic condition
 IDs, per-condition checkpointing, and norm-matched random controls
@@ -194,7 +194,7 @@ Afterwards copy `artifacts/explorer_causal_bundle.json` to
 
 ### Running the multimodal capture notebook (Colab L4)
 
-`notebooks/gemma_4_e4b_multimodal_jlens_capture.ipynb` — the first
+`notebooks/archive/legacy_prototypes/gemma_4_e4b_multimodal_jlens_capture.ipynb` — the first
 image-conditioned and audio-conditioned records: one user-supplied image and
 audio clip, layer 38, k=10 pursuit on the frozen text-fitted lens
 (≈15–25 min). Guide: [docs/multimodal_capture.md](docs/multimodal_capture.md).
@@ -289,14 +289,20 @@ tests, and the upstream walkthrough/README (below).
 | `configs/gemma_multimodal_jlens_capture.yaml` | Multimodal capture config (layer 38, k=10, user-supplied assets) |
 | `configs/prompts/` | Plain-text fitting corpus (smoke), v1 evaluation prompts, categorized held-out evaluation set v2 |
 | `scripts/fit_gemma.py`, `scripts/apply_gemma.py` | CLI: fit and evaluate with full metadata |
-| `notebooks/gemma_4_e4b_text_jlens.ipynb` | End-to-end fitting notebook (produced the smoke and pilot runs) |
-| `notebooks/gemma_4_e4b_jspace_pursuit.ipynb` | Decomposition notebook: verifies and consumes the frozen pilot lens, never refits |
-| `notebooks/gemma_4_e4b_layer21_diagnostic.ipynb` | Layer-21 refit diagnostic (completed investigation; documented history) |
-| `notebooks/gemma_4_e4b_jspace_causal_smoke.ipynb` | Causal steering smoke run: parity-gated, checkpointed, resume-safe measured interventions |
-| `notebooks/gemma_4_e4b_multimodal_jlens_capture.ipynb` | First image/audio-conditioned captures on the frozen lens |
-| `notebooks/multimodal_jspace_output_convergence_audit_colab.ipynb` | Convergence-timing audit of the completed L35 transfer: the model's own output head applied to stored residuals at L35/38/40, read-only against the finished run ([docs/output_convergence_timing.md](docs/output_convergence_timing.md)) |
+| `notebooks/` | Six active research notebooks, plus a documented `archive/` of completed studies, engineering audits, legacy prototypes and protocol mocks — see [notebooks/README.md](notebooks/README.md) for the execution order, which notebook is canonical for which claim, and why an archived notebook must not be re-run as a current protocol |
+| `notebooks/research_grade_multilayer_jlens_calibration_colab.ipynb` | ACTIVE (1): the research-grade multi-layer calibration; canonical source of the published scale-100 lenses at L35/38/40 |
+| `notebooks/research_grade_early_layer_jlens_extension_colab.ipynb` | ACTIVE (2): the early-layer extension; confirmed physical layer 32 at scale 250 on its own untouched 256-prompt confirmation set ([docs/research_grade_early_layer_extension_protocol.md](docs/research_grade_early_layer_extension_protocol.md)) |
+| `notebooks/multimodal_jspace_spokencoco_native_audio_colab.ipynb` | ACTIVE (3): the completed three-modality transfer study at L35 ([docs/native_spoken_audio.md](docs/native_spoken_audio.md)) |
+| `notebooks/multimodal_jspace_spokencoco_l32_followup_colab.ipynb` | ACTIVE (4): the L32 open-prompt follow-up and its paired L35 reference |
+| `notebooks/multimodal_jspace_l32_convergence_resolution_colab.ipynb` | ACTIVE (5): the independent L32 convergence-resolution study — a fresh, verified-disjoint SpokenCOCO population scored against the already frozen criterion, with a conditional Stage-B causal replication |
+| `notebooks/archive/legacy_prototypes/gemma_4_e4b_text_jlens.ipynb` | End-to-end fitting notebook (produced the smoke and pilot runs) |
+| `notebooks/archive/legacy_prototypes/gemma_4_e4b_jspace_pursuit.ipynb` | Decomposition notebook: verifies and consumes the frozen pilot lens, never refits |
+| `notebooks/archive/engineering_audits/gemma_4_e4b_layer21_diagnostic.ipynb` | Layer-21 refit diagnostic (completed investigation; documented history) |
+| `notebooks/archive/legacy_prototypes/gemma_4_e4b_jspace_causal_smoke.ipynb` | Causal steering smoke run: parity-gated, checkpointed, resume-safe measured interventions |
+| `notebooks/archive/legacy_prototypes/gemma_4_e4b_multimodal_jlens_capture.ipynb` | First image/audio-conditioned captures on the frozen lens |
+| `notebooks/archive/completed_studies/multimodal_jspace_output_convergence_audit_colab.ipynb` | Convergence-timing audit of the completed L35 transfer: the model's own output head applied to stored residuals at L35/38/40, read-only against the finished run ([docs/output_convergence_timing.md](docs/output_convergence_timing.md)) |
 | `notebooks/multimodal_jspace_coordinate_swap_mock_colab.ipynb` | MOCK-only coordinate-swap notebook: the algebra, the refusals, the controls and the involution on a synthetic world. Its real-run switch raises — no admissible layer band exists, and the readout has to be an open prompt |
-| `notebooks/open_prompt_protocol_mock_colab.ipynb` | MOCK-only open-prompt notebook: the legacy prompt rebuilt byte-for-byte, open prompts naming no candidate in any channel, the leakage refusals, and the external candidate-scoring boundary ([docs/prompt_protocol.md](docs/prompt_protocol.md)) |
+| `notebooks/archive/protocol_mocks/open_prompt_protocol_mock_colab.ipynb` | MOCK-only open-prompt notebook: the legacy prompt rebuilt byte-for-byte, open prompts naming no candidate in any channel, the leakage refusals, and the external candidate-scoring boundary ([docs/prompt_protocol.md](docs/prompt_protocol.md)) |
 | `tests/` | CPU-only tests (no network, no real model): adapter, controls, evaluation, pursuit, cones, ignition, metadata, scripts, exporter, interventions, notebook light paths, finite differences |
 
 ## Gemma 4 E4B specifics
@@ -356,7 +362,7 @@ python scripts/fit_gemma.py --config configs/gemma_text_pilot.yaml \
     --allow-model-load --device-map cuda
 ```
 
-Or run `notebooks/gemma_4_e4b_text_jlens.ipynb` top-to-bottom
+Or run `notebooks/archive/legacy_prototypes/gemma_4_e4b_text_jlens.ipynb` top-to-bottom
 (`JLENS_MODE=microsmoke|smoke|pilot`, `JLENS_ALLOW_GEMMA=1`,
 `JLENS_DEVICE_MAP=cuda`).
 

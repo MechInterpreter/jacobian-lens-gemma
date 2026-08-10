@@ -20,7 +20,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 NOTEBOOK_PATH = (
-    REPO_ROOT / "notebooks" / "multimodal_jspace_layer_localization_colab.ipynb"
+    REPO_ROOT / "notebooks" / "archive" / "completed_studies" / "multimodal_jspace_layer_localization_colab.ipynb"
 )
 RUNNER = Path(__file__).resolve().parent / "_mmlocalize_notebook_runner.py"
 BUILDER = REPO_ROOT / "scripts" / "_build_localization_notebook.py"

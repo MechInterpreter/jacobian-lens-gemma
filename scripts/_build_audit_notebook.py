@@ -1,6 +1,6 @@
 # Gemma 4 adaptation — new in this fork (github.com/anthropics/jacobian-lens is upstream).
 # SPDX-License-Identifier: Apache-2.0
-"""Generate ``notebooks/mmpilot_image_independence_audit_colab.ipynb``.
+"""Generate ``notebooks/archive/engineering_audits/mmpilot_image_independence_audit_colab.ipynb``.
 
 The notebook is small and every cell matters, so it is written from source
 here rather than edited by hand in a JSON blob: that keeps the committed
@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-TARGET = REPO_ROOT / "notebooks" / "mmpilot_image_independence_audit_colab.ipynb"
+TARGET = REPO_ROOT / "notebooks" / "archive" / "engineering_audits" / "mmpilot_image_independence_audit_colab.ipynb"
 
 CELLS: list[tuple[str, str]] = []
 

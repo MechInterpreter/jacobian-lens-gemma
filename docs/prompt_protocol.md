@@ -7,7 +7,7 @@ protocols, and states what each one is allowed to support.
 ![Two J-space interventions](assets/intervention_methods.png)
 
 Implementation: [`jlens/mmpilot/prompt_protocol.py`](../jlens/mmpilot/prompt_protocol.py).
-MOCK: [`notebooks/open_prompt_protocol_mock_colab.ipynb`](../notebooks/open_prompt_protocol_mock_colab.ipynb).
+MOCK: [`notebooks/archive/protocol_mocks/open_prompt_protocol_mock_colab.ipynb`](../notebooks/archive/protocol_mocks/open_prompt_protocol_mock_colab.ipynb).
 Primary source: <https://transformer-circuits.pub/2026/workspace/index.html>.
 
 ---

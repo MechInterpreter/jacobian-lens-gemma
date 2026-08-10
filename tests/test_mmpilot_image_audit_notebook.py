@@ -22,7 +22,7 @@ from jlens.mmpilot import mock as K
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 NOTEBOOK_PATH = (
-    REPO_ROOT / "notebooks" / "mmpilot_image_independence_audit_colab.ipynb"
+    REPO_ROOT / "notebooks" / "archive" / "engineering_audits" / "mmpilot_image_independence_audit_colab.ipynb"
 )
 RUNNER = Path(__file__).resolve().parent / "_mmpilot_audit_notebook_runner.py"
 BUILDER = REPO_ROOT / "scripts" / "_build_audit_notebook.py"

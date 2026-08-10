@@ -1,6 +1,6 @@
 # Gemma 4 adaptation — new in this fork (github.com/anthropics/jacobian-lens is upstream).
 # SPDX-License-Identifier: Apache-2.0
-"""Generate ``notebooks/open_prompt_protocol_mock_colab.ipynb``.
+"""Generate ``notebooks/archive/protocol_mocks/open_prompt_protocol_mock_colab.ipynb``.
 
 The notebook is written from source here rather than edited inside a JSON blob,
 so the committed file stays output-free and byte-reproducible.
@@ -14,7 +14,7 @@ import json
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-TARGET = REPO_ROOT / "notebooks" / "open_prompt_protocol_mock_colab.ipynb"
+TARGET = REPO_ROOT / "notebooks" / "archive" / "protocol_mocks" / "open_prompt_protocol_mock_colab.ipynb"
 
 CELLS: list[tuple[str, str]] = []
 

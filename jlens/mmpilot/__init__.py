@@ -3,8 +3,8 @@
 """Minimal multimodal J-space transfer pilot (SpokenCOCO).
 
 This package is deliberately small. It exists so the Colab notebook
-``notebooks/multimodal_jspace_spokencoco_pilot_colab.ipynb`` can be tested on
-CPU without a GPU, a model download, or Google Drive. Everything model-facing
+``notebooks/archive/completed_studies/multimodal_jspace_spokencoco_pilot_colab.ipynb``
+can be tested on CPU without a GPU, a model download, or Google Drive. Everything model-facing
 goes through a narrow protocol (:mod:`jlens.mmpilot.backend`) with two
 implementations: the real Gemma 4 E4B one built in the notebook, and the
 deterministic synthetic one in :mod:`jlens.mmpilot.mock`.

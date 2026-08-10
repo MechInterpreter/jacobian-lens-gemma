@@ -1,6 +1,6 @@
 # Gemma 4 adaptation — new in this fork (github.com/anthropics/jacobian-lens is upstream).
 # SPDX-License-Identifier: Apache-2.0
-"""Generate ``notebooks/multimodal_jspace_output_convergence_audit_colab.ipynb``.
+"""Generate ``notebooks/archive/completed_studies/multimodal_jspace_output_convergence_audit_colab.ipynb``.
 
 Written from source rather than edited as JSON, so the committed notebook stays
 output-free and byte-reproducible. Run
@@ -17,6 +17,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 TARGET = (
     REPO_ROOT
     / "notebooks"
+    / "archive"
+    / "completed_studies"
     / "multimodal_jspace_output_convergence_audit_colab.ipynb"
 )
 

@@ -20,7 +20,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 NOTEBOOK_PATH = (
-    REPO_ROOT / "notebooks" / "multimodal_jspace_spokencoco_robustness_colab.ipynb"
+    REPO_ROOT / "notebooks" / "archive" / "completed_studies" / "multimodal_jspace_spokencoco_robustness_colab.ipynb"
 )
 RUNNER = Path(__file__).resolve().parent / "_mmpilot_robustness_notebook_runner.py"
 BUILDER = REPO_ROOT / "scripts" / "_build_robustness_notebook.py"

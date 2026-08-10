@@ -12,8 +12,8 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 NOTEBOOKS = {
-    "causal": REPO_ROOT / "notebooks" / "gemma_4_e4b_jspace_causal_smoke.ipynb",
-    "multimodal": REPO_ROOT / "notebooks" / "gemma_4_e4b_multimodal_jlens_capture.ipynb",
+    "causal": REPO_ROOT / "notebooks" / "archive" / "legacy_prototypes" / "gemma_4_e4b_jspace_causal_smoke.ipynb",
+    "multimodal": REPO_ROOT / "notebooks" / "archive" / "legacy_prototypes" / "gemma_4_e4b_multimodal_jlens_capture.ipynb",
 }
 
 
