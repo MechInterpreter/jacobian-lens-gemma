@@ -1,6 +1,6 @@
 # Notebooks
 
-Six notebooks at this level are the **active research workflow**. Everything
+Seven notebooks at this level are the **active research workflow**. Everything
 else has been moved into `archive/`, where it is preserved rather than
 preserved-and-confusing: an archived notebook produced a completed result, and
 re-running it today would re-run an *older protocol*.
@@ -30,9 +30,31 @@ published, and none of them fits a lens except the first two.
 | 4 | `multimodal_jspace_spokencoco_l32_followup_colab.ipynb` | The L32 open-prompt follow-up: integrity, representational transfer, causal transfer, native convergence, and a paired L35 reference under the same open prompt. **Canonical** for the open-prompt L32 result. | `mml32_*` run |
 | 5 | `multimodal_jspace_l32_convergence_resolution_colab.ipynb` | **New.** The independent L32 convergence-resolution study: a fresh, verified-disjoint SpokenCOCO population scored against the *already frozen* criterion, with an optional conditional Stage-B causal replication. | `mml32res_*` run |
 | 6 | `multimodal_jspace_coordinate_swap_mock_colab.ipynb` | MOCK-only. The Anthropic two-coordinate swap: its algebra, refusals, controls and involution on a synthetic world. Its real-run switch **raises** — no contiguous confirmed layer band exists today. | nothing scientific; a protocol under test |
+| 7 | `research_grade_l27_l31_preconvergence_study_colab.ipynb` | **New.** The bounded L27–L31 transition study: the one interval left open by L26 (failed confirmation), L32 (confirmed but AMBIGUOUS twice) and L35 (CONVERGED). Fits all five candidates fresh at scale 250, confirms them on a genuinely untouched set, selects the *earliest* passer, and conditionally measures native convergence and cross-modal causal transfer on a fourth independent SpokenCOCO population. | `mmpre_*` run |
 
-Notebooks 1–5 are all **switched off** in the committed file. Opening one
+Notebooks 1–5 and 7 are all **switched off** in the committed file. Opening one
 starts nothing, downloads nothing and spends nothing.
+
+### Notebook 7 is a *transition* study, and it is bounded on purpose
+
+It asks one question — is there a layer in 27–31 with a confirmed J-lens, a
+`NOT_CONVERGED` native readout in all three modalities, and controlled
+cross-modal causal transfer, all on one population — and the candidate interval
+is **closed**. There is no clause that widens it to L33/L34 after a result, no
+replacement layer, and no second scale: 250 is used because that is where L32
+was confirmed.
+
+Two things it deliberately does *not* reuse. The extension accumulator holds
+source layers `[8, 14, 20, 26, 32, 35, 38, 40]`, so none of 27–31 is in it and
+new Jacobian accumulation is required; `assert_new_source_layers` refuses a
+seeded checkpoint rather than continuing one. And the extension's confirmation
+set has been opened — that is *how* L26's failure and L32's pass are known — so
+a new untouched set is drawn, or the study is **blocked**.
+
+It runs in three sessions: a free-CPU Stage 0 (`PREPROCESSING_ONLY = True`), an
+L4 session for Stages 1–3, and a conditional Stage 4. Every stage is
+checkpointed; an interruption loses at most one bounded batch or unit.
+`docs/l27_l31_preconvergence_study.md` has the full contract.
 
 ### Notebook 5 runs in two sessions, and the first one wants a CPU
 
@@ -63,6 +85,7 @@ semantics and what a fresh process reconstructs versus re-proves.
 | L35 three-modality causal transfer | (3) native audio transfer |
 | L32 causal transfer under an **open** prompt, and the paired L35 reference | (4) L32 follow-up |
 | L32 native direct-readout convergence on an **independent** population | (5) convergence resolution |
+| anything about physical layers 27–31 | (7) the L27–L31 transition study |
 
 ---
 
