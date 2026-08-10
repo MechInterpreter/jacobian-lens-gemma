@@ -34,6 +34,26 @@ published, and none of them fits a lens except the first two.
 Notebooks 1–5 are all **switched off** in the committed file. Opening one
 starts nothing, downloads nothing and spends nothing.
 
+### Notebook 5 runs in two sessions, and the first one wants a CPU
+
+The convergence-resolution study has to establish that its population is
+disjoint from every photograph, recording and caption the completed runs spent.
+That is Drive I/O over thousands of small files, and a GPU makes none of it
+faster. Section 8 is therefore a checkpointed preparation that persists to Drive
+and can be stopped at any moment:
+
+* **session 1, free CPU** — `PREPROCESSING_ONLY = True`. Section 8 harvests and
+  checkpoints; stopping repeats at most one bounded unit of ≤25 files and never
+  restarts from zero. No run directory is created and no model is loaded.
+* **session 2, L4** — `PREPROCESSING_ONLY = False` with the same scientific
+  configuration. Section 8 loads and verifies the cache without reading a single
+  source unit, and Stage A starts.
+
+Section 11 refuses to load Gemma while the preparation is incomplete.
+`docs/l32_resolution_preprocessing.md` has the full contract: the preparation
+fingerprint, the minimal-source completeness proof, the shard/checkpoint
+semantics and what a fresh process reconstructs versus re-proves.
+
 ### Which notebook is canonical for which claim
 
 | claim | canonical notebook |
