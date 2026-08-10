@@ -20,6 +20,30 @@ So the open question lives strictly between 26 and 32:
 > `NOT_CONVERGED` native direct readout across text, image and spoken audio,
 > and (3) controlled cross-modal causal transfer?
 
+## Two independently evaluated lens arms
+
+The notebook now fits two lenses over the same L27-L31 grid and the same 250
+text prompts:
+
+1. **Raw J-lens (primary):** ordinary autograd, matching the original
+   averaged-Jacobian method.
+2. **R-lens (secondary):** a second accumulation using the frozen RelP
+   backward rules described in ["R-lens: Making J-lens more faithful on early
+   layers"](https://www.lesswrong.com/posts/nv8oedrnLXKRzNEL9/r-lens-making-j-lens-more-faithful-on-early-layers).
+
+For dense Gemma 4 blocks, the R-lens rule detaches the RMSNorm denominator,
+uses the identity rule through the gated MLP activation, and divides relevance
+equally between the two multiplicative MLP branches. Linear maps, attention,
+and query/key norms retain their ordinary local rule. This is **not**
+`J + lambda I`, and there is no lambda search.
+
+The two arms use separate checkpoints and accumulators because they have
+different backward rules. They share fitting, development, and untouched
+confirmation prompts, but the frozen gate and earliest-passing-layer rule are
+applied independently. Their evidence is never pooled. A result obtained only
+with R-lens is reported as an **R-space** result, not as evidence that the raw
+J-lens passed at that layer.
+
 `jlens.calibration.adjacent.ADJACENT_CANDIDATE_LAYERS` is a frozen tuple bound
 into the run fingerprint. There is no L33/L34 clause, no widening after a table
 is read, and no replacement layer. A notebook that fits a different set gets a
@@ -100,13 +124,19 @@ ordering them would be caught.
 | stage | runtime | model | contents |
 |---|---|---|---|
 | 0 | free CPU | no | corpus provenance, untouched confirmation, SpokenCOCO exclusion harvest, independent population — all checkpointed |
-| 1 | L4 | yes | fit L27–L31 at scale 250 in one resumable accumulator |
+| 1 | L4 | yes | fit raw J and R-lens over L27–L31 at scale 250 in two resumable accumulators |
 | 2 | L4 | yes | frozen gate on every candidate; select the earliest passer or stop |
 | 3 | L4 | yes | capability and the native direct readout in three modalities |
 | 4 | L4/A100 | yes | conditional cross-modal causal transfer with the full control set |
 
 Stage 0 needs a tokenizer (for the token-length filter) but never the weights,
 so it stays a free-CPU session.
+
+Stage 1 is budgeted conservatively at **2–4 hours per arm, 4–8 hours total on
+one L4**. That range is anchored to the observed fresh Jacobian-accumulation
+runtime, not the much smaller time needed to fit an already accumulated
+Jacobian. Each arm checkpoints every bounded prompt batch, so the second arm
+can resume without repeating the first.
 
 ### Stage 4's gate is an efficiency gate, not a filter
 

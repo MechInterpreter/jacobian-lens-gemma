@@ -25,10 +25,11 @@ run directory to be *set explicitly* and refuses to discover "the newest" one.
 function of the raw switches (:func:`derive_preconvergence_gates`) and is
 re-derived inside each expensive cell (:func:`refresh_preconvergence_gates`).
 
-**4. Renaming steering as a coordinate swap.** The intervention family here is
-the completed open-prompt follow-up's additive J-space steering, reused
-unchanged for comparability. The Anthropic two-coordinate swap is a different
-operation, it needs a contiguous confirmed layer band, and
+**4. Renaming steering as a coordinate swap.** The intervention form here is
+the completed open-prompt follow-up's additive residual steering. Raw-J runs
+use J-space directions; secondary R-lens runs use R-space directions. The
+Anthropic two-coordinate swap is a different operation, it needs a contiguous
+confirmed layer band, and
 :data:`COORDINATE_SWAP_SCOPE` says so in every artifact.
 
 Every terminal outcome in :data:`TERMINAL_OUTCOMES` is first-class. ``NO_GO``,
@@ -136,6 +137,19 @@ COORDINATE_SWAP_SCOPE = (
     "different operation requiring a CONTIGUOUS confirmed layer band, which does "
     "not exist today. Nothing in this study is described as a swap."
 )
+
+
+def _coordinate_swap_scope(representation_space: str) -> str:
+    if representation_space == "J_SPACE":
+        return COORDINATE_SWAP_SCOPE
+    return (
+        "OUT OF SCOPE. The intervention family here is additive R-space "
+        "residual steering: it reuses the open-prompt L32 follow-up's "
+        "add/subtract intervention form and controls, but reconstructs "
+        "directions from the secondary R-lens. An Anthropic two-coordinate "
+        "swap is a different operation requiring a CONTIGUOUS confirmed "
+        "layer band. Nothing in this study is described as a swap."
+    )
 
 #: The causal controls the protocol requires. A missing record is a failure.
 REQUIRED_CAUSAL_CONTROLS: tuple[str, ...] = (
@@ -1003,6 +1017,8 @@ def preconvergence_verdicts(
     causal_controls: Mapping | None,
     stage_four: Mapping,
     same_population: Mapping | None,
+    lens_arm: Mapping | None = None,
+    representation_space: str = "J_SPACE",
 ) -> dict:
     """The five verdicts and the one terminal outcome, assembled in one place.
 
@@ -1012,6 +1028,8 @@ def preconvergence_verdicts(
     """
     lens = str(lens_verdict.get("verdict"))
     selected_layer = lens_verdict.get("selected_layer")
+    arm_label = str((lens_arm or {}).get("label") or "RAW_J_LENS")
+    confirmed_name = "J-lens" if representation_space == "J_SPACE" else "R-lens"
 
     convergence_verdict = (
         str(convergence.get("verdict")) if convergence else TRANSFER_NOT_EVALUATED
@@ -1054,7 +1072,7 @@ def preconvergence_verdicts(
         principal = TRANSFER_NOT_EVALUATED
         statement = (
             f"No layer in {list(ADJACENT_CANDIDATE_LAYERS)} has a confirmed "
-            "J-lens on an untouched confirmation set. The study stops here: "
+            f"{confirmed_name} on an untouched confirmation set. The study stops here: "
             "there is no layer to measure convergence or causal transfer at, and "
             "the interval is closed, so there is no wider band to try."
         )
@@ -1092,7 +1110,7 @@ def preconvergence_verdicts(
         principal = TRANSFER_SUPPORTED
         statement = (
             f"One and the same physical layer ({selected_layer}) has an untouched "
-            f"confirmed J-lens, is {NOT_CONVERGED} in every required modality "
+            f"confirmed {confirmed_name}, is {NOT_CONVERGED} in every required modality "
             "under the frozen criterion, and shows controlled cross-modal causal "
             "transfer — all three on the same independent population."
         )
@@ -1171,7 +1189,7 @@ def preconvergence_verdicts(
         "terminal_outcomes_available": list(TERMINAL_OUTCOMES),
         "principal_claim_requires": [
             "one and the same physical layer",
-            "untouched confirmed J-lens validity",
+            f"untouched confirmed {confirmed_name} validity",
             f"{NOT_CONVERGED} native direct readout in "
             f"{list(REQUIRED_MODALITIES)}",
             "controlled cross-modal causal transfer",
@@ -1180,7 +1198,11 @@ def preconvergence_verdicts(
         "same_population": same_population,
         "stage_four": stage_four,
         "statement": statement,
-        "coordinate_swap_scope": COORDINATE_SWAP_SCOPE,
+        "lens_arm": dict(lens_arm or {}),
+        "lens_arm_label": arm_label,
+        "representation_space": representation_space,
+        "arms_pooled": False,
+        "coordinate_swap_scope": _coordinate_swap_scope(representation_space),
     }
     payload["verdicts_checksum"] = payload_checksum(payload)
     return payload
@@ -1851,6 +1873,10 @@ PRECONVERGENCE_FINGERPRINT_FIELDS: tuple[str, ...] = (
     "lens_path",
     "lens_checksum",
     "lens_confirmation_status",
+    "lens_arm",
+    "lens_arm_protocol_digest",
+    "lens_method_digest",
+    "representation_space",
     "physical_layer",
     "hook_site",
     "d_model",
@@ -1950,6 +1976,7 @@ def build_summary(
     mode: str,
     preparation: Mapping | None = None,
     frozen_concept_feasibility: Mapping | None = None,
+    lens_arms: Mapping | None = None,
 ) -> dict:
     """``l27_l31_preconvergence_summary.json``, assembled in one place."""
     summary = {
@@ -1979,6 +2006,7 @@ def build_summary(
             "source_layers": dict(source_layer_record),
             "fit": dict(fit_record),
         },
+        "lens_arms": dict(lens_arms or {}),
         "convergence": dict(convergence) if convergence else None,
         "convergence_controls": dict(convergence_controls or {}),
         "capability": dict(capability),
@@ -2001,7 +2029,10 @@ def build_summary(
         "causal": dict(causal) if causal else None,
         "causal_controls": dict(causal_controls or {}),
         "intervention_family": INTERVENTION_FAMILY,
-        "coordinate_swap_scope": COORDINATE_SWAP_SCOPE,
+        "representation_space": verdicts.get("representation_space", "J_SPACE"),
+        "coordinate_swap_scope": verdicts.get(
+            "coordinate_swap_scope", COORDINATE_SWAP_SCOPE
+        ),
         "preparation": dict(preparation or {}),
         "cache": dict(cache),
         "completed_runs_unchanged": dict(immutability),
@@ -2017,6 +2048,8 @@ def build_summary(
 def render_report(summary: Mapping) -> str:
     """``l27_l31_preconvergence_report.md``."""
     verdicts = summary.get("verdicts") or {}
+    representation_space = str(summary.get("representation_space", "J_SPACE"))
+    space_label = "J-space" if representation_space == "J_SPACE" else "R-space"
     lines = [
         "# L27-L31 pre-convergence transition study",
         "",
@@ -2060,7 +2093,7 @@ def render_report(summary: Mapping) -> str:
         summary.get("coordinate_swap_scope", COORDINATE_SWAP_SCOPE),
         "",
         f"Intervention family: `{summary.get('intervention_family')}` "
-        "(additive J-space residual steering).",
+        f"(additive {space_label} residual steering).",
         "",
         f"Prompt protocol: `{(summary.get('prompt') or {}).get('protocol')}` — the "
         "model-visible prompt names no candidate; candidates are external scoring "

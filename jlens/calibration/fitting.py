@@ -286,6 +286,8 @@ def run_calibration(
     store: CalibrationStore,
     checkpoint_every: int = 25,
     diagnostics_every: int = 25,
+    backward_rule: str = "ordinary_autograd",
+    backward_context=None,
 ) -> CalibrationResult:
     """Fit ``J_l`` at every layer in ``plan``, snapshotting the nested scales.
 
@@ -339,6 +341,7 @@ def run_calibration(
                 "layers": list(plan.layers),
                 "rows": rows[-diagnostics_every * 4 :],
                 "objective": "not_applicable_estimator_is_a_sample_mean",
+                "backward_rule": backward_rule,
             },
         )
 
@@ -367,6 +370,8 @@ def run_calibration(
         checkpoint_every=checkpoint_every,
         resume=True,
         on_prompt=observer,
+        backward_rule=backward_rule,
+        backward_context=backward_context,
     )
     result.elapsed_seconds = time.perf_counter() - started
 

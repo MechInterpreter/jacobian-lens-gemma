@@ -263,6 +263,31 @@ def test_fit_resume_mismatched_source_layers(tmp_path):
         )
 
 
+def test_fit_resume_mismatched_backward_rule(tmp_path):
+    model = TinyDecoder(n_layers=4, d_model=8)
+    prompts = ["abcdefghij " * 5]
+    checkpoint = str(tmp_path / "ckpt.pt")
+    fit(
+        model,
+        prompts,
+        source_layers=[0, 1],
+        dim_batch=4,
+        max_seq_len=64,
+        checkpoint_path=checkpoint,
+        backward_rule="ordinary_autograd",
+    )
+    with pytest.raises(ValueError, match="backward_rule"):
+        fit(
+            model,
+            prompts,
+            source_layers=[0, 1],
+            dim_batch=4,
+            max_seq_len=64,
+            checkpoint_path=checkpoint,
+            backward_rule="dense_relprop_backward",
+        )
+
+
 def test_negative_layer_indices_normalized():
     model = TinyDecoder(n_layers=4, d_model=8)
     prompt = "the quick brown fox " * 4

@@ -52,9 +52,14 @@ So the open question lives strictly between 26 and 32, and this notebook asks
 it once:
 
 > Does any predeclared layer in **27, 28, 29, 30, 31** simultaneously have
-> (1) a rigorously confirmed text-calibrated J-lens, (2) a clearly
+> (1) a rigorously confirmed text-calibrated lens, (2) a clearly
 > `NOT_CONVERGED` native direct readout across text, image and spoken audio,
 > and (3) controlled cross-modal causal transfer?
+
+The raw averaged Jacobian is the **primary Anthropic-faithful arm**. A second,
+non-pooled **R-lens arm** uses the dense-model relevance-propagation backward
+rules from Blank, Bhatia and Nanda (2026). If only that arm succeeds, the result
+is explicitly an R-space result and is never relabelled as raw J-space.
 
 ## This is not an instruction to find a favourable layer
 
@@ -286,6 +291,10 @@ CONFIRM_STAGE_3_BUDGET = False
 RUN_STAGE_4_CAUSAL_TRANSFER = False
 CONFIRM_STAGE_4_BUDGET = False
 
+# Fixed before confirmation. Run one downstream arm per scientific run. Both
+# calibration arms are always fitted and confirmed; they are never pooled.
+DOWNSTREAM_LENS_ARM = "raw_j"  # exactly "raw_j" or "r_lens"
+
 # The one place a rebuild of the SpokenCOCO evidence join is permitted. Left
 # False so a normal session cannot spend twenty-five minutes rediscovering a
 # cache it already has; Stage 0 refuses instead and says which input moved.
@@ -312,6 +321,14 @@ from jlens.calibration.adjacent import (
     adjacent_gate_text,
 )
 from jlens.calibration.extension import EXTENSION_GATE
+from jlens.calibration.lens_arms import (
+    LENS_ARM_PROTOCOL,
+    RAW_J_ARM,
+    R_LENS_ARM,
+    dual_arm_fitting_budget,
+    format_dual_arm_fitting_budget,
+)
+from jlens.relprop import R_LENS_METHOD
 from jlens.mmpilot.l32_followup import INTERVENTION_FAMILY, OPEN_PROMPT_PROTOCOL
 from jlens.mmpilot.l32_resolution import (
     FOCAL_CONCEPTS as FROZEN_FOCAL_CONCEPTS,
@@ -543,6 +560,13 @@ print(f"hook site           {ADJACENT_HOOK_SITE}")
 print(f"gate                {ADJACENT_CONFIRMATION_GATE.version}")
 print(f"gate digest         {ADJACENT_CONFIRMATION_GATE.digest}")
 print(f"selection rule      {ADJACENT_SELECTION_RULE.digest}")
+print(f"lens-arm protocol   {LENS_ARM_PROTOCOL['digest']}")
+print(f"raw J arm           {RAW_J_ARM.digest}  PRIMARY")
+print(f"R-lens arm          {R_LENS_ARM.digest}  SECONDARY")
+print(f"R-lens method       {R_LENS_METHOD.digest}")
+print(f"downstream arm      {DOWNSTREAM_LENS_ARM}")
+if DOWNSTREAM_LENS_ARM not in {RAW_J_ARM.name, R_LENS_ARM.name}:
+    raise ValueError("DOWNSTREAM_LENS_ARM must be 'raw_j' or 'r_lens'")
 print(f"criterion digest    {FROZEN_CRITERION_DIGEST}")
 print(f"prompt protocol     {OPEN_PROMPT_PROTOCOL}")
 print(f"intervention        {INTERVENTION_FAMILY}")
@@ -2106,6 +2130,13 @@ from jlens.calibration.adjacent import format_adjacent_budget
 
 print(format_adjacent_budget(FITTING_BUDGET))
 
+DUAL_ARM_FITTING_BUDGET = dual_arm_fitting_budget(
+    scale=ADJACENT_SCALE,
+    layers=tuple(ADJACENT_PLAN.layers),
+    target_layer=ADJACENT_PLAN.target_layer,
+)
+print(format_dual_arm_fitting_budget(DUAL_ARM_FITTING_BUDGET))
+
 _n_groups = PSEUDOREPLICATION["n_units"]
 _n_capability = min(
     _n_groups, (N_TRAIN_POSITIVE_IMAGES + N_TEST_POSITIVE_IMAGES) * len(SELECTED_NAMES)
@@ -2159,10 +2190,14 @@ if RUN_REAL_PRECONVERGENCE_STUDY:
     if RUN_LENS_FITTING and not CONFIRM_FITTING_BUDGET:
         raise RuntimeError(
             "RUN_LENS_FITTING is True but CONFIRM_FITTING_BUDGET is False. "
-            f"Stage 1 costs {FITTING_BUDGET['n_forward_passes']:,} forward and "
-            f"{FITTING_BUDGET['n_backward_passes']:,} backward passes "
-            f"({FITTING_BUDGET['fit_hours_low']:.2f}-"
-            f"{FITTING_BUDGET['fit_hours_high']:.2f} h on an L4)."
+            "Stage 1 costs two independent backward accumulations: "
+            f"{DUAL_ARM_FITTING_BUDGET['total_forward_passes']:,} total "
+            "forward passes and "
+            f"{DUAL_ARM_FITTING_BUDGET['total_backward_block_steps']:,} "
+            "backward block steps "
+            f"({DUAL_ARM_FITTING_BUDGET['total_hours_low']:.1f}-"
+            f"{DUAL_ARM_FITTING_BUDGET['total_hours_high']:.1f} h total "
+            "on an L4 for planning)."
         )
     if RUN_MODEL_STAGE and not CONFIRM_MODEL_LOAD:
         raise RuntimeError(
@@ -2370,6 +2405,12 @@ LENS_STORE = None
 LENS_RESUME_STATE = "not_opened"
 FIT_RESULT = None
 FIT_RECORD = None
+R_LENS_FINGERPRINT = None
+R_LENS_STORE = None
+R_LENS_RESUME_STATE = "not_opened"
+R_FIT_RESULT = None
+R_FIT_RECORD = None
+R_LENS_ARCHITECTURE_AUDIT = None
 
 if not FITTING_ENABLED or MODEL is None:
     print("skipped: Stage 1 is not enabled, or no model is loaded.")
@@ -2401,6 +2442,9 @@ else:
             "untouched_confirmation_checksum": CONFIRMATION_MANIFEST["checksum"],
             "development_checksum": DEVELOPMENT_ROLE["checksum"],
             "parent_accumulator_seeded": False,
+            "lens_arm_protocol_digest": LENS_ARM_PROTOCOL["digest"],
+            "lens_arm": RAW_J_ARM.to_dict(),
+            "r_lens_method_digest": R_LENS_METHOD.digest,
         },
     )
     RUN_DIR = Path(
@@ -2454,6 +2498,7 @@ else:
         store=LENS_STORE,
         checkpoint_every=_checkpoint_every,
         diagnostics_every=_checkpoint_every,
+        backward_rule=RAW_J_ARM.backward_rule,
     )
     _snapshot = FIT_RESULT.snapshots[ADJACENT_SCALE]
     FIT_RECORD = {
@@ -2471,6 +2516,7 @@ else:
         "parent_accumulator_seeded": False,
         "source_layers_are_new": SOURCE_LAYERS["disjoint"],
         "objective": "not_applicable_estimator_is_a_sample_mean",
+        "lens_arm": RAW_J_ARM.to_dict(),
         "resume_state": LENS_RESUME_STATE,
     }
     LENS_STORE.save("adjacent_fit", "record", FIT_RECORD)
@@ -2486,6 +2532,104 @@ else:
           f"{_checkpoint_every} prompt(s).")
     print("Stopping the runtime loses at most that bounded batch; a changed")
     print("configuration refuses the resume rather than mixing checkpoints.")
+
+    # The R-lens is NOT an algebraic transform of the raw Jacobian. It gets a
+    # distinct accumulator and fingerprint and repeats the same prompt order
+    # with the frozen RelP backward rules. The forward path is unchanged.
+    from jlens.relprop import (
+        audit_dense_relprop_architecture,
+        dense_relprop_backward,
+    )
+
+    R_LENS_ARCHITECTURE_AUDIT = audit_dense_relprop_architecture(MODEL)
+    R_LENS_FINGERPRINT = CalibrationFingerprint(
+        mode=MODE,
+        protocol_version=ADJACENT_PROTOCOL_VERSION,
+        model_repo_id=(
+            MODEL_REPO_ID if RUN_REAL_PRECONVERGENCE_STUDY else "mock/gemma-like"
+        ),
+        model_revision=MODEL_REVISION_USED,
+        tokenizer_revision=TOKENIZER_REVISION_USED,
+        capture_plan_digest=ADJACENT_PLAN.digest,
+        corpus_manifest_checksum=CORPUS_MANIFEST["corpus_manifest_checksum"],
+        gate_digest=ADJACENT_CONFIRMATION_GATE.digest,
+        plateau_rule_digest=PLATEAU_RULE.digest,
+        scale_points=(ADJACENT_SCALE,),
+        artifact_format_version=ARTIFACT_FORMAT_VERSION,
+        extra={
+            **LENS_FINGERPRINT.extra,
+            "lens_arm": R_LENS_ARM.to_dict(),
+            "relprop_method": R_LENS_METHOD.to_dict(),
+            "relprop_method_digest": R_LENS_METHOD.digest,
+            "relprop_architecture_audit_checksum": R_LENS_ARCHITECTURE_AUDIT[
+                "audit_checksum"
+            ],
+        },
+    )
+    R_LENS_STORE = AdjacentStore(RUN_DIR / "r_lens", R_LENS_FINGERPRINT)
+    R_LENS_RESUME_STATE = R_LENS_STORE.open()
+    R_LENS_STORE.save(
+        "corpus_provenance",
+        "manifest",
+        {
+            "corpus": CORPUS_MANIFEST,
+            "fit_prefix_verification": FIT_PREFIX,
+            "method": R_LENS_METHOD.to_dict(),
+            "architecture_audit": R_LENS_ARCHITECTURE_AUDIT,
+        },
+    )
+    R_LENS_STORE.save(
+        "untouched_confirmation",
+        "manifest",
+        {
+            "manifest": CONFIRMATION_MANIFEST,
+            "audit": UNTOUCHED_AUDIT,
+            "development_role": DEVELOPMENT_ROLE,
+        },
+    )
+    print()
+    print("R-LENS SECONDARY ARM — distinct relevance accumulator")
+    print(f"fingerprint     {R_LENS_FINGERPRINT.digest}")
+    print(f"method          {R_LENS_METHOD.digest}")
+    print(f"resume          {R_LENS_RESUME_STATE}")
+    print(f"checkpoint      {R_LENS_STORE.checkpoint_path}")
+    R_FIT_RESULT = run_calibration(
+        MODEL,
+        FIT_RECORDS,
+        plan=ADJACENT_PLAN,
+        scale_points=(ADJACENT_SCALE,),
+        store=R_LENS_STORE,
+        checkpoint_every=_checkpoint_every,
+        diagnostics_every=_checkpoint_every,
+        backward_rule=R_LENS_ARM.backward_rule,
+        backward_context=lambda: dense_relprop_backward(MODEL),
+    )
+    _r_snapshot = R_FIT_RESULT.snapshots[ADJACENT_SCALE]
+    R_FIT_RECORD = {
+        "schema": "jlens.calibration.adjacent_r_lens_fit.v1",
+        "layers": list(ADJACENT_PLAN.layers),
+        "target_layer": ADJACENT_PLAN.target_layer,
+        "hook_site": ADJACENT_HOOK_SITE,
+        "scale": int(ADJACENT_SCALE),
+        "n_done": R_FIT_RESULT.n_done,
+        "n_skipped": R_FIT_RESULT.n_skipped,
+        "elapsed_seconds": round(R_FIT_RESULT.elapsed_seconds, 2),
+        "checkpoint_path": R_FIT_RESULT.checkpoint_path,
+        "checkpoint_every": _checkpoint_every,
+        "snapshot": _r_snapshot.to_dict(),
+        "lens_arm": R_LENS_ARM.to_dict(),
+        "method": R_LENS_METHOD.to_dict(),
+        "method_digest": R_LENS_METHOD.digest,
+        "architecture_audit": R_LENS_ARCHITECTURE_AUDIT,
+        "parent_accumulator_seeded": False,
+        "source_layers_are_new": SOURCE_LAYERS["disjoint"],
+        "resume_state": R_LENS_RESUME_STATE,
+    }
+    R_LENS_STORE.save("adjacent_fit", "record", R_FIT_RECORD)
+    print(f"prompts fitted  {R_FIT_RESULT.n_done:,}   skipped {R_FIT_RESULT.n_skipped}")
+    print(f"elapsed         {R_FIT_RESULT.elapsed_seconds / 3600:.4f} h")
+    print(f"snapshot        {_r_snapshot.path}")
+    print("Raw J and R accumulators are separate and cannot resume each other.")
 '''
 )
 
@@ -2590,6 +2734,7 @@ DEVELOPMENT = None
 DEVELOPMENT_PROMPTS = None
 DEVELOPMENT_SELECTION = None
 DEVELOPMENT_DIVERSITY = None
+R_DEVELOPMENT = None
 
 if LENS_STORE is None or FIT_RESULT is None:
     print("skipped: no fitted lens exists in this session.")
@@ -2664,6 +2809,55 @@ else:
     print(f"  eligible layers     {eligible_layers(DEVELOPMENT)}")
     print()
     print("Development publishes nothing and selects nothing.")
+
+    if R_LENS_STORE is None or R_FIT_RESULT is None:
+        raise RuntimeError("the predeclared R-lens arm was not fitted")
+    _r_stored = R_LENS_STORE.load(
+        "adjacent_development", f"scale{ADJACENT_SCALE}"
+    )
+    if _r_stored is not None:
+        R_DEVELOPMENT = {
+            int(k): v for k, v in _r_stored["by_layer"].items()
+        }
+        print("reused stored R-lens development verdicts")
+    else:
+        if RUN_REAL_PRECONVERGENCE_STUDY:
+            _r_rows = score_readout_rows(
+                R_FIT_RESULT.lens_for_scale(ADJACENT_SCALE),
+                DEVELOPMENT_PROMPTS,
+                list(ADJACENT_PLAN.layers),
+                ADJACENT_PLAN.target_layer,
+            )
+        else:
+            from jlens.calibration.adjacent_mock import mock_adjacent_rows
+
+            _r_rows = mock_adjacent_rows(
+                MOCK_SCENARIO,
+                stage="development",
+                n_prompts=N_DEVELOPMENT_PROMPTS,
+                layers=list(ADJACENT_PLAN.layers),
+            )
+        R_DEVELOPMENT = evaluate_calibration_layers(
+            _r_rows,
+            layers=list(ADJACENT_PLAN.layers),
+            scale=ADJACENT_SCALE,
+            stage="validation",
+            gate=ADJACENT_GATE,
+        )
+        R_LENS_STORE.save(
+            "adjacent_development",
+            f"scale{ADJACENT_SCALE}",
+            {
+                "scale": ADJACENT_SCALE,
+                "lens_arm": R_LENS_ARM.to_dict(),
+                "method_digest": R_LENS_METHOD.digest,
+                "development_checksum": DEVELOPMENT_ROLE["checksum"],
+                "selection_checksum": DEVELOPMENT_SELECTION["selection_checksum"],
+                "diversity": DEVELOPMENT_DIVERSITY,
+                "by_layer": {str(k): v for k, v in R_DEVELOPMENT.items()},
+            },
+        )
+    print(f"R-lens eligible layers {eligible_layers(R_DEVELOPMENT)}")
 '''
 )
 
@@ -2680,10 +2874,15 @@ from jlens.calibration.publication import ConfirmationVault
 
 GATES = refresh_gates()
 CONFIRMATION_RESULTS = None
+R_CONFIRMATION_RESULTS = None
 CONFIRMATION_DIVERSITY = None
 SELECTION = None
+R_SELECTION = None
+DUAL_SELECTION = None
 LENS_VERDICT = None
+R_LENS_VERDICT = None
 SELECTED_LAYER = None
+SELECTED_LENS_ARM = None
 VAULT = None
 
 if LENS_STORE is None or DEVELOPMENT is None:
@@ -2770,26 +2969,102 @@ else:
             },
         )
 
-    SELECTION = select_earliest_confirmed_layer(
-        CONFIRMATION_RESULTS,
-        candidates=tuple(ADJACENT_PLAN.layers),
-        development=DEVELOPMENT,
+    if R_LENS_STORE is None or R_FIT_RESULT is None or R_DEVELOPMENT is None:
+        raise RuntimeError("the predeclared R-lens arm lacks development evidence")
+    _r_stored = R_LENS_STORE.load(
+        "adjacent_confirmation", f"scale{ADJACENT_SCALE}"
     )
+    if _r_stored is not None:
+        R_CONFIRMATION_RESULTS = {
+            int(k): v for k, v in _r_stored["by_layer"].items()
+        }
+        print("reused stored R-lens confirmation verdicts")
+    else:
+        if RUN_REAL_PRECONVERGENCE_STUDY:
+            _r_rows = score_readout_rows(
+                R_FIT_RESULT.lens_for_scale(ADJACENT_SCALE),
+                CONFIRMATION_PROMPTS,
+                list(ADJACENT_PLAN.layers),
+                ADJACENT_PLAN.target_layer,
+            )
+        else:
+            from jlens.calibration.adjacent_mock import mock_adjacent_rows
+
+            _r_rows = mock_adjacent_rows(
+                MOCK_SCENARIO,
+                stage="confirmation",
+                n_prompts=N_CONFIRMATION_PROMPTS,
+                layers=list(ADJACENT_PLAN.layers),
+            )
+        R_CONFIRMATION_RESULTS = evaluate_calibration_layers(
+            _r_rows,
+            layers=list(ADJACENT_PLAN.layers),
+            scale=ADJACENT_SCALE,
+            stage="confirmation",
+            gate=ADJACENT_CONFIRMATION_GATE,
+        )
+        R_LENS_STORE.save(
+            "adjacent_confirmation",
+            f"scale{ADJACENT_SCALE}",
+            {
+                "scale": ADJACENT_SCALE,
+                "lens_arm": R_LENS_ARM.to_dict(),
+                "method_digest": R_LENS_METHOD.digest,
+                "confirmation_manifest": CONFIRMATION_MANIFEST,
+                "untouched_audit": UNTOUCHED_AUDIT,
+                "selection_checksum": CONFIRMATION_SELECTION["selection_checksum"],
+                "diversity": CONFIRMATION_DIVERSITY,
+                "by_layer": {
+                    str(k): v for k, v in R_CONFIRMATION_RESULTS.items()
+                },
+            },
+        )
+
+    from jlens.calibration.lens_arms import select_both_lens_arms
+
+    DUAL_SELECTION = select_both_lens_arms(
+        raw_confirmation=CONFIRMATION_RESULTS,
+        r_confirmation=R_CONFIRMATION_RESULTS,
+        raw_development=DEVELOPMENT,
+        r_development=R_DEVELOPMENT,
+    )
+    SELECTION = DUAL_SELECTION["raw_j"]
+    R_SELECTION = DUAL_SELECTION["r_lens"]
     LENS_VERDICT = adjacent_lens_verdict(
         SELECTION,
         confirmation_manifest=CONFIRMATION_MANIFEST,
         untouched_audit=UNTOUCHED_AUDIT,
         source_layer_record=SOURCE_LAYERS,
     )
-    SELECTED_LAYER = LENS_VERDICT["selected_layer"]
+    R_LENS_VERDICT = adjacent_lens_verdict(
+        R_SELECTION,
+        confirmation_manifest=CONFIRMATION_MANIFEST,
+        untouched_audit=UNTOUCHED_AUDIT,
+        source_layer_record=SOURCE_LAYERS,
+    )
+    R_LENS_VERDICT = {
+        **R_LENS_VERDICT,
+        "verdict_name": "R_LENS_VALIDITY",
+        "lens_arm": R_LENS_ARM.to_dict(),
+        "space_name": R_LENS_ARM.space_name,
+    }
+    SELECTED_LENS_ARM = (
+        RAW_J_ARM if DOWNSTREAM_LENS_ARM == RAW_J_ARM.name else R_LENS_ARM
+    )
+    _selected_verdict = (
+        LENS_VERDICT if SELECTED_LENS_ARM.name == RAW_J_ARM.name else R_LENS_VERDICT
+    )
+    SELECTED_LAYER = _selected_verdict["selected_layer"]
     LENS_STORE.save("layer_selection", "selection", SELECTION)
     LENS_STORE.save("layer_selection", "verdict", LENS_VERDICT)
+    R_LENS_STORE.save("layer_selection", "selection", R_SELECTION)
+    R_LENS_STORE.save("layer_selection", "verdict", R_LENS_VERDICT)
 
     print(f"vault status: {VAULT.status()}")
     print(f"confirmation diversity: {CONFIRMATION_DIVERSITY['passed']} "
           f"({CONFIRMATION_DIVERSITY['n_distinct_target_tokens']} distinct)")
     print()
-    print("EVERY CANDIDATE, PASS OR FAIL")
+    print("RAW J-LENS — EVERY CANDIDATE, PASS OR FAIL")
     print(format_confirmation_table(SELECTION["table"]))
     print()
     for _row in SELECTION["table"]:
@@ -2808,6 +3083,18 @@ else:
     print(f"  SELECTED LAYER  {SELECTED_LAYER}")
     print()
     print(LENS_VERDICT["rationale"])
+    print()
+    print("R-LENS — EVERY CANDIDATE, PASS OR FAIL")
+    print(format_confirmation_table(R_SELECTION["table"]))
+    print()
+    print(f"R_LENS_VALIDITY: {R_LENS_VERDICT['verdict']}")
+    print(f"  passing layers  {R_LENS_VERDICT['passing_layers']}")
+    print(f"  selected layer  {R_LENS_VERDICT['selected_layer']}")
+    print()
+    print(f"DUAL-ARM HEADLINE: {DUAL_SELECTION['headline']}")
+    print(DUAL_SELECTION["claim_boundary"])
+    print(f"downstream arm fixed in section 2: {SELECTED_LENS_ARM.label}")
+    print(f"downstream selected layer: {SELECTED_LAYER}")
     if SELECTED_LAYER is None:
         print()
         print("STOP. Stages 3 and 4 have no layer to measure and will not run.")
@@ -2846,7 +3133,21 @@ GATES = refresh_gates()
 
 MULTIMODAL_LAYER = None
 CONFIG = None
+DOWNSTREAM_FIT_RESULT = None
+DOWNSTREAM_FIT_RECORD = None
+DOWNSTREAM_LENS_VERDICT = None
+DOWNSTREAM_CONFIRMATION_RESULTS = None
 if SELECTED_LAYER is not None and BACKEND is not None:
+    if SELECTED_LENS_ARM.name == RAW_J_ARM.name:
+        DOWNSTREAM_FIT_RESULT = FIT_RESULT
+        DOWNSTREAM_FIT_RECORD = FIT_RECORD
+        DOWNSTREAM_LENS_VERDICT = LENS_VERDICT
+        DOWNSTREAM_CONFIRMATION_RESULTS = CONFIRMATION_RESULTS
+    else:
+        DOWNSTREAM_FIT_RESULT = R_FIT_RESULT
+        DOWNSTREAM_FIT_RECORD = R_FIT_RECORD
+        DOWNSTREAM_LENS_VERDICT = R_LENS_VERDICT
+        DOWNSTREAM_CONFIRMATION_RESULTS = R_CONFIRMATION_RESULTS
     # The MOCK pilot decoder has six blocks; its stand-in for the selected
     # adjacent layer is layer 1, exactly as every completed MOCK run does. The
     # real path uses the physical layer the gate selected.
@@ -2883,6 +3184,8 @@ if SELECTED_LAYER is not None and BACKEND is not None:
     )
     AVAILABLE_MODALITIES, BLOCKED_MODALITIES = available_modalities(BACKEND, CONFIG)
     print(f"selected layer        {SELECTED_LAYER}")
+    print(f"selected lens arm     {SELECTED_LENS_ARM.label}")
+    print(f"selected space        {SELECTED_LENS_ARM.space_name}")
     print(f"multimodal layer      {MULTIMODAL_LAYER}")
     print(f"available modalities  {AVAILABLE_MODALITIES}")
     print(f"blocked modalities    {BLOCKED_MODALITIES}")
@@ -2950,9 +3253,9 @@ STORE = None
 RUN_STATE = "not_opened"
 STUDY_FINGERPRINT = None
 FINGERPRINT = None
-LENS_SNAPSHOT = (FIT_RECORD or {}).get("snapshot") or {}
+LENS_SNAPSHOT = (DOWNSTREAM_FIT_RECORD or {}).get("snapshot") or {}
 
-if CONFIG is None or LENS_VERDICT is None:
+if CONFIG is None or DOWNSTREAM_LENS_VERDICT is None:
     print("skipped: there is no confirmed configuration to bind a fingerprint to.")
     print("A fingerprint recording 'no layer' would be one another run could")
     print("resume from, so none is written at all.")
@@ -2982,6 +3285,10 @@ else:
         lens_path=LENS_SNAPSHOT.get("path"),
         lens_checksum=LENS_SNAPSHOT.get("checksum"),
         lens_confirmation_status="passed",
+        lens_arm=SELECTED_LENS_ARM.to_dict(),
+        lens_arm_protocol_digest=LENS_ARM_PROTOCOL["digest"],
+        lens_method_digest=SELECTED_LENS_ARM.method_digest,
+        representation_space=SELECTED_LENS_ARM.space_name,
         physical_layer=int(SELECTED_LAYER),
         hook_site=ADJACENT_HOOK_SITE,
         d_model=int(ADJACENT_PLAN.d_model),
@@ -3060,7 +3367,12 @@ else:
             "required_controls": list(REQUIRED_CAUSAL),
         },
         selection_config=SELECTION_FINGERPRINT,
-        extra={"preconvergence_fingerprint": STUDY_FINGERPRINT},
+        extra={
+            "preconvergence_fingerprint": STUDY_FINGERPRINT,
+            "lens_arm_protocol": LENS_ARM_PROTOCOL,
+            "selected_lens_arm": SELECTED_LENS_ARM.to_dict(),
+            "representation_space": SELECTED_LENS_ARM.space_name,
+        },
     )
     STORE = UnitStore(RUN_DIR, FINGERPRINT)
     RUN_STATE = STORE.open()
@@ -3320,13 +3632,17 @@ else:
                 "population_digest": POPULATION_DIGEST,
                 "exclusion_digest": EXCLUSION.digest,
                 "selected_layer": SELECTED_LAYER,
+                "selected_lens_arm": SELECTED_LENS_ARM.to_dict(),
+                "representation_space": SELECTED_LENS_ARM.space_name,
             },
         ),
     )
     CONVERGENCE_STORE_STATE = CONVERGENCE_STORE.open()
     print(f"convergence store: {CONVERGENCE_STORE_STATE}")
 
-    _confirmation_record = dict(CONFIRMATION_RESULTS[int(SELECTED_LAYER)])
+    _confirmation_record = dict(
+        DOWNSTREAM_CONFIRMATION_RESULTS[int(SELECTED_LAYER)]
+    )
     _confirmation_record["layer"] = int(MULTIMODAL_LAYER)
     CONVERGENCE = run_single_layer_convergence(
         population=POPULATION,
@@ -3369,7 +3685,7 @@ else:
         layer=int(SELECTED_LAYER),
         scale=int(ADJACENT_SCALE),
         snapshot={**LENS_SNAPSHOT, "hook_site": ADJACENT_HOOK_SITE},
-        confirmation_verdict=CONFIRMATION_RESULTS[int(SELECTED_LAYER)],
+        confirmation_verdict=DOWNSTREAM_CONFIRMATION_RESULTS[int(SELECTED_LAYER)],
         invariance=INVARIANCE,
         calibration_modality="text-only",
     )
@@ -3420,8 +3736,10 @@ hypothesis, and those Stage-3 outcomes are the study's primary reported verdicts
 is stamped `gate_overridden: true` and `DESCRIPTIVE_ONLY` in every artifact, and
 its numbers never support the principal claim.
 
-The intervention family is the completed open-prompt follow-up's — additive
-J-space residual steering — reused unchanged so the two are comparable. It is
+The intervention family is the completed open-prompt follow-up's: additive
+residual steering reconstructed from the selected lens arm's coordinate space,
+reused unchanged so the two are comparable. Raw J produces J-space directions;
+the secondary RelP arm produces R-space directions. Results are never pooled. It is
 **not** an Anthropic two-coordinate swap, and nothing here calls it one.
 
 Required controls: matched random direction, external unrelated concept,
@@ -3438,7 +3756,9 @@ from jlens.mmpilot.preconvergence import LAYER_NOT_CONVERGED, stage_four_decisio
 
 GATES = refresh_gates()
 STAGE_4 = stage_four_decision(
-    lens_verdict=str((LENS_VERDICT or {}).get("verdict", "ADJACENT_LENS_NO_GO")),
+    lens_verdict=str(
+        (DOWNSTREAM_LENS_VERDICT or {}).get("verdict", "ADJACENT_LENS_NO_GO")
+    ),
     convergence_verdict=str(
         (CONVERGENCE_VERDICT or {}).get("verdict", "REFUSED_INVALID")
     ),
@@ -3471,7 +3791,7 @@ print(f"WHY THIS IS AN EFFICIENCY GATE: {STAGE_4['rationale']}")
 
 code(
     '''
-# 19b. Stage 4, if it runs: source-derived J-space steering at the selected layer.
+# 19b. Stage 4, if it runs: source-derived steering in the selected lens space.
 from jlens.mmpilot.preconvergence import assert_causal_controls_recorded
 
 # Re-derived here as well as in 19a: this is the cell that actually spends the
@@ -3512,7 +3832,7 @@ else:
     from jlens.mmpilot.tri_modal import causal_transfer_verdict
 
     if RUN_REAL_PRECONVERGENCE_STUDY:
-        CAUSAL_LENS = FIT_RESULT.lens_for_scale(ADJACENT_SCALE)
+        CAUSAL_LENS = DOWNSTREAM_FIT_RESULT.lens_for_scale(ADJACENT_SCALE)
     else:
         # MOCK ONLY. The pilot decoder is a different stack from the 42-block
         # calibration stack, so a lens fitted at physical layers 27-31 cannot be
@@ -3713,7 +4033,7 @@ SAME_POPULATION = assert_same_population(
 )
 
 VERDICTS = preconvergence_verdicts(
-    lens_verdict=LENS_VERDICT
+    lens_verdict=DOWNSTREAM_LENS_VERDICT
     or {
         "verdict": "ADJACENT_LENS_NO_GO",
         "selected_layer": None,
@@ -3724,6 +4044,10 @@ VERDICTS = preconvergence_verdicts(
     causal_controls=CAUSAL_CONTROLS,
     stage_four=STAGE_4,
     same_population=SAME_POPULATION,
+    lens_arm=(SELECTED_LENS_ARM.to_dict() if SELECTED_LENS_ARM else None),
+    representation_space=(
+        SELECTED_LENS_ARM.space_name if SELECTED_LENS_ARM else "J_SPACE"
+    ),
 )
 
 print("=" * 72)
@@ -3789,10 +4113,16 @@ if RUN_DIR is None or STUDY_FINGERPRINT is None:
         # study's result and is written on its own.
         _no_go = {
             "schema": "jlens.calibration.adjacent_lens_no_go.v1",
-            "verdict": (LENS_VERDICT or {}).get("verdict", "ADJACENT_LENS_NO_GO"),
-            "selection": SELECTION,
-            "lens_verdict": LENS_VERDICT,
-            "fit": FIT_RECORD,
+            "verdict": (DUAL_SELECTION or {}).get("headline", "BOTH_LENS_ARMS_NO_GO"),
+            "dual_selection": DUAL_SELECTION,
+            "raw_j": {
+                "selection": SELECTION, "lens_verdict": LENS_VERDICT,
+                "fit": FIT_RECORD,
+            },
+            "r_lens": {
+                "selection": R_SELECTION, "lens_verdict": R_LENS_VERDICT,
+                "fit": R_FIT_RECORD, "method": R_LENS_METHOD.to_dict(),
+            },
             "confirmation_manifest": CONFIRMATION_MANIFEST,
             "untouched_audit": UNTOUCHED_AUDIT,
             "verdicts": VERDICTS,
@@ -3859,9 +4189,11 @@ else:
         ),
         "units_computed": (CONVERGENCE or {}).get("units_computed"),
         "units_reused": (CONVERGENCE or {}).get("units_reused"),
-        "fit_n_done": (FIT_RECORD or {}).get("n_done"),
-        "fit_checkpoint": (FIT_RECORD or {}).get("checkpoint_path"),
-        "fit_checkpoint_every": (FIT_RECORD or {}).get("checkpoint_every"),
+        "fit_n_done": (DOWNSTREAM_FIT_RECORD or {}).get("n_done"),
+        "fit_checkpoint": (DOWNSTREAM_FIT_RECORD or {}).get("checkpoint_path"),
+        "fit_checkpoint_every": (DOWNSTREAM_FIT_RECORD or {}).get("checkpoint_every"),
+        "raw_j_fit": FIT_RECORD,
+        "r_lens_fit": R_FIT_RECORD,
         "preprocessing_files_computed": PREP["files_computed_this_session"],
         "preprocessing_files_reused": PREP["files_reused_from_drive"],
         "atomicity": (
@@ -3877,11 +4209,11 @@ else:
     SUMMARY = build_summary(
         fingerprint=STUDY_FINGERPRINT,
         verdicts=VERDICTS,
-        lens_verdict=LENS_VERDICT,
+        lens_verdict=DOWNSTREAM_LENS_VERDICT,
         confirmation_manifest=CONFIRMATION_MANIFEST,
         untouched_audit=UNTOUCHED_AUDIT,
         source_layer_record=SOURCE_LAYERS,
-        fit_record=FIT_RECORD or {},
+        fit_record=DOWNSTREAM_FIT_RECORD or {},
         convergence=CONVERGENCE_VERDICT,
         convergence_controls=CONTROLS_RECORD,
         capability=CAPABILITY_VERDICT or {},
@@ -3905,16 +4237,35 @@ else:
         mode=CONFIG.mode,
         preparation=POPULATION_MANIFEST["preparation"],
         frozen_concept_feasibility=FEASIBILITY,
+        lens_arms={
+            "protocol": LENS_ARM_PROTOCOL,
+            "dual_selection": DUAL_SELECTION,
+            "raw_j": {"fit": FIT_RECORD, "verdict": LENS_VERDICT},
+            "r_lens": {
+                "fit": R_FIT_RECORD,
+                "verdict": R_LENS_VERDICT,
+                "method": R_LENS_METHOD.to_dict(),
+            },
+            "downstream_arm": (
+                SELECTED_LENS_ARM.to_dict() if SELECTED_LENS_ARM else None
+            ),
+            "arms_pooled": False,
+        },
     )
     REPORT_MARKDOWN = render_report(SUMMARY)
 
     for _name, _payload in (
         ("l27_l31_preconvergence_summary.json", SUMMARY),
         ("adjacent_lens_table.json", {
+            "dual_selection": DUAL_SELECTION,
             "selection": SELECTION,
             "lens_verdict": LENS_VERDICT,
+            "r_selection": R_SELECTION,
+            "r_lens_verdict": R_LENS_VERDICT,
             "lens_integrity": LENS_INTEGRITY,
             "fit": FIT_RECORD,
+            "r_fit": R_FIT_RECORD,
+            "r_lens_method": R_LENS_METHOD.to_dict(),
             "corpus": CORPUS_MANIFEST,
             "confirmation_manifest": CONFIRMATION_MANIFEST,
             "untouched_audit": UNTOUCHED_AUDIT,
@@ -4014,8 +4365,11 @@ print()
 if RESUME is None:
     print("RESUME: no scientific stage completed in this session.")
     if FIT_RECORD is not None:
-        print(f"  fitting reached n_done={FIT_RECORD['n_done']} and is durable at")
+        print(f"  raw-J fitting reached n_done={FIT_RECORD['n_done']} and is durable at")
         print(f"  {FIT_RECORD['checkpoint_path']}")
+    if R_FIT_RECORD is not None:
+        print(f"  R-lens fitting reached n_done={R_FIT_RECORD['n_done']} and is durable at")
+        print(f"  {R_FIT_RECORD['checkpoint_path']}")
 else:
     print("RESUME")
     print(f"  run state             {RESUME['run_state']}")

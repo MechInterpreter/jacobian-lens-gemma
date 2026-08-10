@@ -300,13 +300,20 @@ def _convergence_inputs(classification=NOT_CONVERGED, **overrides):
         "controls": {"passed": True, "missing_or_empty": [], "failing": []},
         "disjointness": {"disjoint": True, "failed_families": []},
         "pseudoreplication": {
-            "passed": True, "n_units": 48, "n_distinct_images": 48,
+            "passed": True,
+            "n_units": 48,
+            "n_distinct_images": 48,
         },
         "sample_plan": {"plan_digest": "sha256:plan"},
-        "head_agreement": {"passed": True, "matches_model_unembed": True,
-                           "comparison_ran": True},
-        "admissibility": {"eligible_concepts": ["cat", "zebra"],
-                          "excluded_concept_names": []},
+        "head_agreement": {
+            "passed": True,
+            "matches_model_unembed": True,
+            "comparison_ran": True,
+        },
+        "admissibility": {
+            "eligible_concepts": ["cat", "zebra"],
+            "excluded_concept_names": [],
+        },
         "leakage_audit": {"passed": True, "per_modality": {}},
     }
     payload.update(overrides)
@@ -348,8 +355,11 @@ def test_a_leaked_candidate_refuses_the_whole_measurement():
 
 def test_missing_controls_are_not_an_ambiguous_result():
     inputs = _convergence_inputs(AMBIGUOUS)
-    inputs["controls"] = {"passed": False, "missing_or_empty": ["permuted"],
-                          "failing": []}
+    inputs["controls"] = {
+        "passed": False,
+        "missing_or_empty": ["permuted"],
+        "failing": [],
+    }
     verdict = convergence_verdict_for_layer(**inputs)
     assert verdict["verdict"] == REFUSED_INVALID
     assert "has observed nothing" in verdict["rationale"]
@@ -462,6 +472,7 @@ def _verdicts(
     runs=True,
     overridden=False,
     combinable=True,
+    representation_space="J_SPACE",
 ):
     return preconvergence_verdicts(
         lens_verdict={
@@ -476,7 +487,9 @@ def _verdicts(
         ),
         causal=({"verdict": causal} if causal else None),
         causal_controls={
-            "passed": controls_pass, "missing_or_empty": [], "failing": [],
+            "passed": controls_pass,
+            "missing_or_empty": [],
+            "failing": [],
         },
         stage_four={
             "runs": runs,
@@ -484,6 +497,10 @@ def _verdicts(
             "statement": "s",
         },
         same_population={"combinable": combinable},
+        lens_arm={
+            "label": "R_LENS" if representation_space == "R_SPACE" else "RAW_J_LENS"
+        },
+        representation_space=representation_space,
     )
 
 
@@ -570,6 +587,14 @@ def test_the_principal_claim_names_the_same_layer_and_population_requirement():
     joined = " ".join(payload["principal_claim_requires"])
     assert "one and the same physical layer" in joined
     assert "same independent multimodal population" in joined
+
+
+def test_r_lens_arm_is_reported_as_r_space_and_never_raw_j_space():
+    payload = _verdicts(representation_space="R_SPACE")
+    assert payload["representation_space"] == "R_SPACE"
+    assert payload["arms_pooled"] is False
+    assert "confirmed R-lens" in payload["statement"]
+    assert "R-space residual steering" in payload["coordinate_swap_scope"]
 
 
 # ------------------------------------------------------------- lens integrity

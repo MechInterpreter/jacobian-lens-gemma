@@ -28,6 +28,7 @@ import math
 import os
 import time
 from collections.abc import Callable, Sequence
+from contextlib import nullcontext
 
 import torch
 
@@ -106,6 +107,7 @@ def jacobian_for_prompt(
     dim_batch: int = 8,
     max_seq_len: int = 128,
     skip_first: int = SKIP_FIRST_N_POSITIONS,
+    backward_context: Callable[[], object] | None = None,
 ) -> tuple[dict[int, torch.Tensor], int, int]:
     """Compute the per-layer Jacobian estimator ``J_l`` for one prompt.
 
@@ -152,6 +154,7 @@ def jacobian_for_prompt(
     n_passes = math.ceil(d_model / dim_batch)
 
     with (
+        backward_context() if backward_context is not None else nullcontext(),
         ActivationRecorder(
             model.layers,
             at=[*source_layers, target_layer],
@@ -234,6 +237,8 @@ def fit(
     checkpoint_every: int | None = 1,
     resume: bool = True,
     on_prompt: Callable[[dict], None] | None = None,
+    backward_rule: str = "ordinary_autograd",
+    backward_context: Callable[[], object] | None = None,
 ) -> JacobianLens:
     """Fit ``J_l`` over a list of prompts and return a :class:`JacobianLens`.
 
@@ -300,6 +305,7 @@ def fit(
             ("source_layers", source_layers),
             ("target_layer", target_layer),
             ("skip_first", skip_first),
+            ("backward_rule", backward_rule),
         ):
             if key in state and state[key] != expected:
                 raise ValueError(
@@ -334,6 +340,7 @@ def fit(
                     "source_layers": source_layers,
                     "target_layer": target_layer,
                     "skip_first": skip_first,
+                    "backward_rule": backward_rule,
                 },
                 checkpoint_path,
             )
@@ -352,6 +359,7 @@ def fit(
                 dim_batch=dim_batch,
                 max_seq_len=max_seq_len,
                 skip_first=skip_first,
+                backward_context=backward_context,
             )
         except ValueError as exc:
             logger.warning("  skipping prompt %d: %s", prompt_idx, exc)
@@ -369,6 +377,7 @@ def fit(
                         "n_done": n_done,
                         "checkpoint_path": checkpoint_path,
                         "checkpoint_written": False,
+                        "backward_rule": backward_rule,
                     }
                 )
             continue
@@ -424,6 +433,7 @@ def fit(
                     "checkpoint_path": checkpoint_path,
                     "checkpoint_written": checkpoint_written
                     and checkpoint_path is not None,
+                    "backward_rule": backward_rule,
                 }
             )
 
