@@ -759,6 +759,91 @@ def discover_category_universe(
     )
 
 
+#: How a universe recovered from a cached manifest is labelled. It is not the
+#: same object as one read from ``instances_*.json``, and calling it one would
+#: hide the difference that matters: category *ids* are not in the cache.
+RECOVERED_UNIVERSE_SOURCE = "recovered_from_persisted_concept_annotations"
+
+
+def universe_from_concept_annotations(
+    groups: Sequence[Mapping],
+    *,
+    annotation_field: str = "concept_annotations",
+) -> CategoryUniverse:
+    """Rebuild the category universe from a cached expanded manifest's groups.
+
+    :func:`attach_concept_annotations` writes every image's COCO category names
+    onto its group, so a persisted manifest already carries the universe that
+    was discovered when it was built — as names. That is enough for the
+    lexicon, the evidence rule and the concept ranking, all of which key on the
+    name.
+
+    It is **not** enough for :attr:`CategoryUniverse.universe_hash`, which also
+    covers the numeric category ids, and those are not in the cache. Rather
+    than invent them, ``category_ids`` is left empty and the source entry says
+    so explicitly. A caller that binds ``universe_hash`` into a fingerprint will
+    therefore get a *different* hash from the discovery path, which is correct:
+    the two were established from different evidence, and pretending otherwise
+    is how a cache silently becomes the authority on something it never saw.
+
+    The recovered universe is capped at the categories that actually appear in
+    the cached groups. A category present in COCO but absent from every
+    selected image cannot be a concept for this study anyway, so nothing usable
+    is lost.
+
+    Raises:
+        CategoryDiscoveryError: If no group carries any annotation. A cache
+            with no visual evidence cannot support the evidence rule, and a
+            silent empty universe would present as "no concept qualifies".
+    """
+    names: set[str] = set()
+    n_annotated = 0
+    for group in groups:
+        found = group.get(annotation_field) or ()
+        if isinstance(found, (str, bytes)):
+            found = [found]
+        cleaned = {
+            " ".join(str(item).lower().split()) for item in found if str(item).strip()
+        }
+        if cleaned:
+            n_annotated += 1
+        names |= cleaned
+    if not names:
+        raise CategoryDiscoveryError(
+            f"none of the {len(groups)} cached group(s) carries a "
+            f"{annotation_field!r} entry, so the COCO category universe cannot "
+            "be recovered from this manifest. Either the manifest predates "
+            "attach_concept_annotations or it was built without annotation "
+            "sources; in both cases the visual half of the evidence rule is "
+            "unavailable and the study must not proceed on caption text alone."
+        )
+    ordered = tuple(sorted(names))
+    return CategoryUniverse(
+        categories=ordered,
+        category_ids={name: () for name in ordered},
+        supercategories={},
+        sources=(
+            {
+                "path": RECOVERED_UNIVERSE_SOURCE,
+                "usable": True,
+                "is_instance_file": False,
+                "n_categories": len(ordered),
+                "n_groups_scanned": len(groups),
+                "n_groups_with_annotations": n_annotated,
+                "selection": RECOVERED_UNIVERSE_SOURCE,
+                "category_ids_available": False,
+                "note": (
+                    "category names recovered from persisted concept_annotations; "
+                    "COCO numeric ids are not serialized in an expanded manifest, "
+                    "so category_ids is empty and universe_hash is NOT comparable "
+                    "to a hash produced from instances_*.json"
+                ),
+            },
+        ),
+        specs={name: lexical_spec(name) for name in ordered},
+    )
+
+
 def format_lexical_table(universe: CategoryUniverse, *, limit: int | None = None) -> str:
     """The discovered universe with each category's status and terms."""
     header = f"{'category':16s} {'status':22s} {'terms':6s} exclusions / note"
@@ -782,6 +867,7 @@ __all__ = [
     "CONCEPT_UNIVERSE_VERSION",
     "INSTANCE_FILE_PREFIXES",
     "LEXICAL_SPEC_VERSION",
+    "RECOVERED_UNIVERSE_SOURCE",
     "CategoryDiscoveryError",
     "CategoryUniverse",
     "LexicalSpec",
@@ -790,4 +876,5 @@ __all__ = [
     "is_instance_annotation_path",
     "lexical_spec",
     "safe_plural",
+    "universe_from_concept_annotations",
 ]

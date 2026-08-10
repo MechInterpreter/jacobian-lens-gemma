@@ -469,6 +469,177 @@ class ExpansionResult:
         }
 
 
+class ExpandedManifestIncompatible(RuntimeError):
+    """A stored expanded manifest was not derived from these inputs.
+
+    Raised rather than silently rebuilt, because the two failures look
+    identical from a notebook's point of view and cost very different amounts:
+    a genuine miss is twenty-five minutes of honest work, and a fingerprint
+    typo is twenty-five minutes of work whose result is then discarded.
+    """
+
+    def __init__(self, message: str, *, record: Mapping | None = None) -> None:
+        super().__init__(message)
+        self.record = dict(record or {})
+
+
+def expanded_manifest_compatibility(
+    stored: Mapping | None,
+    *,
+    original_checksum: str,
+    expected_sources: Mapping[str, str],
+    conversion: Mapping,
+    expected_group_count: int | None = None,
+    expected_lexicon_hash: str | None = None,
+) -> dict:
+    """Clause-by-clause: was ``stored`` derived from exactly these inputs?
+
+    Every clause is reported with its own flag and its two values, so a miss
+    says *which* input moved instead of only that something did.
+
+    ``expected_group_count`` and ``expected_lexicon_hash`` are optional
+    because they are assertions about a *particular* cache a study expects to
+    find, not properties of the format. A study that knows it is loading the
+    125,198-group join states the number and gets a refusal if it is handed a
+    48-group smoke manifest.
+    """
+    stored = dict(stored or {})
+    recorded_conversion = dict(stored.get("conversion") or {})
+    clauses = [
+        {
+            "clause": "schema_version",
+            "expected": DERIVATION_SCHEMA_VERSION,
+            "found": stored.get("schema_version"),
+        },
+        {
+            "clause": "original_manifest_checksum",
+            "expected": str(original_checksum),
+            "found": stored.get("original_manifest_checksum"),
+        },
+        {
+            "clause": "source_metadata_checksums",
+            "expected": dict(expected_sources),
+            "found": stored.get("source_metadata_checksums"),
+        },
+        {
+            "clause": "conversion_hash",
+            "expected": payload_checksum(dict(conversion)),
+            "found": stored.get("conversion_hash"),
+        },
+    ]
+    if expected_group_count is not None:
+        clauses.append(
+            {
+                "clause": "n_groups",
+                "expected": int(expected_group_count),
+                "found": (
+                    int(stored["n_groups"]) if "n_groups" in stored else None
+                ),
+            }
+        )
+    if expected_lexicon_hash is not None:
+        clauses.append(
+            {
+                "clause": "evidence_lexicon_hash",
+                "expected": str(expected_lexicon_hash),
+                "found": recorded_conversion.get("evidence_lexicon_hash"),
+            }
+        )
+    for clause in clauses:
+        clause["passed"] = clause["found"] == clause["expected"]
+    failed = [clause["clause"] for clause in clauses if not clause["passed"]]
+    return {
+        "schema": "jlens.mmpilot.expanded_manifest_compatibility.v1",
+        "derivation_schema_version": DERIVATION_SCHEMA_VERSION,
+        "clauses": clauses,
+        "failed_clauses": failed,
+        "compatible": not failed,
+        "n_groups": stored.get("n_groups"),
+    }
+
+
+def load_expanded_manifest(
+    path: str | os.PathLike[str],
+    *,
+    original_checksum: str,
+    expected_sources: Mapping[str, str],
+    conversion: Mapping,
+    expected_group_count: int | None = None,
+    expected_lexicon_hash: str | None = None,
+) -> tuple[dict, dict]:
+    """Read a compatible expanded manifest **without building one**.
+
+    This is the half of :func:`persist_expanded_manifest` that a resuming study
+    actually needs, separated out because the combined function cannot be used
+    for a cache hit: it takes an :class:`ExpansionResult`, so by the time it can
+    say "compatible, reuse it" the caller has already paid for
+    :func:`build_expanded_manifest` and the entire evidence join. The
+    compatibility test never depended on the rebuild — only on the source
+    checksums, which are cheap — so it is available here on its own.
+
+    The manifest is opened read-only and nothing is written.
+
+    Returns:
+        ``(payload, record)``. ``payload`` is the stored document, groups
+        included; ``record`` is the clause table.
+
+    Raises:
+        ExpandedManifestIncompatible: If the file is missing, unreadable, or
+            fails any clause.
+    """
+    target = Path(path)
+    if not target.is_file():
+        raise ExpandedManifestIncompatible(
+            f"no expanded manifest at {target}; there is nothing to load and "
+            "this loader does not build one",
+            record={"path": str(target), "present": False, "compatible": False},
+        )
+    try:
+        stored = json.loads(target.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+        raise ExpandedManifestIncompatible(
+            f"{target} is not readable JSON: {exc}",
+            record={"path": str(target), "present": True, "readable": False},
+        ) from exc
+    if not isinstance(stored, Mapping):
+        raise ExpandedManifestIncompatible(
+            f"{target} does not hold a JSON object",
+            record={"path": str(target), "present": True, "readable": False},
+        )
+    record = expanded_manifest_compatibility(
+        stored,
+        original_checksum=original_checksum,
+        expected_sources=expected_sources,
+        conversion=conversion,
+        expected_group_count=expected_group_count,
+        expected_lexicon_hash=expected_lexicon_hash,
+    )
+    record["path"] = str(target)
+    record["present"] = True
+    record["readable"] = True
+    record["manifest_file_checksum"] = manifest_checksum(str(target))
+    if not record["compatible"]:
+        detail = "\n  - ".join(
+            f"{clause['clause']}: expected {clause['expected']!r}, "
+            f"found {clause['found']!r}"
+            for clause in record["clauses"]
+            if not clause["passed"]
+        )
+        raise ExpandedManifestIncompatible(
+            f"{target} was derived from different inputs:\n  - {detail}\n"
+            "Refusing to reuse it. Point the study at the cache it belongs to, "
+            "or rebuild deliberately.",
+            record=record,
+        )
+    if not isinstance(stored.get("groups"), list):
+        raise ExpandedManifestIncompatible(
+            f"{target} passed every provenance clause but carries no 'groups' "
+            "list, so there is nothing to load",
+            record=record,
+        )
+    return dict(stored), record
+
+
 def persist_expanded_manifest(
     path: str | os.PathLike[str],
     result: ExpansionResult,
@@ -476,22 +647,26 @@ def persist_expanded_manifest(
     original_checksum: str,
     conversion: Mapping,
 ) -> tuple[dict, str]:
-    """Atomically save, or reuse only when source checksums/config match."""
+    """Atomically save, or reuse only when source checksums/config match.
+
+    Note that reuse here is a *late* check: the caller has already built
+    ``result``. Use :func:`load_expanded_manifest` when the point is to avoid
+    the build.
+    """
     path = Path(path)
     expected_sources = {source.path: source.checksum for source in result.sources}
-    expected_conversion = payload_checksum(dict(conversion))
     if path.is_file():
         try:
             stored = json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             stored = {}
-        compatible = (
-            stored.get("schema_version") == DERIVATION_SCHEMA_VERSION
-            and stored.get("original_manifest_checksum") == original_checksum
-            and stored.get("source_metadata_checksums") == expected_sources
-            and stored.get("conversion_hash") == expected_conversion
+        record = expanded_manifest_compatibility(
+            stored,
+            original_checksum=original_checksum,
+            expected_sources=expected_sources,
+            conversion=conversion,
         )
-        if compatible:
+        if record["compatible"]:
             return stored, "resuming: reused checksum-compatible expanded manifest"
     payload = result.to_dict(original_checksum=original_checksum, conversion=conversion)
     UnitStore._write_json(path, payload)
