@@ -38,6 +38,7 @@ from torch import nn
 from jlens.lens import JacobianLens
 from jlens.mmpilot.backend import BuiltInputs, file_checksum, text_hash
 from jlens.mmpilot.manifest import caption_mentions
+from jlens.mmpilot.store import safe_key
 
 MOCK_D_MODEL = 24
 MOCK_VOCAB = 64
@@ -1627,4 +1628,108 @@ def build_mock_extension_run(
             layer=int(layer),
             scale=int(scale),
         ),
+    }
+
+
+# ------------------------------------------- a completed run to be independent of
+
+#: The unit stages a mock completed run writes into. Enough for
+#: :func:`jlens.mmpilot.l32_resolution.harvest_excluded_identities` to have to
+#: walk more than one shape, which is the behaviour that matters.
+MOCK_COMPLETED_STAGES: tuple[str, ...] = ("capability", "activation")
+
+
+def build_mock_completed_run(
+    root: str | Path,
+    groups: Sequence[Mapping],
+    *,
+    modalities: Sequence[str] = ("text", "image", "spoken_audio"),
+    layer: int = MOCK_EXTENSION_LAYER,
+    run_fingerprint: str = "sha256:mock-completed-followup",
+    write_split_provenance: bool = True,
+) -> dict:
+    """Write a completed-run directory whose media a later study must avoid.
+
+    The point is not to simulate a whole study — it is to reproduce the *shape*
+    the exclusion harvest has to read: per-unit JSON under ``units/<stage>/``
+    with the identity nested inside a ``payload``, a ``fingerprint.json``
+    carrying ``source_sample_ids`` / ``target_sample_ids``, and a
+    ``split_provenance.json`` that carries none of them. A harvest that only
+    knew one of those three would pass a test written against that one and lose
+    identities on the real directory.
+
+    Nothing here is scientific. The unit payloads carry identities and nothing
+    a verdict could be computed from.
+    """
+    root = Path(root)
+    groups = [dict(group) for group in groups]
+    written = 0
+    for stage in MOCK_COMPLETED_STAGES:
+        stage_dir = root / "units" / stage
+        stage_dir.mkdir(parents=True, exist_ok=True)
+        for group in groups:
+            for modality in modalities:
+                identifier = f"{group['group_id']}::{modality}"
+                payload = {
+                    "sample_id": identifier,
+                    "group_id": str(group["group_id"]),
+                    "image_id": str(group["image_id"]),
+                    "modality": modality,
+                    "split": str(group.get("split", "test")),
+                    "layer": int(layer),
+                }
+                path = stage_dir / f"{safe_key(identifier, stage)}.json"
+                path.write_text(
+                    json.dumps(
+                        {
+                            "schema": "jlens.mmpilot.unit.v1",
+                            "stage": stage,
+                            "key": path.stem,
+                            "fingerprint_digest": run_fingerprint,
+                            "payload": payload,
+                        },
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                )
+                written += 1
+
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "fingerprint.json").write_text(
+        json.dumps(
+            {
+                "protocol": "mmpilot.l32_open_prompt_followup.v1",
+                "fingerprint_digest": run_fingerprint,
+                "source_sample_ids": sorted(
+                    str(g["group_id"]) for g in groups if g.get("split") == "train"
+                ),
+                "target_sample_ids": sorted(
+                    str(g["group_id"]) for g in groups if g.get("split") != "train"
+                ),
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    if write_split_provenance:
+        (root / "split_provenance.json").write_text(
+            json.dumps(
+                {
+                    "seed": "mock-completed",
+                    "n_groups": len(groups),
+                    "n_distinct_images": len({str(g["image_id"]) for g in groups}),
+                    "note": "carries counts, deliberately no identities",
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    return {
+        "root": str(root),
+        "n_units": written,
+        "n_groups": len(groups),
+        "group_ids": sorted(str(g["group_id"]) for g in groups),
+        "image_ids": sorted({str(g["image_id"]) for g in groups}),
+        "audio_paths": sorted({str(g["audio_path"]) for g in groups if g.get("audio_path")}),
+        "captions": sorted({str(g["caption"]) for g in groups if g.get("caption")}),
     }
