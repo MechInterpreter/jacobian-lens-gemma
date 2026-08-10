@@ -1968,8 +1968,8 @@ elif RUN_REAL_L32_CONVERGENCE_RESOLUTION:
     _contract_failures = check_call_contracts()
     if _contract_failures:
         raise RuntimeError(
-            "real-path call contracts do not bind; refusing the model load:\n  - "
-            + "\n  - ".join(_contract_failures)
+            "real-path call contracts do not bind; refusing the model load:\\n  - "
+            + "\\n  - ".join(_contract_failures)
         )
     print("real-path call contracts: PASS")
 
