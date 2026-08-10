@@ -1959,26 +1959,47 @@ if not MODEL_STAGE_ENABLED:
         print("(PREPROCESSING_ONLY is True, so every model gate is forced shut.)")
     print("Nothing below this cell computes a result.")
 elif RUN_REAL_L32_CONVERGENCE_RESOLUTION:
-    from jlens.mmpilot.preflight import preflight
-    from jlens.mmpilot.real_backend import load_real_bundle
+    import getpass
+
+    from jlens.mmpilot.preflight import check_call_contracts
+    from jlens.mmpilot.real_backend import build_real_backend
     from jlens.mmpilot.tri_modal import assert_audio_protocol
 
-    PREFLIGHT = preflight(
-        model_repo_id=MODEL_REPO_ID,
-        model_revision=MODEL_REVISION,
+    _contract_failures = check_call_contracts()
+    if _contract_failures:
+        raise RuntimeError(
+            "real-path call contracts do not bind; refusing the model load:\n  - "
+            + "\n  - ".join(_contract_failures)
+        )
+    print("real-path call contracts: PASS")
+
+    if not os.environ.get("HF_TOKEN"):
+        _token = getpass.getpass("HF_TOKEN (input hidden): ").strip()
+        if not _token:
+            raise RuntimeError("a Hugging Face token is required for the gated repo")
+        os.environ["HF_TOKEN"] = _token
+
+    BUNDLE = build_real_backend(
+        MODEL_REPO_ID,
+        revision=MODEL_REVISION,
+        token=os.environ["HF_TOKEN"],
+        device="cuda" if torch.cuda.is_available() else "cpu",
+        allow_model_load=True,
         expect_n_layers=EXPECT_N_LAYERS,
         expect_d_model=EXPECT_D_MODEL,
-        expect_vocab=EXPECT_VOCAB,
+        expect_vocab_size=EXPECT_VOCAB,
+        resolve_audio=True,
     )
-    BUNDLE = load_real_bundle(
-        model_repo_id=MODEL_REPO_ID,
-        model_revision=MODEL_REVISION,
-        layers=tuple(CONFIG.layers),
-    )
-    MODEL = BUNDLE.model
+    MODEL = BUNDLE.lens_model
     BACKEND = BUNDLE.backend
     MODEL_REVISION_USED = BUNDLE.model_revision
     PROCESSOR_REVISION_USED = BUNDLE.processor_revision
+    if BUNDLE.audio_interface is None:
+        raise RuntimeError(
+            "the native spoken-audio path did not resolve: "
+            f"{BUNDLE.audio_blocked_reason}. This study cannot silently "
+            "degrade to text and image."
+        )
     AUDIO_PROTOCOL = assert_audio_protocol(
         BUNDLE.audio_interface,
         expected_fingerprint=AUDIO_PROTOCOL_FINGERPRINT_EXPECTED,

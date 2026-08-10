@@ -149,6 +149,17 @@ def test_audio_protocol_validator_is_imported_from_its_defining_module(notebook)
     assert "from jlens.mmpilot.audio import assert_audio_protocol" not in source
 
 
+def test_real_model_cell_uses_existing_package_entry_points(notebook):
+    """The real-only branch must use the APIs exercised by existing studies."""
+    source = _code_source(notebook)
+    assert "from jlens.mmpilot.preflight import check_call_contracts" in source
+    assert "from jlens.mmpilot.real_backend import build_real_backend" in source
+    assert "from jlens.mmpilot.preflight import preflight" not in source
+    assert "load_real_bundle" not in source
+    assert "MODEL = BUNDLE.lens_model" in source
+    assert "resolve_audio=True" in source
+
+
 def test_the_cache_is_loaded_never_rebuilt_on_the_default_path(notebook):
     source = _code_source(notebook)
     assert "load_expanded_manifest" in source
@@ -323,7 +334,7 @@ def test_the_sample_size_is_printed_before_any_model_is_loaded(notebook):
     model_cell = next(
         index
         for index, cell in enumerate(cells)
-        if "load_real_bundle" in "".join(cell["source"])
+        if "build_real_backend" in "".join(cell["source"])
     )
     assert plan_cell < model_cell
 
