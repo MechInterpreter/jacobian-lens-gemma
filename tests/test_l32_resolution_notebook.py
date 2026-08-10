@@ -135,6 +135,8 @@ def test_the_cache_is_loaded_never_rebuilt_on_the_default_path(notebook):
     source = _code_source(notebook)
     assert "load_expanded_manifest" in source
     assert "ALLOW_MANIFEST_REBUILD = False" in source
+    assert 'f"{COMPLETED_RUN_DIRS[0]}/expanded_manifest.json"' in source
+    assert "cstf_spokencoco_derived" not in source
     # The only build_expanded_manifest call sits inside the MOCK-only cache
     # manufacturing branch, which the real path never enters.
     assert source.count("expansion_module.build_expanded_manifest(") == 1

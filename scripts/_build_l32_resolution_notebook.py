@@ -312,10 +312,12 @@ COMPLETED_RUN_DIRS = (
 COMPLETED_FOLLOWUP_SUMMARY = "l32_followup_report.json"
 
 # --------------------------------------------------- the cached evidence join
-# Written by an earlier study; opened READ-ONLY and never rebuilt here.
+# The completed L32 follow-up is already a pinned, read-only dependency and is
+# the run that actually persisted the verified 125,198-group manifest on the
+# user's Drive. Derive the cache path from that pin instead of guessing that a
+# separately migrated dataset-level cache exists.
 CACHED_EXPANDED_MANIFEST = (
-    "/content/drive/MyDrive/datasets/cstf_spokencoco_derived/"
-    "jlens_mmpilot_v1/expanded_manifest.json"
+    f"{COMPLETED_RUN_DIRS[0]}/expanded_manifest.json"
 )
 EXPECTED_CACHED_GROUP_COUNT = 125198
 
