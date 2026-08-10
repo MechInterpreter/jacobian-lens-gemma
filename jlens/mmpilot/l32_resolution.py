@@ -347,6 +347,17 @@ def _absorb(target: ExclusionSet, payload: object, *, depth: int = 0) -> int:
     return found
 
 
+def absorb_identities(target: ExclusionSet, payload: object) -> int:
+    """Pull every identity out of one artifact payload into ``target``.
+
+    The public entry point to the walk :func:`harvest_excluded_identities` uses
+    internally. :mod:`jlens.mmpilot.prep_cache` harvests the same artifacts one
+    checkpointed batch at a time and must absorb them by *exactly* the same
+    rule, or the two harvests would disagree about what a completed run spent.
+    """
+    return _absorb(target, payload)
+
+
 def harvest_excluded_identities(
     run_dirs: Sequence[str | os.PathLike[str]],
     *,
@@ -530,6 +541,228 @@ def independent_pool(
         ),
     }
     return kept, record
+
+
+# ============================================== the frozen concepts, checked
+
+
+#: How the frozen six are checked against a fresh pool.
+FROZEN_CONCEPT_FEASIBILITY_VERSION = "mmpilot.l32_resolution_frozen_feasibility.v1"
+
+#: Stated once, bound into the feasibility record, and quoted in the report.
+SUBSTITUTION_POLICY = (
+    "The six candidates and the three focal concepts are frozen in the order "
+    "the completed studies fixed. They are set directly, never re-derived from "
+    "this pool's ranking. The ranking is computed and reported because it is "
+    "informative, and it is DESCRIPTIVE ONLY: removing the photographs a "
+    "completed run spent legitimately changes which concepts come out on top "
+    "without making any frozen concept infeasible, and re-ranking into a "
+    "different six would silently change the experiment. A frozen concept that "
+    "genuinely cannot meet the predeclared requirements is a REFUSAL with its "
+    "exact shortfall printed; it is never swapped for another concept, before "
+    "or after any result."
+)
+
+
+class FrozenConceptInfeasible(ResolutionRefused):
+    """A frozen concept cannot meet the predeclared requirements in this pool."""
+
+
+def ranking_digest(ranking: Sequence[Mapping]) -> str:
+    """A digest over the descriptive ranking of the independent pool.
+
+    Bound into the run fingerprint so the ranking a study *saw* is part of what
+    it was, even though the ranking decides nothing here. Only the fields that
+    a reader would call the ranking enter it — scores are rounded, because a
+    float's last bit is not a scientific difference.
+    """
+    return payload_checksum(
+        {
+            "selection_version": POPULATION_SELECTION_VERSION,
+            "rows": [
+                {
+                    "rank": int(row.get("rank") or 0),
+                    "concept": str(row["concept"]),
+                    "feasible": bool(row.get("feasible")),
+                    "score": round(float(row.get("score") or 0.0), 9),
+                    "n_distinct_images": int(row.get("n_distinct_images") or 0),
+                    "n_groups_selected": int(row.get("n_groups_selected") or 0),
+                    "n_train_positives": int(row.get("n_train_positives") or 0),
+                    "n_test_positives": int(row.get("n_test_positives") or 0),
+                    "unmet": [str(item) for item in (row.get("unmet") or [])],
+                }
+                for row in ranking
+            ],
+        }
+    )
+
+
+def frozen_concept_feasibility(
+    ranking: Sequence[Mapping],
+    *,
+    concepts: Sequence[str] = SELECTED_CONCEPTS,
+    focal: Sequence[str] = FOCAL_CONCEPTS,
+    requirements: Mapping | None = None,
+) -> dict:
+    """Check every frozen concept individually against the predeclared bars.
+
+    The mistake this replaces: re-ranking the independent pool, taking its top
+    six and refusing unless they happen to equal the frozen six. That is too
+    strict and it refuses for the wrong reason. Excluding the photographs a
+    completed run already spent removes real coverage from every concept
+    unevenly, so the *order* can move while all six frozen concepts remain
+    comfortably feasible. The question the design actually asks is per concept:
+    can this pool still deliver the predeclared images, groups and split
+    positives for `zebra`, for `cat`, and so on.
+
+    ``ranking`` is :func:`jlens.mmpilot.expansion.rank_concepts`' output, whose
+    rows already carry ``feasible`` and the named ``unmet`` shortfalls. This
+    reads them per frozen concept rather than re-deriving a selection.
+    """
+    rows = {str(row["concept"]): row for row in ranking}
+    focal_set = [str(name) for name in focal]
+    entries: list[dict] = []
+    for concept in concepts:
+        row = rows.get(str(concept))
+        if row is None:
+            entries.append(
+                {
+                    "concept": str(concept),
+                    "present_in_ranking": False,
+                    "feasible": False,
+                    "is_focal": str(concept) in focal_set,
+                    "rank": None,
+                    "unmet": [
+                        "absent: the concept is not in this pool's ranked "
+                        "candidate universe at all"
+                    ],
+                    "counts": {},
+                }
+            )
+            continue
+        entries.append(
+            {
+                "concept": str(concept),
+                "present_in_ranking": True,
+                "feasible": bool(row.get("feasible")),
+                "is_focal": str(concept) in focal_set,
+                "rank": int(row.get("rank") or 0),
+                "score": round(float(row.get("score") or 0.0), 9),
+                "unmet": [str(item) for item in (row.get("unmet") or [])],
+                "evidence_gap": str(row.get("evidence_gap") or ""),
+                "counts": {
+                    "n_distinct_images": int(row.get("n_distinct_images") or 0),
+                    "n_groups_selected": int(row.get("n_groups_selected") or 0),
+                    "n_train_positives": int(row.get("n_train_positives") or 0),
+                    "n_test_positives": int(row.get("n_test_positives") or 0),
+                    "n_negative_groups": int(row.get("n_negative_groups") or 0),
+                },
+            }
+        )
+
+    feasible_in_order = [
+        str(row["concept"]) for row in ranking if row.get("feasible")
+    ]
+    record = {
+        "schema": "jlens.mmpilot.l32_resolution_frozen_feasibility.v1",
+        "version": FROZEN_CONCEPT_FEASIBILITY_VERSION,
+        "frozen_selected_concepts": [str(name) for name in concepts],
+        "frozen_focal_concepts": focal_set,
+        "requirements": dict(requirements) if requirements is not None else None,
+        "concepts": entries,
+        "all_feasible": all(entry["feasible"] for entry in entries),
+        "infeasible_concepts": [
+            entry["concept"] for entry in entries if not entry["feasible"]
+        ],
+        "descriptive_top_n": feasible_in_order[: len(list(concepts))],
+        "descriptive_ranking_matches_frozen_order": (
+            feasible_in_order[: len(list(concepts))] == [str(n) for n in concepts]
+        ),
+        "ranking_is_descriptive_only": True,
+        "concepts_reselected_from_this_pool": False,
+        "ranking_digest": ranking_digest(ranking),
+        "substitution_policy": SUBSTITUTION_POLICY,
+    }
+    record["feasibility_digest"] = payload_checksum(
+        {
+            key: record[key]
+            for key in (
+                "version",
+                "frozen_selected_concepts",
+                "frozen_focal_concepts",
+                "requirements",
+                "concepts",
+                "all_feasible",
+            )
+        }
+    )
+    return record
+
+
+def assert_frozen_concepts_feasible(feasibility: Mapping) -> dict:
+    """Refuse only when a frozen concept is genuinely infeasible.
+
+    Raises:
+        FrozenConceptInfeasible: With the exact shortfall for every frozen
+            concept that failed, and nothing else. A ranking that no longer
+            puts the frozen six on top is not an error and does not reach here.
+    """
+    failing = [
+        entry for entry in feasibility["concepts"] if not entry["feasible"]
+    ]
+    if failing:
+        detail = "\n".join(
+            f"  {entry['concept']:12s} rank={entry['rank']}  "
+            f"counts={entry['counts']}\n"
+            f"               shortfall: {'; '.join(entry['unmet']) or 'unspecified'}"
+            for entry in failing
+        )
+        raise FrozenConceptInfeasible(
+            f"{len(failing)} frozen concept(s) cannot meet the predeclared "
+            "requirements on this independent pool:\n"
+            f"{detail}\n\n"
+            "The population this study needs cannot be built, so it refuses. "
+            "No concept is substituted, and the requirements are not lowered: "
+            "either would change what the result means without saying so.\n"
+            f"{SUBSTITUTION_POLICY}"
+        )
+    return dict(feasibility)
+
+
+def format_frozen_feasibility(feasibility: Mapping) -> str:
+    """The block printed in place of a re-ranked selection."""
+    lines = [
+        "FROZEN CONCEPTS — set directly, checked individually, never re-ranked",
+        f"  feasibility version {feasibility['version']}",
+        f"  ranking digest      {feasibility['ranking_digest']}",
+        f"  feasibility digest  {feasibility['feasibility_digest']}",
+        "",
+        f"  {'concept':12s} {'focal':>5s} {'rank':>5s} {'images':>7s} "
+        f"{'groups':>7s} {'train+':>7s} {'test+':>6s} {'ok':>3s}  shortfall",
+    ]
+    for entry in feasibility["concepts"]:
+        counts = entry.get("counts") or {}
+        lines.append(
+            f"  {entry['concept']:12s} "
+            f"{'yes' if entry['is_focal'] else 'no':>5s} "
+            f"{str(entry['rank']):>5s} "
+            f"{counts.get('n_distinct_images', 0):>7d} "
+            f"{counts.get('n_groups_selected', 0):>7d} "
+            f"{counts.get('n_train_positives', 0):>7d} "
+            f"{counts.get('n_test_positives', 0):>6d} "
+            f"{'ok' if entry['feasible'] else 'NO':>3s}  "
+            f"{'; '.join(entry['unmet'])}"
+        )
+    lines += [
+        "",
+        f"  descriptive top {len(feasibility['frozen_selected_concepts'])} of this "
+        f"pool: {feasibility['descriptive_top_n']}",
+        f"  matches the frozen order: "
+        f"{feasibility['descriptive_ranking_matches_frozen_order']}",
+        "  (descriptive only — a different order here is expected once the",
+        "   completed run's photographs are removed, and it changes nothing)",
+    ]
+    return "\n".join(lines)
 
 
 # ======================================================= disjointness proof
@@ -763,10 +996,15 @@ class SampleSizeRule:
             to detect a truth sitting exactly on the bar needs an infinite n.
         converged_truth: The "clearly converged" rate for the upper bar.
         expected_admissible_focal: How many focal concepts the design is sized
-            for. **Two**, not three: the completed study already found `zebra`
-            capability-ineligible in spoken audio under the frozen admissibility
-            rule, so sizing for three would be sizing for a population this
-            study has positive evidence it will not have.
+            for. **Two**, not three, as a conservative *prospective* design
+            assumption: an earlier native-audio study saw one of the three fail
+            the spoken-audio capability gate, so sizing for three would size for
+            a best case. It is not a prediction about any particular concept —
+            in the completed open-prompt L32 follow-up all three focal concepts,
+            `zebra` included, were capability-admissible. Which concepts survive
+            the gate on *this* population is a Stage-A result and is reported as
+            one; precision at one, two and three admissible concepts is printed
+            so the case that actually occurs is visible.
     """
 
     target_half_width: float = 0.20
@@ -963,11 +1201,15 @@ def format_sample_plan(plan: SamplePlan) -> str:
         f"  {rule.not_converged_truth:.2f} and at least {rule.min_power:.0%} power to land",
         f"  at or above 0.90 when the truth is {rule.converged_truth:.2f}.",
         "",
-        f"  sized for {rule.expected_admissible_focal} admissible focal concept(s) — "
-        "the completed study",
-        "  already found `zebra` capability-ineligible in spoken audio, so",
-        "  sizing for three would size for a population we have evidence",
-        "  against.",
+        f"  sized for {rule.expected_admissible_focal} admissible focal concept(s), "
+        "as a conservative",
+        "  PROSPECTIVE design assumption: an earlier native-audio study saw one",
+        "  of the three focal concepts fail the spoken-audio capability gate, so",
+        "  sizing for three would size for a best case. This is NOT a claim that",
+        "  any particular concept will fail — in the completed open-prompt L32",
+        "  follow-up all three, `zebra` included, were capability-admissible.",
+        "  Which concepts survive the gate here is a Stage-A result, reported as",
+        "  one; the table below gives the precision at each possible count.",
         "",
         f"  distinct images per concept      {plan.images_per_concept}",
         f"    train (source) split           {plan.n_train_positive_images}",
@@ -1683,6 +1925,12 @@ RESOLUTION_FINGERPRINT_FIELDS: tuple[str, ...] = (
     "evidence_lexicon_hash",
     "exclusion_run_dirs",
     "exclusion_run_checksum",
+    "preparation_version",
+    "preparation_digest",
+    "exclusion_completeness_digest",
+    "independent_pool_digest",
+    "concept_ranking_digest",
+    "frozen_concept_feasibility_digest",
     "prompt_protocol",
     "prompt_hash",
     "prompt_protocol_digest",
@@ -1865,6 +2113,8 @@ def build_summary(
     cache: Mapping,
     resume: Mapping,
     mode: str,
+    preparation: Mapping | None = None,
+    frozen_concept_feasibility: Mapping | None = None,
 ) -> dict:
     """``l32_convergence_resolution_summary.json``, assembled in one place."""
     return {
@@ -1895,6 +2145,15 @@ def build_summary(
         "controls": dict(controls),
         "capability": dict(capability),
         "cached_data_loading": dict(cache),
+        # How the population was prepared, and the proof that the exclusion set
+        # covers the whole spent population rather than only the part that was
+        # cheap to read.
+        "preparation": dict(preparation) if preparation is not None else {},
+        "frozen_concept_feasibility": (
+            dict(frozen_concept_feasibility)
+            if frozen_concept_feasibility is not None
+            else {}
+        ),
         "completed_run_immutability": dict(immutability),
         "resume": dict(resume),
         "fingerprint": dict(fingerprint),
@@ -1914,6 +2173,9 @@ def render_report(summary: Mapping) -> str:
     population = summary.get("population") or {}
     disjointness = population.get("disjointness_audit") or {}
     stage_b = summary.get("stage_b_decision") or {}
+    feasibility = summary.get("frozen_concept_feasibility") or {}
+    preparation = summary.get("preparation") or {}
+    completeness = preparation.get("completeness_proof") or {}
 
     lines = [
         f"# Independent layer-{L32_LAYER} convergence resolution",
@@ -1966,9 +2228,33 @@ def render_report(summary: Mapping) -> str:
         "",
         f"- selected (frozen ranking order): {summary.get('selected_concepts')}",
         f"- focal: {summary.get('focal_concepts')}",
+        f"- every frozen concept feasible on this pool: "
+        f"{feasibility.get('all_feasible')}",
+        f"- this pool's own descriptive top {len(summary.get('selected_concepts') or [])}: "
+        f"{feasibility.get('descriptive_top_n')} "
+        f"(matches the frozen order: "
+        f"{feasibility.get('descriptive_ranking_matches_frozen_order')})",
         f"- capability-admissible: {verdict.get('admissible_focal_concepts')}",
         f"- capability-ineligible (excluded, **never replaced**): "
         f"{verdict.get('inadmissible_focal_concepts')}",
+        "",
+        f"> {feasibility.get('substitution_policy', SUBSTITUTION_POLICY)}",
+        "",
+        "## Preprocessing",
+        "",
+        f"- preparation: `{preparation.get('fingerprint', {}).get('preparation_digest')}`",
+        f"- cache directory: `{preparation.get('cache_dir')}`",
+        f"- source families read: {preparation.get('source_families_read')}",
+        f"- exclusion completeness proven: {completeness.get('complete')}",
+        f"- fallback scan required: {completeness.get('fallback_required')}",
+        f"- unit families skipped: {completeness.get('unit_families_skipped')}",
+        f"- files read: {completeness.get('n_files_read')} across "
+        f"{completeness.get('n_shards')} checkpoint shard(s)",
+        f"- files computed this session: "
+        f"{preparation.get('files_computed_this_session')}",
+        f"- files reused from Drive: {preparation.get('files_reused_from_drive')}",
+        "",
+        f"> {completeness.get('why_skipped_families_cannot_add_identities', '')}",
         "",
         "## Stage B",
         "",

@@ -33,12 +33,15 @@ from jlens.mmpilot.l32_resolution import (
     SELECTED_CONCEPTS,
     ExclusionEvidenceMissing,
     ExclusionSet,
+    FrozenConceptInfeasible,
     PopulationNotIndependent,
     PseudoreplicationError,
     ResolutionRefused,
+    SampleSizeRule,
     assert_completed_runs_unchanged,
     assert_controls_recorded,
     assert_fresh_run_namespace,
+    assert_frozen_concepts_feasible,
     assert_one_unit_per_photograph,
     audit_population_disjointness,
     binomial_at_least,
@@ -47,9 +50,13 @@ from jlens.mmpilot.l32_resolution import (
     cell_precision,
     clean_predictions_from_capability,
     derive_resolution_gates,
+    format_frozen_feasibility,
+    format_sample_plan,
+    frozen_concept_feasibility,
     harvest_excluded_identities,
     independent_pool,
     plan_sample_size,
+    ranking_digest,
     render_report,
     resolution_fingerprint,
     resolution_verdict,
@@ -278,6 +285,142 @@ def test_the_concept_sets_are_frozen_in_ranking_order():
     )
     assert FOCAL_CONCEPTS == ("zebra", "cat", "toilet")
     assert list(FOCAL_CONCEPTS) == list(SELECTED_CONCEPTS[:3])
+
+
+# ============================================ the frozen concepts, checked
+
+
+def _ranking_row(concept, *, feasible=True, rank=1, unmet=(), **counts):
+    """A row shaped like :func:`jlens.mmpilot.expansion.rank_concepts` produces."""
+    return {
+        "concept": concept,
+        "rank": rank,
+        "feasible": bool(feasible),
+        "score": 0.5,
+        "unmet": list(unmet),
+        "evidence_gap": "",
+        "n_distinct_images": counts.get("images", 12),
+        "n_groups_selected": counts.get("groups", 12),
+        "n_train_positives": counts.get("train", 6),
+        "n_test_positives": counts.get("test", 6),
+        "n_negative_groups": counts.get("negatives", 40),
+    }
+
+
+def _full_ranking(order=SELECTED_CONCEPTS, *, infeasible=()):
+    return [
+        _ranking_row(
+            concept,
+            rank=index,
+            feasible=concept not in infeasible,
+            unmet=(["distinct_images 3 < 12"] if concept in infeasible else []),
+            images=3 if concept in infeasible else 12,
+        )
+        for index, concept in enumerate(order, start=1)
+    ]
+
+
+def test_the_frozen_concepts_survive_a_reordered_ranking():
+    """The behaviour the old rule got wrong.
+
+    Removing the photographs a completed run spent reorders the fresh pool's
+    ranking without making any frozen concept infeasible. The old code refused
+    unless the fresh top six *equalled* the frozen six; the correct behaviour is
+    to keep the frozen six and check each of them.
+    """
+    reordered = list(reversed(SELECTED_CONCEPTS))
+    record = frozen_concept_feasibility(_full_ranking(reordered))
+    assert record["all_feasible"] is True
+    assert record["frozen_selected_concepts"] == list(SELECTED_CONCEPTS)
+    assert record["frozen_focal_concepts"] == list(FOCAL_CONCEPTS)
+    assert record["descriptive_ranking_matches_frozen_order"] is False
+    assert record["ranking_is_descriptive_only"] is True
+    assert assert_frozen_concepts_feasible(record)["all_feasible"] is True
+
+
+def test_an_extra_concept_outranking_the_frozen_six_changes_nothing():
+    ranking = [_ranking_row("umbrella", rank=1), *_full_ranking()]
+    record = frozen_concept_feasibility(ranking)
+    assert record["all_feasible"] is True
+    assert record["descriptive_top_n"][0] == "umbrella"
+    assert record["frozen_selected_concepts"] == list(SELECTED_CONCEPTS)
+    assert_frozen_concepts_feasible(record)
+
+
+def test_a_genuinely_infeasible_frozen_concept_refuses_with_its_shortfall():
+    record = frozen_concept_feasibility(_full_ranking(infeasible=("toilet",)))
+    assert record["all_feasible"] is False
+    assert record["infeasible_concepts"] == ["toilet"]
+    with pytest.raises(FrozenConceptInfeasible) as error:
+        assert_frozen_concepts_feasible(record)
+    message = str(error.value)
+    assert "toilet" in message
+    assert "distinct_images 3 < 12" in message
+    assert "No concept is substituted" in message
+
+
+def test_a_frozen_concept_absent_from_the_universe_refuses():
+    ranking = [row for row in _full_ranking() if row["concept"] != "microwave"]
+    record = frozen_concept_feasibility(ranking)
+    assert record["infeasible_concepts"] == ["microwave"]
+    entry = next(e for e in record["concepts"] if e["concept"] == "microwave")
+    assert entry["present_in_ranking"] is False
+    with pytest.raises(FrozenConceptInfeasible):
+        assert_frozen_concepts_feasible(record)
+
+
+def test_no_concept_is_ever_substituted_for_an_infeasible_one():
+    ranking = [_ranking_row("umbrella", rank=1), *_full_ranking(infeasible=("zebra",))]
+    record = frozen_concept_feasibility(ranking)
+    assert record["concepts_reselected_from_this_pool"] is False
+    assert [entry["concept"] for entry in record["concepts"]] == list(
+        SELECTED_CONCEPTS
+    )
+    assert "umbrella" not in record["frozen_selected_concepts"]
+    with pytest.raises(FrozenConceptInfeasible):
+        assert_frozen_concepts_feasible(record)
+
+
+def test_the_feasibility_digest_moves_with_feasibility_and_not_with_order():
+    feasible = frozen_concept_feasibility(_full_ranking())
+    reordered = frozen_concept_feasibility(_full_ranking(list(reversed(SELECTED_CONCEPTS))))
+    infeasible = frozen_concept_feasibility(_full_ranking(infeasible=("bird",)))
+    assert feasible["feasibility_digest"] != infeasible["feasibility_digest"]
+    # Rank is part of each row, so a reordered ranking is a different record —
+    # what must not change is which concepts the study runs on.
+    assert reordered["frozen_selected_concepts"] == feasible["frozen_selected_concepts"]
+
+
+def test_the_ranking_digest_is_a_function_of_the_ranking_alone():
+    one = ranking_digest(_full_ranking())
+    two = ranking_digest(_full_ranking())
+    assert one == two
+    assert one != ranking_digest(_full_ranking(list(reversed(SELECTED_CONCEPTS))))
+
+
+def test_the_formatted_feasibility_block_names_every_frozen_concept():
+    text = format_frozen_feasibility(frozen_concept_feasibility(_full_ranking()))
+    for concept in SELECTED_CONCEPTS:
+        assert concept in text
+    assert "descriptive only" in text
+    assert "never re-ranked" in text
+
+
+def test_the_sample_plan_does_not_claim_zebra_is_known_ineligible():
+    """The sizing assumption is prospective, and says so.
+
+    In the completed open-prompt L32 follow-up all three focal concepts,
+    ``zebra`` included, were capability-admissible. Sizing for two admissible
+    focal concepts is a conservative design choice, not a finding about a
+    concept.
+    """
+    text = format_sample_plan(plan_sample_size())
+    assert "PROSPECTIVE design assumption" in text
+    assert "already found `zebra` capability-ineligible" not in text
+    assert "capability-admissible" in text
+    docstring = SampleSizeRule.__doc__ or ""
+    assert "already found `zebra`" not in docstring
+    assert "prospective" in docstring.lower()
 
 
 # ========================================================== sample size
