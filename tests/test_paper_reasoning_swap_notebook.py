@@ -99,3 +99,28 @@ def test_real_path_is_one_clean_three_switch_run():
     assert "RUN_REAL_PAPER_SWAP = True" not in source
     assert "expected the pinned 125,198-group cache" in source
     assert "build_expanded_manifest" not in source
+
+
+def test_every_repository_symbol_imported_by_the_real_dictionary_cell_exists():
+    from jlens.mmpilot.coordinate_swap import (
+        METHOD_VERSION,
+        build_swap_bases,
+        random_two_direction_basis,
+        resolve_concept_token,
+    )
+    from jlens.mmpilot.pipeline import build_dictionaries
+    from jlens.mmpilot.store import RunFingerprint, UnitStore, payload_checksum
+
+    assert METHOD_VERSION == "jlens.mmpilot.coordinate_swap.v1"
+    assert all(
+        callable(value)
+        for value in (
+            build_swap_bases,
+            random_two_direction_basis,
+            resolve_concept_token,
+            build_dictionaries,
+            RunFingerprint,
+            UnitStore,
+            payload_checksum,
+        )
+    )

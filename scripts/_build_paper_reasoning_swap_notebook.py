@@ -413,7 +413,7 @@ if BACKEND is not None:
         random_two_direction_basis,
         resolve_concept_token,
     )
-    from jlens.mmpilot.jspace import build_dictionaries
+    from jlens.mmpilot.pipeline import build_dictionaries
     from jlens.mmpilot.store import RunFingerprint, UnitStore, payload_checksum
 
     if METHOD_VERSION != "jlens.mmpilot.coordinate_swap.v1":
