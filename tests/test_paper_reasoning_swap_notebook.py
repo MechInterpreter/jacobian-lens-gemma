@@ -168,6 +168,10 @@ def test_v2_screens_clean_behavior_before_any_causal_spending():
     assert 'CAUSAL_SELECTION["all_cells_sufficient"]' in source
     assert 'max_images_per_cell=MAX_ANALYSIS_IMAGES_PER_CELL' in source
     assert 'swap_results_consulted' in source
+    assert "except PromptLeakageError as error:" in source
+    assert '"status": "leakage_rejected"' in source
+    assert '"correct": False' in source
+    assert "prompt-leakage rejections" in source
 
 
 def test_alpha2_has_matched_controls_and_position_is_descriptive_only():

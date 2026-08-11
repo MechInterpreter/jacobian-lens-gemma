@@ -769,6 +769,7 @@ CAUSAL_SELECTION = None
 if STORE is not None:
     from jlens.mmpilot.capability import prediction_and_margin, score_candidate_sequences
     from jlens.mmpilot.paper_reasoning_swap import select_capability_eligible_samples
+    from jlens.mmpilot.prompt_protocol import PromptLeakageError
     from jlens.mmpilot.store import safe_key
 
     source_groups = [row for row in POPULATION["groups"] if row["concept"] in SOURCE_CONCEPTS]
@@ -782,12 +783,36 @@ if STORE is not None:
                 if STORE.has("capability", key):
                     reused += 1
                     continue
-                built, inputs = make_input(group, modality, source, target, readout)
-                scores = score_candidate_sequences(BACKEND, inputs, CANDIDATE_IDS[readout])
                 source_answer = (
                     source if readout == "identity"
                     else leg_count_surfaces(resolve_leg_count(source))[0]
                 )
+                try:
+                    built, inputs = make_input(
+                        group, modality, source, target, readout
+                    )
+                except PromptLeakageError as error:
+                    STORE.save("capability", key, {
+                        "status": "leakage_rejected",
+                        "group_id": group["group_id"],
+                        "image_id": group["image_id"],
+                        "source": source,
+                        "target": target,
+                        "modality": modality,
+                        "readout": readout,
+                        "source_answer": source_answer,
+                        "prediction": None,
+                        "correct": False,
+                        "leakage_rejected": True,
+                        "rejection": str(error),
+                    })
+                    computed += 1
+                    print(
+                        f"clean {computed:3d} rejected  {reused:3d} reused  "
+                        f"{source}:{modality}:{readout}  prompt leakage"
+                    )
+                    continue
+                scores = score_candidate_sequences(BACKEND, inputs, CANDIDATE_IDS[readout])
                 verdict = prediction_and_margin(scores, source_answer)
                 STORE.save("capability", key, {
                     "group_id": group["group_id"], "image_id": group["image_id"],
@@ -800,6 +825,14 @@ if STORE is not None:
                 computed += 1
                 print(f"clean {computed:3d} computed  {reused:3d} reused  {source}:{modality}:{readout}")
     clean_units = list(STORE.load_all("capability").values())
+    leakage_rejections = [
+        row for row in clean_units if row.get("status") == "leakage_rejected"
+    ]
+    print(
+        "prompt-leakage rejections",
+        len(leakage_rejections), "units across",
+        len({row["group_id"] for row in leakage_rejections}), "group(s)",
+    )
     for source in SOURCE_CONCEPTS:
         for modality in MODALITIES:
             rows = [r for r in clean_units if r["source"] == source and r["modality"] == modality]
