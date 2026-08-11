@@ -74,8 +74,9 @@ old directory instead of mixing results.
 
 After the completed v2 study, this notebook also supports a separately
 fingerprinted **independent alpha=2 confirmation mode**.  That mode freezes
-`bird -> cat`, excludes every photograph used by v1 and v2, screens 48 fresh
-bird candidates, requires 12 capability-valid photographs in every modality,
+`bird -> cat`, excludes every photograph used by v1, v2, and the failed
+48-candidate capability-only confirmation, screens 128 new bird candidates,
+requires 12 capability-valid photographs in every modality,
 and treats alpha=2 as the explicitly labelled primary amplified intervention.
 It never writes into either completed run.
 """
@@ -159,10 +160,10 @@ SELECTION_SEED = "anthropic-hidden-animal-swap-gemma-v2-independent"
 SOURCE_CONCEPTS = PAIR_CONCEPTS
 if RUN_INDEPENDENT_ALPHA2_CONFIRMATION:
     SOURCE_CONCEPTS = ("bird",)
-    CANDIDATE_IMAGES_PER_CONCEPT = 48
+    CANDIDATE_IMAGES_PER_CONCEPT = 128
     MAX_ANALYSIS_IMAGES_PER_CELL = 16
     MIN_ANALYSIS_IMAGES_PER_CELL = 12
-    SELECTION_SEED = "anthropic-bird-to-cat-alpha2-independent-confirmation-v1"
+    SELECTION_SEED = "anthropic-bird-to-cat-alpha2-independent-confirmation-v2"
 POPULATION_SELECTION_CONCEPTS = (
     SOURCE_CONCEPTS
     if RUN_INDEPENDENT_ALPHA2_CONFIRMATION else POPULATION_CONCEPTS
@@ -199,6 +200,13 @@ COMPLETED_V2_RUN_DIR = Path(
 )
 COMPLETED_V2_REPORT_CHECKSUM = (
     "sha256:b64ce3cec51371769b908d14342fbf42f64a6dccb82f8d235ad81d643815ddc6"
+)
+FAILED_CONFIRMATION_RUN_DIR = Path(
+    "/content/drive/MyDrive/jacobian-lens-gemma/runs/"
+    "mmpaperconfirm_real_6b0745c08d84"
+)
+FAILED_CONFIRMATION_REPORT_CHECKSUM = (
+    "sha256:37d32605b24984f09c0dfccaab7c7ea98e217bef82412bd28576384b22f23c11"
 )
 EXTENSION_RUN_DIR = Path(
     "/content/drive/MyDrive/jacobian-lens-gemma/runs/rgext_real_c18f03f06e7b"
@@ -256,6 +264,7 @@ if RUN_REAL_PAPER_SWAP:
             EXPANDED_MANIFEST_CACHE, PRIOR_EXCLUSION_SET,
             EXTENSION_RUN_DIR, PUBLISHED_LENS_DIR, COMPLETED_V1_RUN_DIR,
             *([COMPLETED_V2_RUN_DIR] if RUN_INDEPENDENT_ALPHA2_CONFIRMATION else []),
+            *([FAILED_CONFIRMATION_RUN_DIR] if RUN_INDEPENDENT_ALPHA2_CONFIRMATION else []),
         )
         if not path.exists()
     ]
@@ -351,6 +360,53 @@ if RUN_REAL_PAPER_SWAP:
             )
         excluded_images.update(v2_images)
         excluded_groups.update(v2_groups)
+    failed_confirmation_images = set()
+    failed_confirmation_groups = set()
+    if RUN_INDEPENDENT_ALPHA2_CONFIRMATION:
+        failed_report_path = (
+            FAILED_CONFIRMATION_RUN_DIR
+            / "paper_reasoning_swap_alpha2_confirmation_report.json"
+        )
+        failed_report = json.loads(failed_report_path.read_text(encoding="utf-8"))
+        if failed_report.get("report_checksum") != FAILED_CONFIRMATION_REPORT_CHECKSUM:
+            raise RuntimeError(
+                "failed capability-only confirmation report checksum mismatch; "
+                "refusing to perform an adaptive recruitment extension"
+            )
+        if failed_report.get("verdict") != "PAPER_STYLE_CAPABILITY_NO_GO":
+            raise RuntimeError(
+                "the recruitment parent exposed a causal verdict; it cannot be "
+                "used as a blinded capability-only sample-size extension"
+            )
+        failed_intervention_files = sorted(
+            (FAILED_CONFIRMATION_RUN_DIR / "units" / "intervention").glob("*.json")
+        )
+        if failed_intervention_files:
+            raise RuntimeError(
+                "the recruitment parent contains interventions; refusing"
+            )
+        failed_capability_files = sorted(
+            (FAILED_CONFIRMATION_RUN_DIR / "units" / "capability").glob("*.json")
+        )
+        if len(failed_capability_files) != 288:
+            raise RuntimeError(
+                "expected 288 capability units in the failed screen, found "
+                f"{len(failed_capability_files)}"
+            )
+        for path in failed_capability_files:
+            row = json.loads(path.read_text(encoding="utf-8"))
+            payload_row = row.get("payload") if isinstance(row.get("payload"), dict) else row
+            if payload_row.get("image_id"):
+                failed_confirmation_images.add(str(payload_row["image_id"]))
+            if payload_row.get("group_id"):
+                failed_confirmation_groups.add(str(payload_row["group_id"]))
+        if len(failed_confirmation_images) != 48:
+            raise RuntimeError(
+                "expected 48 spent images in the failed capability screen, found "
+                f"{len(failed_confirmation_images)}"
+            )
+        excluded_images.update(failed_confirmation_images)
+        excluded_groups.update(failed_confirmation_groups)
     EXCLUSION_FILE_CHECKSUM = payload_checksum({
         "base_exclusion_file_checksum": EXCLUSION_FILE_CHECKSUM,
         "completed_v1_report_checksum": COMPLETED_V1_REPORT_CHECKSUM,
@@ -362,6 +418,12 @@ if RUN_REAL_PAPER_SWAP:
         ),
         "completed_v2_image_ids": sorted(v2_images),
         "completed_v2_group_ids": sorted(v2_groups),
+        "failed_confirmation_report_checksum": (
+            FAILED_CONFIRMATION_REPORT_CHECKSUM
+            if RUN_INDEPENDENT_ALPHA2_CONFIRMATION else None
+        ),
+        "failed_confirmation_image_ids": sorted(failed_confirmation_images),
+        "failed_confirmation_group_ids": sorted(failed_confirmation_groups),
     })
     eligible_groups = [
         row for row in payload["groups"]
@@ -391,6 +453,7 @@ if RUN_REAL_PAPER_SWAP:
     print("prior excluded images/groups", len(excluded_images), len(excluded_groups))
     print("completed v1 pair images excluded", len(v1_images))
     print("completed v2 pair images excluded", len(v2_images))
+    print("failed capability-screen images excluded", len(failed_confirmation_images))
     print("population digest", POPULATION["population_digest"])
     print("groups/images", POPULATION["n_groups"], POPULATION["n_distinct_images"])
     print("coverage")
@@ -680,6 +743,15 @@ if BACKEND is not None:
             "completed_v1_report_checksum": COMPLETED_V1_REPORT_CHECKSUM,
             "completed_v2_report_checksum": (
                 COMPLETED_V2_REPORT_CHECKSUM
+                if RUN_INDEPENDENT_ALPHA2_CONFIRMATION else None
+            ),
+            "failed_capability_screen_report_checksum": (
+                FAILED_CONFIRMATION_REPORT_CHECKSUM
+                if RUN_INDEPENDENT_ALPHA2_CONFIRMATION else None
+            ),
+            "causal_results_seen_before_extension": False,
+            "recruitment_extension_reason": (
+                "7 of 48 candidates jointly capability-valid; frozen minimum 12"
                 if RUN_INDEPENDENT_ALPHA2_CONFIRMATION else None
             ),
             "independent_alpha2_confirmation": RUN_INDEPENDENT_ALPHA2_CONFIRMATION,
@@ -1018,7 +1090,7 @@ if STORE is not None:
         RESULT["direction_matched_base_verdict"] = _direction_matched_verdict
     RESULT.update({
         "schema": (
-            "mmpilot.paper_reasoning_swap_alpha2_confirmation.v1"
+            "mmpilot.paper_reasoning_swap_alpha2_confirmation.v2"
             if RUN_INDEPENDENT_ALPHA2_CONFIRMATION
             else "mmpilot.paper_reasoning_swap_report.v2"
         ),
@@ -1029,6 +1101,20 @@ if STORE is not None:
         "completed_v1_report_checksum": COMPLETED_V1_REPORT_CHECKSUM,
         "completed_v2_report_checksum": (
             COMPLETED_V2_REPORT_CHECKSUM
+            if RUN_INDEPENDENT_ALPHA2_CONFIRMATION else None
+        ),
+        "failed_capability_screen_report_checksum": (
+            FAILED_CONFIRMATION_REPORT_CHECKSUM
+            if RUN_INDEPENDENT_ALPHA2_CONFIRMATION else None
+        ),
+        "blinded_recruitment_extension": (
+            {
+                "causal_units_in_parent": 0,
+                "parent_eligible": 7,
+                "parent_screened": 48,
+                "new_candidates": CANDIDATE_IMAGES_PER_CONCEPT,
+                "minimum_required_unchanged": MIN_ANALYSIS_IMAGES_PER_CELL,
+            }
             if RUN_INDEPENDENT_ALPHA2_CONFIRMATION else None
         ),
         "independent_alpha2_confirmation": RUN_INDEPENDENT_ALPHA2_CONFIRMATION,

@@ -204,14 +204,19 @@ def test_completed_run_has_a_cpu_only_direction_matched_amendment():
 def test_independent_alpha2_confirmation_is_fresh_frozen_and_resumable():
     source = _source(_payload())
     assert 'SOURCE_CONCEPTS = ("bird",)' in source
-    assert "CANDIDATE_IMAGES_PER_CONCEPT = 48" in source
+    assert "CANDIDATE_IMAGES_PER_CONCEPT = 128" in source
     assert "MAX_ANALYSIS_IMAGES_PER_CELL = 16" in source
     assert "MIN_ANALYSIS_IMAGES_PER_CELL = 12" in source
     assert "completed v2 pair images excluded" in source
     assert "expected 48 spent pair images in completed v2" in source
     assert "mmpaperconfirm_real" in source
     assert "paper_alpha2_confirmation_verdict" in source
-    assert "mmpilot.paper_reasoning_swap_alpha2_confirmation.v1" in source
+    assert "mmpilot.paper_reasoning_swap_alpha2_confirmation.v2" in source
     assert "paper_reasoning_swap_alpha2_confirmation_report.json" in source
     assert '"independent_alpha2_confirmation": RUN_INDEPENDENT_ALPHA2_CONFIRMATION' in source
     assert '2.0 if RUN_INDEPENDENT_ALPHA2_CONFIRMATION else 1.0' in source
+    assert "mmpaperconfirm_real_6b0745c08d84" in source
+    assert "expected 288 capability units in the failed screen" in source
+    assert "failed capability-screen images excluded" in source
+    assert '"causal_results_seen_before_extension": False' in source
+    assert '"causal_units_in_parent": 0' in source

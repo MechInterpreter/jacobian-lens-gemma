@@ -57,7 +57,7 @@ DIRECTION_MATCHED_AMENDMENT_VERSION = (
     "mmpilot.paper_reasoning_direction_matched_amendment.v3"
 )
 ALPHA2_CONFIRMATION_VERSION = (
-    "mmpilot.paper_reasoning_alpha2_independent_confirmation.v1"
+    "mmpilot.paper_reasoning_alpha2_independent_confirmation.v2"
 )
 
 
