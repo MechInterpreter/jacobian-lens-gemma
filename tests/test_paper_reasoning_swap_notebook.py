@@ -104,23 +104,24 @@ def test_real_path_is_one_clean_three_switch_run():
 def test_every_repository_symbol_imported_by_the_real_dictionary_cell_exists():
     from jlens.mmpilot.coordinate_swap import (
         METHOD_VERSION,
-        build_swap_bases,
+        build_swap_basis_from_vectors,
         random_two_direction_basis,
         resolve_concept_token,
     )
-    from jlens.mmpilot.pipeline import build_dictionaries
     from jlens.mmpilot.store import RunFingerprint, UnitStore, payload_checksum
 
     assert METHOD_VERSION == "jlens.mmpilot.coordinate_swap.v1"
     assert all(
         callable(value)
         for value in (
-            build_swap_bases,
+            build_swap_basis_from_vectors,
             random_two_direction_basis,
             resolve_concept_token,
-            build_dictionaries,
             RunFingerprint,
             UnitStore,
             payload_checksum,
         )
     )
+    source = _source(_payload())
+    assert "build_dictionaries" not in source
+    assert "selected lens vectors built" in source

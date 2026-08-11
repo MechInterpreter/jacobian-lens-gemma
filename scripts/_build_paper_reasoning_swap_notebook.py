@@ -403,30 +403,51 @@ markdown("## 8. Build raw J-lens atoms, exact swap bases, and open the resumable
 code(
     r'''
 STORE = None
-DICTIONARIES = {}
+TOKEN_VECTORS = {}
 BASES = {}
 if BACKEND is not None:
     import torch
     from jlens.mmpilot.coordinate_swap import (
         METHOD_VERSION,
-        build_swap_bases,
+        build_swap_basis_from_vectors,
         random_two_direction_basis,
         resolve_concept_token,
     )
-    from jlens.mmpilot.pipeline import build_dictionaries
     from jlens.mmpilot.store import RunFingerprint, UnitStore, payload_checksum
 
     if METHOD_VERSION != "jlens.mmpilot.coordinate_swap.v1":
         raise RuntimeError(f"coordinate-swap algebra drifted: {METHOD_VERSION}")
 
-    for layer in SAMPLED_LAYERS:
-        DICTIONARIES.update(build_dictionaries(
-            LENS_SETS[layer].lens, (layer,), BACKEND,
-            device="cuda", dtype=torch.float16,
-        ))
-    atoms = {layer: DICTIONARIES[layer].atoms for layer in SAMPLED_LAYERS}
     token_names = (*POPULATION_CONCEPTS, "two", "four")
     TOKENS = {name: resolve_concept_token(BACKEND.encode_candidate, name) for name in token_names}
+    unembedding = BACKEND.unembedding_weight()
+    unembedding_rows = {
+        name: unembedding[token.token_id].detach().float().cpu()
+        for name, token in TOKENS.items()
+    }
+    for layer in SAMPLED_LAYERS:
+        jacobian = LENS_SETS[layer].lens.jacobians[layer].detach().float().cpu()
+        TOKEN_VECTORS[layer] = {
+            name: row @ jacobian for name, row in unembedding_rows.items()
+        }
+        del jacobian
+    del unembedding, unembedding_rows
+    print(
+        "selected lens vectors built",
+        {layer: sorted(rows) for layer, rows in TOKEN_VECTORS.items()},
+    )
+
+    def selected_bases(layers, source_name, target_name):
+        return {
+            layer: build_swap_basis_from_vectors(
+                TOKEN_VECTORS[layer][source_name],
+                TOKEN_VECTORS[layer][target_name],
+                layer=layer,
+                source=TOKENS[source_name],
+                target=TOKENS[target_name],
+            )
+            for layer in layers
+        }
 
     for pair in DIRECTED_PAIRS:
         source, target = pair["source"], pair["target"]
@@ -436,15 +457,10 @@ if BACKEND is not None:
         BASES[pair_key] = {}
         for band in BAND_RECORD["bands"]:
             band = tuple(band)
-            entity = build_swap_bases(
-                atoms, layers=band, source=TOKENS[source], target=TOKENS[target]
-            )
-            answer = build_swap_bases(
-                atoms, layers=band, source=TOKENS[source_answer], target=TOKENS[target_answer]
-            )
-            unrelated = build_swap_bases(
-                atoms, layers=band,
-                source=TOKENS[CONTROL_CONCEPTS[0]], target=TOKENS[CONTROL_CONCEPTS[1]],
+            entity = selected_bases(band, source, target)
+            answer = selected_bases(band, source_answer, target_answer)
+            unrelated = selected_bases(
+                band, CONTROL_CONCEPTS[0], CONTROL_CONCEPTS[1]
             )
             BASES[pair_key][band[0]] = {
                 "intermediate": entity,

@@ -41,6 +41,7 @@ from jlens.mmpilot.coordinate_swap import (
     build_spec,
     build_swap_bases,
     build_swap_basis,
+    build_swap_basis_from_vectors,
     coordinate_swap_band,
     coordinate_swap_fingerprint,
     coordinate_swap_layer,
@@ -361,6 +362,22 @@ def test_reversing_source_and_target_reverses_the_coordinate_bookkeeping(V, back
     steer_forward = h + 1.0 * (forward.V[:, 1] - forward.V[:, 0])
     steer_reverse = h + 1.0 * (reversed_basis.V[:, 1] - reversed_basis.V[:, 0])
     assert not torch.allclose(steer_forward, steer_reverse, atol=1e-6)
+
+
+def test_selected_vector_basis_matches_full_dictionary_basis(backend, tokens):
+    atoms = backend.world.atoms()
+    full = build_swap_basis(
+        atoms, layer=1, source=tokens["bird"], target=tokens["cat"]
+    )
+    selected = build_swap_basis_from_vectors(
+        atoms[tokens["bird"].token_id],
+        atoms[tokens["cat"].token_id],
+        layer=1,
+        source=tokens["bird"],
+        target=tokens["cat"],
+    )
+    assert torch.equal(selected.V, full.V)
+    assert selected.diagnostics == full.diagnostics
 
 
 def test_reverse_swap_moves_target_evidence_back_to_the_source(backend, tokens, bases):

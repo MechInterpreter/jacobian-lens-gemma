@@ -574,11 +574,53 @@ def build_swap_basis(
             f"source and target resolve to the same token id {source.token_id} "
             f"({source.concept!r} / {target.concept!r}); there is nothing to exchange"
         )
-    V = _column_pair(
-        atoms[source.token_id], atoms[target.token_id], dtype=policy.torch_solve_dtype
+    return build_swap_basis_from_vectors(
+        atoms[source.token_id],
+        atoms[target.token_id],
+        layer=layer,
+        source=source,
+        target=target,
+        policy=policy,
+        final_norm_weight_folded=final_norm_weight_folded,
+        kind=kind,
     )
+
+
+def build_swap_basis_from_vectors(
+    source_vector: torch.Tensor,
+    target_vector: torch.Tensor,
+    *,
+    layer: int,
+    source: ConceptToken,
+    target: ConceptToken,
+    policy: StabilityPolicy = DEFAULT_STABILITY,
+    final_norm_weight_folded: bool = False,
+    kind: str = "coordinate_swap",
+) -> SwapBasis:
+    """Build ``V`` from two already-selected rows of ``W_U @ J_l``.
+
+    This is algebraically identical to :func:`build_swap_basis`, but avoids
+    materializing the full ``[vocab, d_model]`` dictionary when an experiment
+    uses only a fixed handful of token vectors.
+    """
+    if source.token_id == target.token_id:
+        raise CoordinateSwapError(
+            f"source and target resolve to the same token id {source.token_id} "
+            f"({source.concept!r} / {target.concept!r}); there is nothing to exchange"
+        )
+    if source_vector.ndim != 1 or target_vector.ndim != 1:
+        raise CoordinateSwapError(
+            "selected lens vectors must both be 1-D; got "
+            f"{tuple(source_vector.shape)} and {tuple(target_vector.shape)}"
+        )
+    if source_vector.shape != target_vector.shape:
+        raise CoordinateSwapError(
+            "selected lens vectors have different widths: "
+            f"{tuple(source_vector.shape)} and {tuple(target_vector.shape)}"
+        )
+    V = _column_pair(source_vector, target_vector, dtype=policy.torch_solve_dtype)
     _finite_or_raise(V, "swap basis V")
-    assert_vector_orientation(V, d_model=int(d_model))
+    assert_vector_orientation(V, d_model=int(source_vector.shape[0]))
     diagnostics = basis_diagnostics(V, policy=policy)
     assert_stable(diagnostics, policy=policy)
     return SwapBasis(
