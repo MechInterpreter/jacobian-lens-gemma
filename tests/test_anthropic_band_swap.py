@@ -556,6 +556,79 @@ def test_interrupted_interventions_reuse_completed_units(tmp_path, backend, toke
 # --------------------------------------------------------------------- 13
 
 
+def test_stage_four_reanalyses_a_finished_run_without_a_model(tmp_path):
+    """The timing stage is CPU-only over units stage 3 already paid for.
+
+    It re-reads them by path, validates each against its own checksum, drops a
+    torn one rather than aggregating it, and takes the bands and directed pairs
+    from the run's report so the analysis is over the frozen design.
+    """
+    from jlens.mmpilot.band_swap import read_band_units
+
+    run = tmp_path / "mmband_real_abc123"
+    units = run / "units" / "intervention"
+    units.mkdir(parents=True)
+    payloads = []
+    for index in range(3):
+        payload = {
+            "status": "complete", "band_key": "32-40", "band": list(range(32, 41)),
+            "band_start": 32, "arm": "intermediate", "condition": "swap_alpha1",
+            "alpha": 1.0, "modality": "text", "source": "bird", "target": "cat",
+            "source_answer": "two", "target_answer": "four", "readout": "property",
+            "image_id": f"i{index}", "group_id": f"g{index}",
+            "prediction": "four", "clean_prediction": "two", "target_rank": 1,
+            "target_score": -1.0, "target_margin": 1.0, "target_margin_change": 1.0,
+        }
+        payloads.append(payload)
+        (units / f"unit{index}.json").write_text(
+            json.dumps({"unit_checksum": payload_checksum(payload), "payload": payload}),
+            encoding="utf-8",
+        )
+    # One torn unit, and one that never completed.
+    (units / "torn.json").write_text(
+        json.dumps({"unit_checksum": "sha256:wrong", "payload": payloads[0]}),
+        encoding="utf-8",
+    )
+    (units / "pending.json").write_text(
+        json.dumps(
+            {
+                "unit_checksum": payload_checksum({"status": "pending"}),
+                "payload": {"status": "pending"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run / "anthropic_band_swap_report.json").write_text(
+        json.dumps(
+            {
+                "intervention_family": BAND_INTERVENTION_FAMILY,
+                "report_checksum": "sha256:report",
+                "design": {"band_keys": ["32-40", "35-40"]},
+                "directed_pairs": [{"source": "bird", "target": "cat"}],
+                "thresholds": BandSwapThresholds().to_dict(),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    records, context = read_band_units(run)
+    assert len(records) == 3
+    assert context["n_invalid_units"] == 1
+    assert context["band_keys"] == ["32-40", "35-40"]
+    assert context["directed_pairs"] == [{"source": "bird", "target": "cat"}]
+    assert summarize_band_cells(records)[0]["n_images"] == 3
+
+    (run / "anthropic_band_swap_report.json").write_text(
+        json.dumps({"intervention_family": "anthropic_coordinate_swap"}),
+        encoding="utf-8",
+    )
+    with pytest.raises(BandDesignRefused, match="intervention family"):
+        read_band_units(run)
+    (run / "anthropic_band_swap_report.json").unlink()
+    with pytest.raises(BandDesignRefused, match="no anthropic_band_swap_report"):
+        read_band_units(run)
+
+
 def test_alpha2_is_compared_against_alpha2_matched_controls():
     """Requirement 13."""
     assert controls_for_condition("swap_alpha1") == (

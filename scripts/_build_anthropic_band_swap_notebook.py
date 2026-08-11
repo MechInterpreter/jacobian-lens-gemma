@@ -139,6 +139,11 @@ RUN_STAGE2_CONFIRM_AND_PUBLISH = False # GPU: untouched confirmation + publicati
 RUN_STAGE3_BAND_SWAP = False           # GPU: the contiguous-band causal run
 RUN_STAGE4_TIMING = False              # CPU: intermediate-vs-answer onset
 
+# Stage 4 re-analyses a finished stage-3 run without a model or any media. Set
+# this to that run directory to run it on its own; leave it None to analyse the
+# run this session just produced.
+STAGE4_SWAP_RUN_DIR = None
+
 # ---- explicit spend confirmations (read sections 5 and 9 first) ----------
 CONFIRM_MODEL_LOAD = False
 CONFIRM_FIT_BUDGET = False
@@ -1547,9 +1552,24 @@ Image-level aggregation with a seeded bootstrap interval, then the verdict.
 )
 code(
     r'''
-from jlens.mmpilot.band_swap import band_reasoning_verdict, summarize_band_cells
+from jlens.mmpilot.band_swap import (
+    band_reasoning_verdict, read_band_units, summarize_band_cells,
+)
 
-CELLS, REASONING = [], None
+CELLS, REASONING, STAGE4_CONTEXT = [], None, None
+if RUN_STAGE4_TIMING and not BAND_RECORDS and STAGE4_SWAP_RUN_DIR:
+    # Stage 4 on its own: re-read a finished run's units, checksum by checksum,
+    # with no model, no processor and no media. The bands and directed pairs
+    # come from that run's report, so the analysis is over the design that was
+    # frozen rather than over whatever is on disk.
+    BAND_RECORDS, STAGE4_CONTEXT = read_band_units(STAGE4_SWAP_RUN_DIR)
+    BAND_KEYS = tuple(STAGE4_CONTEXT["band_keys"])
+    DIRECTED_PAIRS = list(STAGE4_CONTEXT["directed_pairs"])
+    print("stage 4 re-analysis of", STAGE4_CONTEXT["run_dir"])
+    print("  complete units", STAGE4_CONTEXT["n_units"],
+          " invalid", STAGE4_CONTEXT["n_invalid_units"])
+    print("  bands         ", list(BAND_KEYS))
+
 if BAND_RECORDS:
     CELLS = summarize_band_cells(BAND_RECORDS, thresholds=THRESHOLDS)
     REASONING = band_reasoning_verdict(
@@ -1612,7 +1632,7 @@ code(
 from jlens.mmpilot.band_swap import band_onset_timing
 
 TIMING = None
-if REASONING is not None:
+if REASONING is not None and (RUN_STAGE4_TIMING or not REAL_MODE):
     TIMING = band_onset_timing(
         REASONING, bands=BAND_KEYS, directed_pairs=DIRECTED_PAIRS,
         modalities=MODALITIES, condition="swap_alpha1",
@@ -1633,6 +1653,8 @@ if REASONING is not None:
           TIMING["band_starts_are_not_exact_physical_onsets"])
     print("  discarded native direct-readout convergence gate used:",
           TIMING["native_direct_readout_convergence_gate_used"])
+elif REASONING is not None:
+    print("skipped: set RUN_STAGE4_TIMING=True for the CPU-only timing stage")
 else:
     print("skipped: no reasoning verdict")
 '''
@@ -1660,6 +1682,9 @@ if REASONING is not None:
         "band_lens_run": str(BAND_RUN_DIR) if BAND_RUN_DIR else None,
         "band_lens_verdict": BAND_VERDICT,
         "swap_run": str(SWAP_RUN_DIR) if SWAP_RUN_DIR else None,
+        "stage4_reanalysis_of": STAGE4_CONTEXT,
+        "directed_pairs": DIRECTED_PAIRS,
+        "band_keys": list(BAND_KEYS),
         "thresholds": THRESHOLDS.to_dict(),
         "threshold_digest": THRESHOLDS.digest,
         "cells": CELLS,

@@ -125,6 +125,7 @@ __all__ = [
     "largest_admissible_band",
     "lens_inventory",
     "predeclare_suffix_bands",
+    "read_band_units",
     "summarize_band_cells",
 ]
 
@@ -790,6 +791,68 @@ def band_trial_record(
         "intervention_family": BAND_INTERVENTION_FAMILY,
         "candidate_scores": result["candidate_scores"],
     }
+
+
+def read_band_units(run_dir) -> tuple[list[dict], dict]:
+    """Re-read a completed band run's intervention units, read-only.
+
+    Stage 4 is a CPU stage over units stage 3 already paid for, so it must be
+    able to open a finished run directory without a model, a processor or the
+    media. Each unit is validated against **its own** recorded checksum — a
+    torn file is counted and dropped rather than aggregated — and the run's
+    report supplies the predeclared bands and directed pairs, so the analysis
+    is over the design that was frozen rather than over whatever happens to be
+    on disk.
+
+    Raises:
+        BandDesignRefused: If the directory holds no report, no units, or a
+            report from a different study.
+    """
+    import json
+    from pathlib import Path
+
+    root = Path(run_dir)
+    report_path = root / "anthropic_band_swap_report.json"
+    if not report_path.is_file():
+        raise BandDesignRefused(
+            f"{root} has no anthropic_band_swap_report.json; stage 4 analyses a "
+            "completed band run, and the report is what states the bands and the "
+            "directed pairs that were predeclared"
+        )
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    if report.get("intervention_family") != BAND_INTERVENTION_FAMILY:
+        raise BandDesignRefused(
+            f"{report_path} belongs to intervention family "
+            f"{report.get('intervention_family')!r}, not {BAND_INTERVENTION_FAMILY!r}"
+        )
+
+    records: list[dict] = []
+    invalid: list[str] = []
+    for path in sorted((root / "units" / "intervention").glob("*.json")):
+        try:
+            stored = json.loads(path.read_text(encoding="utf-8"))
+            payload = stored["payload"]
+            valid = stored.get("unit_checksum") == payload_checksum(payload)
+        except (json.JSONDecodeError, KeyError, TypeError, UnicodeDecodeError):
+            valid, payload = False, None
+        if not valid:
+            invalid.append(str(path))
+            continue
+        if payload.get("status") == "complete":
+            records.append(payload)
+    if not records:
+        raise BandDesignRefused(f"{root} holds no complete intervention units")
+    context = {
+        "run_dir": str(root),
+        "report_checksum": report.get("report_checksum"),
+        "band_keys": list((report.get("design") or {}).get("band_keys") or ()),
+        "directed_pairs": list(report.get("directed_pairs") or ()),
+        "thresholds": dict(report.get("thresholds") or {}),
+        "n_units": len(records),
+        "n_invalid_units": len(invalid),
+        "invalid_units": invalid,
+    }
+    return records, context
 
 
 def _cell_key(row: Mapping) -> tuple:
