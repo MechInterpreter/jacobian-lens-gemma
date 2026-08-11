@@ -243,6 +243,14 @@ def assert_corpus_equivalence(
         str(int(scale)) in fit_prefixes,
         f"fit_prefix_checksums keys={sorted(fit_prefixes)}",
     )
+    scale_points = [int(point) for point in (corpus.get("scale_points") or ())]
+    check(
+        "corpus_scale_points_recorded",
+        bool(scale_points) and int(scale) in scale_points,
+        f"scale_points={scale_points}, required to contain {scale}. The largest "
+        "of them is what determines the record pool the extension drew its "
+        "held-out sets from, so an absent list makes the reconstruction a guess",
+    )
     check(
         "text_only_corpus",
         corpus.get("modality") == "text-only"
@@ -291,6 +299,8 @@ def assert_corpus_equivalence(
         "extension_corpus_id": corpus.get("corpus_id"),
         "extension_corpus_revision": corpus.get("revision"),
         "extension_min_chars": corpus.get("min_chars"),
+        "extension_scale_points": scale_points,
+        "largest_extension_scale": max(scale_points) if scale_points else None,
         "extension_fit_prefix_checksum": fit_prefixes.get(str(int(scale))),
         "extension_split_checksums": checksums,
         "extension_fresh_splits_manifest_checksum": (

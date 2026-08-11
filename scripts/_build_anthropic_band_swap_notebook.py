@@ -621,7 +621,7 @@ if RUN_STAGE1_FIT_MISSING_LENSES or RUN_STAGE2_CONFIRM_AND_PUBLISH:
     # what determines the record pool it drew its held-out sets from. Getting
     # this wrong would exclude the wrong records in section 7, and section 7
     # proves the reconstruction rather than trusting it.
-    LARGEST_EXTENSION_SCALE = max(int(point) for point in _corpus["scale_points"])
+    LARGEST_EXTENSION_SCALE = EQUIVALENCE["largest_extension_scale"]
     _last_index = max(record.stream_index for record in _records)
     _extra_stream = load_dataset(
         "Salesforce/wikitext", "wikitext-103-raw-v1", split="train", streaming=True
