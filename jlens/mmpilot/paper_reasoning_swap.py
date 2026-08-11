@@ -56,6 +56,9 @@ VERDICT_V2_VERSION = "mmpilot.paper_reasoning_onset_verdict.v2"
 DIRECTION_MATCHED_AMENDMENT_VERSION = (
     "mmpilot.paper_reasoning_direction_matched_amendment.v3"
 )
+ALPHA2_CONFIRMATION_VERSION = (
+    "mmpilot.paper_reasoning_alpha2_independent_confirmation.v1"
+)
 
 
 class PaperSwapRefused(RuntimeError):
@@ -1063,6 +1066,73 @@ def amend_paper_v2_report_direction_matching(
     return amended
 
 
+def paper_alpha2_confirmation_verdict(
+    result: Mapping,
+    *,
+    source: str = "bird",
+    target: str = "cat",
+    expected_intermediate_layer: int = 32,
+) -> dict:
+    """Predeclared verdict for a fresh, direction-matched alpha=2 replication.
+
+    This deliberately does not promote the exploratory v2 population.  It
+    consumes a normal :func:`paper_onset_verdict_v2` result from a separately
+    fingerprinted population and asks whether the exact same directed pair has
+    an alpha=2 intermediate onset at the predeclared early layer and a strictly
+    later answer onset.  Alpha=1 remains descriptive dose sensitivity.
+    """
+    pair_name = f"{source}->{target}"
+    matched = dict(result.get("matched_pair_results") or {})
+    alpha2 = dict((matched.get("swap_alpha2") or {}).get(pair_name) or {})
+    alpha1 = dict((matched.get("swap_alpha1") or {}).get(pair_name) or {})
+    intermediate = alpha2.get("intermediate_onset")
+    answer = alpha2.get("answer_onset")
+    clauses = {
+        "direction_is_predeclared": list(
+            (result.get("matched_pair_results") or {})
+            .get("swap_alpha2", {})
+            .keys()
+        ) == [pair_name],
+        "alpha2_intermediate_onset_replicates": (
+            intermediate == int(expected_intermediate_layer)
+        ),
+        "alpha2_answer_onset_is_later": (
+            answer is not None
+            and intermediate is not None
+            and int(answer) > int(intermediate)
+        ),
+        "same_direction_used_across_arms": (
+            alpha2.get("pair") == pair_name
+            and bool(result.get("cross_arm_direction_matching_required"))
+        ),
+    }
+    passed = all(clauses.values())
+    payload = {
+        "version": ALPHA2_CONFIRMATION_VERSION,
+        "verdict": (
+            "PAPER_STYLE_ALPHA2_INDEPENDENT_CONFIRMATION_GO"
+            if passed
+            else "PAPER_STYLE_ALPHA2_INDEPENDENT_CONFIRMATION_NO_GO"
+        ),
+        "pair": pair_name,
+        "alpha2_is_primary": True,
+        "alpha2_intermediate_onset": intermediate,
+        "alpha2_answer_onset": answer,
+        "alpha2_pair_result": alpha2,
+        "alpha1_secondary_pair_result": alpha1,
+        "expected_intermediate_layer": int(expected_intermediate_layer),
+        "clauses": clauses,
+        "failed_clauses": sorted(name for name, ok in clauses.items() if not ok),
+        "interpretation": (
+            "GO independently replicates an alpha=2 intermediate-coordinate "
+            "effect at the predeclared early layer before the same directed "
+            "pair's answer-coordinate effect. Alpha=2 is an amplified "
+            "extrapolation and is labelled as such."
+        ),
+    }
+    return {**payload, "verdict_digest": payload_checksum(payload)}
+
+
 __all__ = [
     "PAPER_REASONING_SWAP_VERSION",
     "POPULATION_VERSION",
@@ -1073,6 +1143,7 @@ __all__ = [
     "PAPER_REASONING_SWAP_V2_VERSION",
     "VERDICT_V2_VERSION",
     "DIRECTION_MATCHED_AMENDMENT_VERSION",
+    "ALPHA2_CONFIRMATION_VERSION",
     "PaperSwapRefused",
     "PaperSwapThresholds",
     "PaperSwapV2Thresholds",
@@ -1081,6 +1152,7 @@ __all__ = [
     "paper_onset_verdict",
     "paper_onset_verdict_v2",
     "amend_paper_v2_report_direction_matching",
+    "paper_alpha2_confirmation_verdict",
     "sampled_band_record",
     "sampled_suffix_bands",
     "select_capability_eligible_samples",

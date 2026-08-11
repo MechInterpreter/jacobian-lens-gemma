@@ -55,8 +55,9 @@ def test_design_is_the_paper_comparison_not_the_old_surrogates():
     assert "repeated_exchange_forbidden" in source
     assert '"one_exchange_per_forward_pass": True' in source
     assert '"position_descriptive_is_blocking": False' in source
-    assert '"primary_alpha": 1.0' in source
-    assert '"sensitivity_alpha": 2.0' in source
+    assert '"primary_alpha": (' in source
+    assert '2.0 if RUN_INDEPENDENT_ALPHA2_CONFIRMATION else 1.0' in source
+    assert '"sensitivity_alpha": (' in source
     assert "mmpaper2_real_" in source
 
 
@@ -95,6 +96,7 @@ def test_safe_defaults_execute_without_drive_model_or_cuda():
         os.chdir(old_cwd)
     assert namespace["RUN_REAL_PAPER_SWAP"] is False
     assert namespace["RUN_DIRECTION_MATCHED_AMENDMENT"] is False
+    assert namespace["RUN_INDEPENDENT_ALPHA2_CONFIRMATION"] is False
     assert namespace["BACKEND"] is None
     assert namespace["STORE"] is None
     assert namespace["TOTAL_PASSES"] == 0
@@ -106,6 +108,7 @@ def test_real_path_is_one_clean_three_switch_run():
     assert "CONFIRM_MODEL_LOAD = False" in source
     assert "CONFIRM_PASS_BUDGET = False" in source
     assert "RUN_DIRECTION_MATCHED_AMENDMENT = False" in source
+    assert "RUN_INDEPENDENT_ALPHA2_CONFIRMATION = False" in source
     assert source.count("= False") >= 3
     assert "RUN_REAL_PAPER_SWAP = True" not in source
     assert "expected the pinned 125,198-group cache" in source
@@ -192,3 +195,19 @@ def test_completed_run_has_a_cpu_only_direction_matched_amendment():
     assert "The original report and every scientific unit remain unchanged." in source
     assert "mmpaper2_real_04ab55235502" in source
     assert "sha256:b64ce3cec51371769b908d14342fbf42f64a6dccb82f8d235ad81d643815ddc6" in source
+
+
+def test_independent_alpha2_confirmation_is_fresh_frozen_and_resumable():
+    source = _source(_payload())
+    assert 'SOURCE_CONCEPTS = ("bird",)' in source
+    assert "CANDIDATE_IMAGES_PER_CONCEPT = 48" in source
+    assert "MAX_ANALYSIS_IMAGES_PER_CELL = 16" in source
+    assert "MIN_ANALYSIS_IMAGES_PER_CELL = 12" in source
+    assert "completed v2 pair images excluded" in source
+    assert "expected 48 spent pair images in completed v2" in source
+    assert "mmpaperconfirm_real" in source
+    assert "paper_alpha2_confirmation_verdict" in source
+    assert "mmpilot.paper_reasoning_swap_alpha2_confirmation.v1" in source
+    assert "paper_reasoning_swap_alpha2_confirmation_report.json" in source
+    assert '"independent_alpha2_confirmation": RUN_INDEPENDENT_ALPHA2_CONFIRMATION' in source
+    assert '2.0 if RUN_INDEPENDENT_ALPHA2_CONFIRMATION else 1.0' in source

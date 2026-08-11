@@ -71,6 +71,13 @@ cell enters the expensive causal stage. If any cell has fewer than four, the
 causal stage stops before spending those passes.
 Rerunning the same notebook resumes; changing any scientific input refuses the
 old directory instead of mixing results.
+
+After the completed v2 study, this notebook also supports a separately
+fingerprinted **independent alpha=2 confirmation mode**.  That mode freezes
+`bird -> cat`, excludes every photograph used by v1 and v2, screens 48 fresh
+bird candidates, requires 12 capability-valid photographs in every modality,
+and treats alpha=2 as the explicitly labelled primary amplified intervention.
+It never writes into either completed run.
 """
 )
 
@@ -124,6 +131,7 @@ RUN_REAL_PAPER_SWAP = False
 CONFIRM_MODEL_LOAD = False
 CONFIRM_PASS_BUDGET = False
 RUN_DIRECTION_MATCHED_AMENDMENT = False
+RUN_INDEPENDENT_ALPHA2_CONFIRMATION = False
 
 # Frozen v2 scientific design.  The completed v1 run is read only and its
 # images are excluded below.
@@ -143,6 +151,22 @@ CONDITIONS = (
     "position_descriptive",
 )
 SELECTION_SEED = "anthropic-hidden-animal-swap-gemma-v2-independent"
+
+# Confirmation mode is a new, separately fingerprinted experiment.  It freezes
+# the direction found in v2, excludes every v1/v2 photograph, doubles the
+# candidate screen, and requires 12 fresh capability-valid recordings per
+# modality.  Alpha=2 becomes the labelled primary test; alpha=1 is secondary.
+SOURCE_CONCEPTS = PAIR_CONCEPTS
+if RUN_INDEPENDENT_ALPHA2_CONFIRMATION:
+    SOURCE_CONCEPTS = ("bird",)
+    CANDIDATE_IMAGES_PER_CONCEPT = 48
+    MAX_ANALYSIS_IMAGES_PER_CELL = 16
+    MIN_ANALYSIS_IMAGES_PER_CELL = 12
+    SELECTION_SEED = "anthropic-bird-to-cat-alpha2-independent-confirmation-v1"
+POPULATION_SELECTION_CONCEPTS = (
+    SOURCE_CONCEPTS
+    if RUN_INDEPENDENT_ALPHA2_CONFIRMATION else POPULATION_CONCEPTS
+)
 
 MODEL_REPO_ID = "google/gemma-4-E4B-it"
 MODEL_REVISION = "fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd"
@@ -191,7 +215,7 @@ LATE_LENS_PINS = {
 
 from jlens.mmpilot.paper_reasoning_swap import PaperSwapV2Thresholds
 THRESHOLDS = PaperSwapV2Thresholds(
-    min_images=4,
+    min_images=MIN_ANALYSIS_IMAGES_PER_CELL,
     min_target_flip_rate=0.50,
     min_joint_intermediate_rate=0.50,
     max_answer_identity_flip_rate=0.25,
@@ -203,6 +227,9 @@ print("RUN_REAL_PAPER_SWAP", RUN_REAL_PAPER_SWAP)
 print("CONFIRM_MODEL_LOAD ", CONFIRM_MODEL_LOAD)
 print("CONFIRM_PASS_BUDGET", CONFIRM_PASS_BUDGET)
 print("RUN_DIRECTION_MATCHED_AMENDMENT", RUN_DIRECTION_MATCHED_AMENDMENT)
+print("RUN_INDEPENDENT_ALPHA2_CONFIRMATION", RUN_INDEPENDENT_ALPHA2_CONFIRMATION)
+print("source concepts", SOURCE_CONCEPTS)
+print("population selection concepts", POPULATION_SELECTION_CONCEPTS)
 print("layers", SAMPLED_LAYERS, "conditions", CONDITIONS)
 print("candidate images/concept", CANDIDATE_IMAGES_PER_CONCEPT)
 print("analysis images/cell", MAX_ANALYSIS_IMAGES_PER_CELL)
@@ -228,6 +255,7 @@ if RUN_REAL_PAPER_SWAP:
         str(path) for path in (
             EXPANDED_MANIFEST_CACHE, PRIOR_EXCLUSION_SET,
             EXTENSION_RUN_DIR, PUBLISHED_LENS_DIR, COMPLETED_V1_RUN_DIR,
+            *([COMPLETED_V2_RUN_DIR] if RUN_INDEPENDENT_ALPHA2_CONFIRMATION else []),
         )
         if not path.exists()
     ]
@@ -295,11 +323,45 @@ if RUN_REAL_PAPER_SWAP:
         )
     excluded_images.update(v1_images)
     excluded_groups.update(v1_groups)
+    v2_images = set()
+    v2_groups = set()
+    if RUN_INDEPENDENT_ALPHA2_CONFIRMATION:
+        v2_report_path = COMPLETED_V2_RUN_DIR / "paper_reasoning_swap_v2_report.json"
+        v2_report = json.loads(v2_report_path.read_text(encoding="utf-8"))
+        if v2_report.get("report_checksum") != COMPLETED_V2_REPORT_CHECKSUM:
+            raise RuntimeError(
+                "completed v2 paper report checksum mismatch; refusing to "
+                "construct a supposedly independent confirmation population"
+            )
+        v2_capability_files = sorted(
+            (COMPLETED_V2_RUN_DIR / "units" / "capability").glob("*.json")
+        )
+        if not v2_capability_files:
+            raise RuntimeError("completed v2 run has no capability units")
+        for path in v2_capability_files:
+            row = json.loads(path.read_text(encoding="utf-8"))
+            payload_row = row.get("payload") if isinstance(row.get("payload"), dict) else row
+            if payload_row.get("image_id"):
+                v2_images.add(str(payload_row["image_id"]))
+            if payload_row.get("group_id"):
+                v2_groups.add(str(payload_row["group_id"]))
+        if len(v2_images) != 48:
+            raise RuntimeError(
+                f"expected 48 spent pair images in completed v2, found {len(v2_images)}"
+            )
+        excluded_images.update(v2_images)
+        excluded_groups.update(v2_groups)
     EXCLUSION_FILE_CHECKSUM = payload_checksum({
         "base_exclusion_file_checksum": EXCLUSION_FILE_CHECKSUM,
         "completed_v1_report_checksum": COMPLETED_V1_REPORT_CHECKSUM,
         "completed_v1_image_ids": sorted(v1_images),
         "completed_v1_group_ids": sorted(v1_groups),
+        "completed_v2_report_checksum": (
+            COMPLETED_V2_REPORT_CHECKSUM
+            if RUN_INDEPENDENT_ALPHA2_CONFIRMATION else None
+        ),
+        "completed_v2_image_ids": sorted(v2_images),
+        "completed_v2_group_ids": sorted(v2_groups),
     })
     eligible_groups = [
         row for row in payload["groups"]
@@ -314,7 +376,7 @@ if RUN_REAL_PAPER_SWAP:
     )
     POPULATION = hidden_animal_population(
         eligible_groups,
-        concept_names=POPULATION_CONCEPTS,
+        concept_names=POPULATION_SELECTION_CONCEPTS,
         evidence_config=evidence_config,
         images_per_concept=CANDIDATE_IMAGES_PER_CONCEPT,
         seed=SELECTION_SEED,
@@ -328,6 +390,7 @@ if RUN_REAL_PAPER_SWAP:
     print("prior exclusion checksum", EXCLUSION_FILE_CHECKSUM)
     print("prior excluded images/groups", len(excluded_images), len(excluded_groups))
     print("completed v1 pair images excluded", len(v1_images))
+    print("completed v2 pair images excluded", len(v2_images))
     print("population digest", POPULATION["population_digest"])
     print("groups/images", POPULATION["n_groups"], POPULATION["n_distinct_images"])
     print("coverage")
@@ -409,7 +472,12 @@ if RUN_REAL_PAPER_SWAP:
         SAMPLED_LAYERS, validated_layers=tuple(LENS_CHECKSUMS)
     )
     DIRECTED_PAIRS = []
-    for source, target in (PAIR_CONCEPTS, tuple(reversed(PAIR_CONCEPTS))):
+    _pair_trials = (
+        (PAIR_CONCEPTS,)
+        if RUN_INDEPENDENT_ALPHA2_CONFIRMATION
+        else (PAIR_CONCEPTS, tuple(reversed(PAIR_CONCEPTS)))
+    )
+    for source, target in _pair_trials:
         contrast = assert_property_contrast(source, target)
         DIRECTED_PAIRS.append({
             "source": source, "target": target,
@@ -421,10 +489,10 @@ if RUN_REAL_PAPER_SWAP:
     print("directed pairs", DIRECTED_PAIRS)
     print("identity protocol", OPEN_ANIMAL_IDENTIFICATION)
     print("property protocol", HIDDEN_ANIMAL_LEGS)
-    n_candidate_images = len(PAIR_CONCEPTS) * CANDIDATE_IMAGES_PER_CONCEPT
+    n_candidate_images = len(SOURCE_CONCEPTS) * CANDIDATE_IMAGES_PER_CONCEPT
     clean_passes = n_candidate_images * len(MODALITIES) * 2 * 2
     n_selected_cells = (
-        len(PAIR_CONCEPTS) * len(MODALITIES) * MAX_ANALYSIS_IMAGES_PER_CELL
+        len(SOURCE_CONCEPTS) * len(MODALITIES) * MAX_ANALYSIS_IMAGES_PER_CELL
     )
     intervention_passes = (
         n_selected_cells * len(BAND_RECORD["bands"])
@@ -561,7 +629,11 @@ if BACKEND is not None:
             }
 
     fingerprint = RunFingerprint(
-        mode="paper_reasoning_coordinate_swap",
+        mode=(
+            "paper_reasoning_alpha2_independent_confirmation"
+            if RUN_INDEPENDENT_ALPHA2_CONFIRMATION
+            else "paper_reasoning_coordinate_swap"
+        ),
         model_repo_id=MODEL_REPO_ID,
         model_revision=MODEL_REVISION_USED,
         processor_revision=PROCESSOR_REVISION_USED,
@@ -577,8 +649,12 @@ if BACKEND is not None:
             "position_rule": POSITION_RULE,
             "conditions": list(CONDITIONS),
             "arms": ["intermediate", "answer"],
-            "primary_alpha": 1.0,
-            "sensitivity_alpha": 2.0,
+            "primary_alpha": (
+                2.0 if RUN_INDEPENDENT_ALPHA2_CONFIRMATION else 1.0
+            ),
+            "sensitivity_alpha": (
+                1.0 if RUN_INDEPENDENT_ALPHA2_CONFIRMATION else 2.0
+            ),
             "one_exchange_per_forward_pass": True,
             "repeated_exchange_forbidden": True,
             "position_descriptive_is_blocking": False,
@@ -586,8 +662,9 @@ if BACKEND is not None:
         selection_config={
             "population_digest": POPULATION["population_digest"],
             "prior_exclusion_checksum": EXCLUSION_FILE_CHECKSUM,
-            "population_concepts": list(POPULATION_CONCEPTS),
+            "population_concepts": list(POPULATION_SELECTION_CONCEPTS),
             "pair_concepts": list(PAIR_CONCEPTS),
+            "source_concepts": list(SOURCE_CONCEPTS),
             "control_concepts": list(CONTROL_CONCEPTS),
             "candidate_images_per_concept": CANDIDATE_IMAGES_PER_CONCEPT,
             "max_analysis_images_per_cell": MAX_ANALYSIS_IMAGES_PER_CELL,
@@ -601,11 +678,20 @@ if BACKEND is not None:
             "band_digest": BAND_RECORD["digest"],
             "threshold_digest": THRESHOLDS.digest,
             "completed_v1_report_checksum": COMPLETED_V1_REPORT_CHECKSUM,
+            "completed_v2_report_checksum": (
+                COMPLETED_V2_REPORT_CHECKSUM
+                if RUN_INDEPENDENT_ALPHA2_CONFIRMATION else None
+            ),
+            "independent_alpha2_confirmation": RUN_INDEPENDENT_ALPHA2_CONFIRMATION,
             "prompt_protocols": ["mmpilot.open_animal_identification.v1", "mmpilot.hidden_animal_legs.v1"],
             "target_and_candidates_absent_from_prompt": True,
         },
     )
-    RUN_DIR = RUNS_ROOT / f"mmpaper2_real_{fingerprint.digest.split(':')[1][:12]}"
+    _run_prefix = (
+        "mmpaperconfirm_real"
+        if RUN_INDEPENDENT_ALPHA2_CONFIRMATION else "mmpaper2_real"
+    )
+    RUN_DIR = RUNS_ROOT / f"{_run_prefix}_{fingerprint.digest.split(':')[1][:12]}"
     STORE = UnitStore(RUN_DIR, fingerprint)
     print("run directory", RUN_DIR)
     print("run state    ", STORE.open())
@@ -685,7 +771,7 @@ if STORE is not None:
     from jlens.mmpilot.paper_reasoning_swap import select_capability_eligible_samples
     from jlens.mmpilot.store import safe_key
 
-    source_groups = [row for row in POPULATION["groups"] if row["concept"] in PAIR_CONCEPTS]
+    source_groups = [row for row in POPULATION["groups"] if row["concept"] in SOURCE_CONCEPTS]
     computed = reused = 0
     for group in source_groups:
         source = group["concept"]
@@ -714,13 +800,13 @@ if STORE is not None:
                 computed += 1
                 print(f"clean {computed:3d} computed  {reused:3d} reused  {source}:{modality}:{readout}")
     clean_units = list(STORE.load_all("capability").values())
-    for source in PAIR_CONCEPTS:
+    for source in SOURCE_CONCEPTS:
         for modality in MODALITIES:
             rows = [r for r in clean_units if r["source"] == source and r["modality"] == modality]
             print(source, modality, {kind: sum(r["correct"] for r in rows if r["readout"] == kind) for kind in ("identity", "property")})
     CAUSAL_SELECTION = select_capability_eligible_samples(
         clean_units,
-        concepts=PAIR_CONCEPTS,
+        concepts=SOURCE_CONCEPTS,
         modalities=MODALITIES,
         max_images_per_cell=MAX_ANALYSIS_IMAGES_PER_CELL,
         min_images_per_cell=MIN_ANALYSIS_IMAGES_PER_CELL,
@@ -760,7 +846,7 @@ if STORE is not None and CAUSAL_SELECTION["all_cells_sufficient"]:
         for key, group_ids in CAUSAL_SELECTION["selected_group_ids"].items()
     }
     computed = reused = 0
-    source_groups = [row for row in POPULATION["groups"] if row["concept"] in PAIR_CONCEPTS]
+    source_groups = [row for row in POPULATION["groups"] if row["concept"] in SOURCE_CONCEPTS]
     for group in source_groups:
         source = group["concept"]
         target = next(name for name in PAIR_CONCEPTS if name != source)
@@ -857,6 +943,7 @@ if STORE is not None:
     import os
     from jlens.mmpilot.paper_reasoning_swap import (
         VERDICT_V2_VERSION,
+        paper_alpha2_confirmation_verdict,
         paper_onset_verdict_v2,
         summarize_cells,
     )
@@ -889,13 +976,29 @@ if STORE is not None:
                 "selected images with both clean identity and property answers correct"
             ),
         }
+    _direction_matched_verdict = RESULT.get("verdict")
+    if RUN_INDEPENDENT_ALPHA2_CONFIRMATION and CAUSAL_SELECTION["all_cells_sufficient"]:
+        _confirmation = paper_alpha2_confirmation_verdict(
+            RESULT, source="bird", target="cat", expected_intermediate_layer=32
+        )
+        RESULT.update(_confirmation)
+        RESULT["direction_matched_base_verdict"] = _direction_matched_verdict
     RESULT.update({
-        "schema": "mmpilot.paper_reasoning_swap_report.v2",
+        "schema": (
+            "mmpilot.paper_reasoning_swap_alpha2_confirmation.v1"
+            if RUN_INDEPENDENT_ALPHA2_CONFIRMATION
+            else "mmpilot.paper_reasoning_swap_report.v2"
+        ),
         "run_dir": str(RUN_DIR),
         "run_fingerprint": STORE.fingerprint.digest,
         "population_digest": POPULATION["population_digest"],
         "prior_exclusion_checksum": EXCLUSION_FILE_CHECKSUM,
         "completed_v1_report_checksum": COMPLETED_V1_REPORT_CHECKSUM,
+        "completed_v2_report_checksum": (
+            COMPLETED_V2_REPORT_CHECKSUM
+            if RUN_INDEPENDENT_ALPHA2_CONFIRMATION else None
+        ),
+        "independent_alpha2_confirmation": RUN_INDEPENDENT_ALPHA2_CONFIRMATION,
         "capability_selection": CAUSAL_SELECTION,
         "band_record": BAND_RECORD,
         "directed_pairs": DIRECTED_PAIRS,
@@ -920,11 +1023,23 @@ if STORE is not None:
     })
     RESULT["report_checksum"] = payload_checksum(RESULT)
 
-    report_path = RUN_DIR / "paper_reasoning_swap_v2_report.json"
+    report_path = RUN_DIR / (
+        "paper_reasoning_swap_alpha2_confirmation_report.json"
+        if RUN_INDEPENDENT_ALPHA2_CONFIRMATION
+        else "paper_reasoning_swap_v2_report.json"
+    )
     tmp = report_path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(RESULT, indent=2, default=str), encoding="utf-8")
     os.replace(tmp, report_path)
-    STORE.save("metric", "paper_reasoning_onset_verdict_v2", RESULT)
+    STORE.save(
+        "metric",
+        (
+            "paper_reasoning_alpha2_independent_confirmation"
+            if RUN_INDEPENDENT_ALPHA2_CONFIRMATION
+            else "paper_reasoning_onset_verdict_v2"
+        ),
+        RESULT,
+    )
 
     print("=" * 72)
     print("VERDICT", RESULT["verdict"])
@@ -952,12 +1067,21 @@ if STORE is not None:
     print("A changed lens, cache, pair, layer grid, threshold, prompt protocol,")
     print("audio protocol, condition set, or model revision changes the fingerprint")
     print("and is refused rather than mixed.")
-    print("\nSend back paper_reasoning_swap_v2_report.json and the verdict block above.")
+    print(
+        "\nSend back "
+        + (
+            "paper_reasoning_swap_alpha2_confirmation_report.json"
+            if RUN_INDEPENDENT_ALPHA2_CONFIRMATION
+            else "paper_reasoning_swap_v2_report.json"
+        )
+        + " and the verdict block above."
+    )
 else:
     if RUN_DIRECTION_MATCHED_AMENDMENT:
         print("scientific stages skipped as designed; continue to section 14")
     else:
-        print("To run: set all three section-2 switches True and use an L4 or A100.")
+        print("To run the original study: set the first three section-2 switches True.")
+        print("For fresh alpha=2 confirmation, also set RUN_INDEPENDENT_ALPHA2_CONFIRMATION=True.")
 '''
 )
 

@@ -10,6 +10,7 @@ from jlens.mmpilot.paper_reasoning_swap import (
     amend_paper_v2_report_direction_matching,
     hidden_animal_population,
     independent_layer_record,
+    paper_alpha2_confirmation_verdict,
     paper_onset_verdict,
     paper_onset_verdict_v2,
     sampled_suffix_bands,
@@ -382,6 +383,42 @@ def test_v2_reports_alpha2_matched_sensitivity_beside_primary_null():
     assert verdict["alpha2_sensitivity_verdict"] == (
         "PAPER_STYLE_ALPHA2_SENSITIVITY_EARLIER_INTERMEDIATE"
     )
+
+
+def test_alpha2_confirmation_requires_same_direction_early_then_late():
+    result = paper_onset_verdict_v2(
+        summarize_cells(_v2_raw_records()),
+        layers=(32, 35),
+        directed_pairs=({"source": "bird", "target": "cat"},),
+        modalities=("text",),
+    )
+    confirmation = paper_alpha2_confirmation_verdict(result)
+    assert confirmation["verdict"] == (
+        "PAPER_STYLE_ALPHA2_INDEPENDENT_CONFIRMATION_GO"
+    )
+    assert confirmation["alpha2_is_primary"] is True
+    assert confirmation["alpha2_intermediate_onset"] == 32
+    assert confirmation["alpha2_answer_onset"] == 35
+    assert all(confirmation["clauses"].values())
+
+
+def test_alpha2_confirmation_refuses_opposite_direction_stitching():
+    result = paper_onset_verdict_v2(
+        summarize_cells(_v2_raw_records()),
+        layers=(32, 35),
+        directed_pairs=({"source": "bird", "target": "cat"},),
+        modalities=("text",),
+    )
+    result["matched_pair_results"]["swap_alpha2"] = {
+        "cat->bird": result["matched_pair_results"]["swap_alpha2"].pop(
+            "bird->cat"
+        )
+    }
+    confirmation = paper_alpha2_confirmation_verdict(result)
+    assert confirmation["verdict"] == (
+        "PAPER_STYLE_ALPHA2_INDEPENDENT_CONFIRMATION_NO_GO"
+    )
+    assert "direction_is_predeclared" in confirmation["failed_clauses"]
 
 
 def test_v2_never_compares_intermediate_and_answer_from_opposite_directions():
