@@ -26,6 +26,8 @@ ACTIVE = {
     "multimodal_jspace_coordinate_swap_mock_colab.ipynb",
     "multimodal_jspace_l32_convergence_resolution_colab.ipynb",
     "research_grade_l27_l31_preconvergence_study_colab.ipynb",
+    "multimodal_jspace_anthropic_reasoning_swap_colab.ipynb",
+    "multimodal_jspace_anthropic_band_swap_colab.ipynb",
 }
 
 #: The archive categories, and what each is for.
