@@ -138,10 +138,24 @@ def independent_layer_record(
 ) -> dict:
     """One exact exchange per independently confirmed physical layer.
 
-    Applying an exchange repeatedly is an involution and can swap a concept
-    back out.  V2 therefore localizes onset with independent single-layer
-    interventions.  Every cell is exactly the published two-coordinate
-    equation, applied at every original prompt position, once.
+    This is the **v2 run's own design record**, and the completed run's
+    fingerprint is bound to it, so its payload is frozen exactly as written.
+
+    ``repeated_exchange_forbidden`` records what v2 chose to do; it is not a
+    property of the method and it does not forbid a band. The involution
+    cancels *one fixed update applied twice*. A contiguous-band clamp is a
+    different operation: each physical layer has its own ``W_U @ J_l``, so each
+    layer's ``V`` is a different pair of directions and each re-reads ``c`` from
+    the activation that actually arrived there. Two band layers cancel only
+    insofar as their bases and coordinates agree, which in a real transformer
+    they do not.
+
+    What v2 actually lacked was lenses: the confirmed grid was 32/35/38/40, and
+    33, 34, 36, 37 and 39 had none, so no contiguous band over that window
+    existed to clamp. :mod:`jlens.mmpilot.band_swap` and
+    :mod:`jlens.mmpilot.band_lens` are the study that produces them and runs the
+    band. Every cell here remains exactly the published two-coordinate equation,
+    applied at every original prompt position, once.
     """
     grid = tuple(int(layer) for layer in layers)
     if not grid or tuple(sorted(set(grid))) != grid:

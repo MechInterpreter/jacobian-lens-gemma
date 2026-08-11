@@ -108,16 +108,22 @@ to the external teacher-forced scorer, and
 :func:`assert_open_prompt_protocol` refuses any other configuration. The
 candidate-listed prompt remains available as a labelled comparison condition.
 
-An involution, and what that costs a layer band
-===============================================
+An involution, and what that does and does not cost a layer band
+===============================================================
 
-Exact exchange is an involution: two swaps of the same pair cancel. Across a
-layer band the swap is *recomputed from each layer's own activation*, so it
-only cancels to the extent that consecutive layers' coordinates agree. In a
-real transformer they do not; in a synthetic model whose blocks commute with
-the exchange they do, and an even-length band is then close to a no-op. The
-MOCK notebook measures this explicitly. It is a property of the method, not a
-bug, and the real band must be chosen with it in mind.
+Exact exchange is an involution: applying **one fixed update** twice cancels.
+That is a statement about one update, and it does not forbid a band. Across a
+layer band the swap is *recomputed from each layer's own activation*, against
+that layer's own ``W_U @ J_l``, so two consecutive band layers cancel only to
+the extent that their bases *and* their coordinates agree. In a real
+transformer they do not; in a synthetic model whose blocks commute with the
+exchange they do, and an even-length band is then close to a no-op. The MOCK
+notebook measures that explicitly. It is a property of the method under a
+commuting stack, not a bug, and the real band must be chosen with it in mind.
+
+What a band does require is a confirmed lens at **every** physical layer inside
+it — see :func:`build_layer_band`, and :mod:`jlens.mmpilot.band_swap` for the
+contiguous-band study built on it.
 """
 
 from __future__ import annotations

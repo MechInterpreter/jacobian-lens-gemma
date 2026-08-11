@@ -434,7 +434,6 @@ def test_the_swap_doc_requires_an_open_prompt_for_the_primary_study():
     assert "What animal is present in the evidence?" in text
     assert "How many legs does the animal typically have?" in text
     assert "never sees a rendered list such as `bird, cat, giraffe, ...`" in text
-    assert "later, stronger stage" in text
     assert "open cross-modal identification;" in text
     assert "prompt_protocol.md" in text
 
@@ -611,9 +610,9 @@ def test_the_protocol_doc_specifies_the_animal_concept_selection():
         assert required in text, required
 
 
-def test_the_swap_doc_says_the_planned_study_is_animal_only():
+def test_the_swap_doc_says_the_study_is_animal_only():
     text = _flat(SWAP_DOC.read_text(encoding="utf-8"))
-    assert "The planned study is animal-only.**" in text
+    assert "The real study is animal-only.**" in text
     assert "predeclared `animal` domain" in text
     assert "`toilet` and `microwave`, which are in the pilot's six-concept set" in text
     assert "leg counts come from a registry (`bird` 2, `cat` 4) rather than a guess" in text

@@ -144,15 +144,55 @@ the result can localize an onset only among these four tested starts.
 The original published set at scale 100 was **35, 38 and 40**; L32 comes from
 the separate scale-250 early-layer extension and its untouched confirmation set.
 
-### The exchange is an involution, and a band has to survive that
+### The exchange is an involution, and that does not forbid a band
 
-Two swaps of the same pair cancel exactly. Across a band the swap is recomputed
-per layer, so it cancels only to the extent that consecutive layers' coordinates
+Applying **one fixed update** twice cancels exactly. Across a band the swap is
+recomputed per layer against that layer's own `W_U @ J_l`, so two consecutive
+band layers cancel only to the extent that their bases *and* their coordinates
 agree. In the synthetic world the carry blocks nearly commute with the exchange,
 and an even-length band is measurably close to a no-op —
 `band_parity_diagnostic` reports it rather than hiding it. A real transformer's
 blocks do not commute with the exchange, but the real band must still be checked
 against this rather than assumed safe.
+
+The completed single-layer study recorded `repeated_exchange_forbidden: true` in
+its own design record. That is a statement about **what that run did**, frozen
+because its fingerprint is bound to it; it is not a property of the method. What
+actually blocked a band was the lenses: 33, 34, 36, 37 and 39 had none.
+
+### The contiguous band, and what it costs
+
+`jlens/mmpilot/band_swap.py` runs the paper's primary protocol — the same
+exchange at *every* physical layer of a contiguous band, all hooks installed at
+once, coordinates recomputed per layer, every original prompt position patched.
+Its admissibility rule is the one above, applied without exception:
+
+* `assert_contiguous` refuses `[32, 35, 38, 40]`. Four confirmed layers are not
+  the range 32-40, and calling them one would report five layers as patched that
+  no hook ever touched.
+* `build_layer_band` refuses a band containing a layer without a confirmed lens.
+* `lens_inventory` prints one row per physical layer in the window — path,
+  checksum, scale, corpus, confirmation set, verdict, usable — including the
+  layers that have nothing, with the reason.
+* A partial pass reports the largest admissible contiguous sub-band, chosen from
+  layer geometry alone (longest run, ties to the shallowest start) before any
+  causal number exists.
+
+`jlens/mmpilot/band_lens.py` produces the missing lenses: physical layers 33,
+34, 36, 37 and 39, fitted at scale 250 in **one** pass over the *same*
+deterministic prompt ordering the early-layer extension used (proved by
+recomputing that run's own 250-prompt prefix checksum), then confirmed under the
+same frozen gate on **third-generation** held-out sets — the parent's sets and
+the extension's own now-spent sets are both excluded. It is a fresh
+accumulator, never a seeded continuation: the extension checkpoint holds a
+different layer grid, and appending five new layers to it would claim 250
+prompts for matrices that saw none.
+
+Scoring is Anthropic's: a trial succeeds when the **downstream target answer
+becomes top-1**. Rank, log-prob and margin are secondary; a positive margin that
+does not reach top-1 is reported as `partial_movement_not_top1`. Identity
+replacement is an intervention-integrity diagnostic and can never produce a
+reasoning GO on its own.
 
 ### Source/target reversal
 

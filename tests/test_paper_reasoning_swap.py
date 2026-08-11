@@ -30,7 +30,15 @@ def test_sampled_suffix_bands_are_ranges_on_the_confirmed_grid():
         sampled_suffix_bands((35, 32), validated_layers=(32, 35))
 
 
-def test_v2_layers_are_independent_single_exchanges():
+def test_v2_records_its_own_single_layer_design():
+    """The completed v2 run's design record, pinned because its fingerprint is
+    bound to it.
+
+    ``repeated_exchange_forbidden`` is a statement about what that run did, not
+    a property of the method: a contiguous-band clamp is not one fixed update
+    applied twice, because each band layer has its own lens basis and re-reads
+    its own coordinates. The band study asserts the other half of that below.
+    """
     record = independent_layer_record(
         (32, 35, 38, 40), validated_layers=(32, 35, 38, 40)
     )
@@ -39,6 +47,26 @@ def test_v2_layers_are_independent_single_exchanges():
     assert record["repeated_exchange_forbidden"] is True
     with pytest.raises(PaperSwapRefused, match="lack independent"):
         independent_layer_record((32, 35), validated_layers=(32,))
+
+
+def test_a_contiguous_band_is_admissible_under_the_same_algebra():
+    """The v2 record does not forbid a band; a missing lens does.
+
+    Given a confirmed lens at every physical layer of a range, the same
+    two-coordinate exchange clamps the whole range — which is the paper's
+    primary protocol and what :mod:`jlens.mmpilot.band_swap` runs.
+    """
+    from jlens.mmpilot.band_swap import build_band, predeclare_suffix_bands
+    from jlens.mmpilot.coordinate_swap import LayerBandError
+
+    confirmed = tuple(range(32, 41))
+    assert build_band(32, 40, usable_layers=confirmed).layers == confirmed
+    assert [band.layers for band in predeclare_suffix_bands(
+        starts=(32, 35), end=40, usable_layers=confirmed
+    )] == [tuple(range(32, 41)), tuple(range(35, 41))]
+    # What actually blocks the band on the v2 grid is the five absent lenses.
+    with pytest.raises(LayerBandError, match=r"\[33, 34, 36, 37, 39\]"):
+        build_band(32, 40, usable_layers=(32, 35, 38, 40))
 
 
 def _groups():

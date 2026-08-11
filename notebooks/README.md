@@ -1,6 +1,6 @@
 # Notebooks
 
-Eight notebooks at this level are the **active research workflow**. Everything
+Nine notebooks at this level are the **active research workflow**. Everything
 else has been moved into `archive/`, where it is preserved rather than
 preserved-and-confusing: an archived notebook produced a completed result, and
 re-running it today would re-run an *older protocol*.
@@ -33,8 +33,28 @@ published, and none of them fits a lens except the first two.
 | 7 | `research_grade_l27_l31_preconvergence_study_colab.ipynb` | **New.** The bounded L27–L31 transition study: the one interval left open by L26 (failed confirmation), L32 (confirmed but AMBIGUOUS twice) and L35 (CONVERGED). Fits all five candidates fresh at scale 250, confirms them on a genuinely untouched set, selects the *earliest* passer, and conditionally measures native convergence and cross-modal causal transfer on a fourth independent SpokenCOCO population. | `mmpre_*` run |
 | 8 | `multimodal_jspace_anthropic_reasoning_swap_colab.ipynb` | **Primary paper-method test (v2) and independent alpha=2 confirmation.** Uses Anthropic's published two-coordinate exchange once at each independently confirmed physical layer and compares hidden animal-coordinate swaps directly with matched leg-answer swaps in text, image and spoken audio. Its confirmation mode freezes bird->cat, excludes every v1/v2 photograph and the 48 images from the capability-only failed screen, recruits 128 new candidates while retaining the frozen minimum of 12, labels alpha=2 as amplified, and smart-saves every unit. It also includes the CPU-only direction-matched amendment for the completed v2 report. | `mmpaper2_*` exploratory run, immutable direction-matched v3 amendment, or separately fingerprinted `mmpaperconfirm_*` run |
 
-Notebooks 1–5, 7 and 8 are all **switched off** in the committed file. Opening one
-starts nothing, downloads nothing and spends nothing.
+| 9 | `multimodal_jspace_anthropic_band_swap_colab.ipynb` | **New. Anthropic's primary protocol: the contiguous-layer-band clamp.** The same exact two-coordinate exchange, applied at every original prompt position at *every physical layer* of a contiguous band, with the coordinates recomputed per layer. Because a band needs a confirmed lens at every layer inside it, stages 1–2 first fit and confirm physical layers 33, 34, 36, 37 and 39 at scale 250 on the extension's own frozen corpus ordering; stages 3–4 then run the band swap and the intermediate-versus-answer timing. `[32, 35, 38, 40]` is refused as non-contiguous. | `bandlens_real_*` (lenses) and `mmband_real_*` (causal) runs |
+
+Notebooks 1–5 and 7–9 are all **switched off** in the committed file. Opening one
+starts nothing, downloads nothing and spends nothing. Notebook 9's off state is
+a complete MOCK run on CPU.
+
+### Notebook 8 versus notebook 9
+
+Both run Anthropic's exact two-coordinate exchange, and they differ in the one
+thing the paper is explicit about: **how many layers are clamped at once.**
+
+Notebook 8 applied one exchange at one confirmed layer per forward pass, on the
+sampled grid 32/35/38/40, and recorded that choice as
+`repeated_exchange_forbidden`. That flag is a record of *its own* design — it is
+not a property of the method. The involution cancels one **fixed** update
+applied twice; a band clamp is not that, because each physical layer has its own
+`W_U @ J_l` and re-reads its own coordinates.
+
+Notebook 9 is therefore the paper's primary protocol, and its cost is honest:
+a band may only span layers that *all* have an independently confirmed lens at
+one scale, so it has to produce five new ones before it can clamp anything.
+Notebook 8's runs, reports and this file are read-only to it.
 
 ### Notebook 7 is a *transition* study, and it is bounded on purpose
 
@@ -87,7 +107,8 @@ semantics and what a fresh process reconstructs versus re-proves.
 | L32 causal transfer under an **open** prompt, and the paired L35 reference | (4) L32 follow-up |
 | L32 native direct-readout convergence on an **independent** population | (5) convergence resolution |
 | anything about physical layers 27–31 | (7) the L27–L31 transition study |
-| paper-style hidden-intermediate exchange versus the answer-swap confound | (8) Anthropic reasoning swap |
+| paper-style hidden-intermediate exchange versus the answer-swap confound, one layer at a time | (8) Anthropic reasoning swap |
+| the paper's contiguous-band clamp, and the lenses for physical layers 33/34/36/37/39 | (9) Anthropic band swap |
 
 ---
 
