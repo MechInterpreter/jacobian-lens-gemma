@@ -326,7 +326,21 @@ if REAL_MODE:
             print(f"  interior run {_dir.name}: {_error}")
             continue
         for _row in _rows:
-            if _row.usable:
+            _existing = next((r for r in LENS_ROWS if r.layer == _row.layer), None)
+            if (
+                _row.usable
+                and _existing is not None
+                and _existing.usable
+                and _existing.lens_checksum != _row.lens_checksum
+            ):
+                raise RuntimeError(
+                    f"two runs publish a usable lens for layer {_row.layer} with "
+                    f"different checksums ({_existing.lens_checksum} from "
+                    f"{_existing.provenance}, {_row.lens_checksum} from "
+                    f"{_dir.name}). Which artifact a band rests on is not decided "
+                    "by directory sort order; point the notebook at one run."
+                )
+            if _row.usable or _existing is None:
                 LENS_ROWS = [r for r in LENS_ROWS if r.layer != _row.layer] + [_row]
         LENS_SOURCES.update(_sources)
         DISCOVERY[f"interior_{_dir.name}"] = _evidence
