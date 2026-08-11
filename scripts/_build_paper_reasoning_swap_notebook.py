@@ -1163,8 +1163,18 @@ if STORE is not None:
     print("=" * 72)
     print("VERDICT", RESULT["verdict"])
     print("=" * 72)
-    print("primary alpha=1 onsets", RESULT["primary_onsets"])
-    print("alpha=2 sensitivity  ", RESULT["sensitivity_onsets"])
+    if RUN_INDEPENDENT_ALPHA2_CONFIRMATION:
+        print(
+            "confirmation primary alpha=2 onsets",
+            {
+                "intermediate": RESULT.get("alpha2_intermediate_onset"),
+                "answer": RESULT.get("alpha2_answer_onset"),
+            },
+        )
+        print("secondary alpha=1 onsets          ", RESULT["primary_onsets"])
+    else:
+        print("primary alpha=1 onsets", RESULT["primary_onsets"])
+        print("alpha=2 sensitivity  ", RESULT["sensitivity_onsets"])
     print("tested layers        ", RESULT["tested_layers"])
     print("report            ", report_path)
     print("checksum          ", RESULT["report_checksum"])

@@ -220,3 +220,5 @@ def test_independent_alpha2_confirmation_is_fresh_frozen_and_resumable():
     assert "failed capability-screen images excluded" in source
     assert '"causal_results_seen_before_extension": False' in source
     assert '"causal_units_in_parent": 0' in source
+    assert "confirmation primary alpha=2 onsets" in source
+    assert "secondary alpha=1 onsets" in source
