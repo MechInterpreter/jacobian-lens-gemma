@@ -1053,8 +1053,12 @@ def _direction_cell(
             ),
             "passed": passed,
         }
-    if arm == "answer" and diagnostic is not None:
-        clauses["identity_preserved_by_the_answer_arm"] = (
+    if arm == "answer":
+        # The answer arm is the intermediate arm's control, and it is only that
+        # if it left the identity alone. A missing identity record cannot pass
+        # the clause by being absent.
+        clauses["identity_record_present"] = diagnostic is not None
+        clauses["identity_preserved_by_the_answer_arm"] = diagnostic is not None and (
             float(diagnostic["target_top1_rate"])
             <= thresholds.max_identity_flip_rate_answer_arm
         )
