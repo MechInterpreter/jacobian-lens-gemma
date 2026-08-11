@@ -133,13 +133,29 @@ def test_every_expensive_unit_is_fingerprint_gated_and_atomically_saved():
         assert bound in source, bound
 
 
-def test_the_completed_runs_are_read_only():
+def test_the_completed_runs_are_read_only_and_their_photographs_are_spent():
+    """The single-layer runs are read for one thing: what to exclude.
+
+    Their run directories are in `PROTECTED_RUN_DIRS`, so publication refuses to
+    write into them, and every photograph they screened is excluded from this
+    study's population — those populations were examined while their successors
+    were designed, so drawing from them again would select images already known
+    to be capability-valid.
+    """
     source = _source(_payload())
     assert "PROTECTED_RUN_DIRS" in source
     assert "protected_run_dirs=PROTECTED_RUN_DIRS" in source
     assert '"completed_single_layer_run_read_or_modified": False' in source
-    assert "mmpaper2_real" not in source
-    assert "mmpaperconfirm_real" not in source
+    assert "COMPLETED_CAUSAL_RUNS" in source
+    for run in ("mmpaper_real_", "mmpaper2_real_", "mmpaperconfirm_real_"):
+        assert run in source, run
+    assert "does not match its pinned report" in source
+    assert "the new population overlaps the exclusion set" in source
+    assert "prior_exclusion_digest" in source
+    # Read-only: nothing writes into a completed causal run.
+    assert "STORE.save" not in source.replace("SWAP_STORE.save", "").replace(
+        "BAND_STORE.save", ""
+    )
 
 
 def test_safe_defaults_execute_the_whole_mock_pipeline_without_drive_or_cuda():

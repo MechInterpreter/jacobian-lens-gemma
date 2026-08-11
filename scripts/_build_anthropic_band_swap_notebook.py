@@ -208,7 +208,33 @@ PRIOR_EXCLUSION_SET = Path(
     "jlens_l32_resolution_prep_v1/"
     "prep_020ebbe6f832aece5ece6cb8bee994ca/exclusion_set.json"
 )
-PROTECTED_RUN_DIRS = (PARENT_CALIBRATION_RUN_DIR, EXTENSION_RUN_DIR)
+
+# Completed causal runs. Read-only, and read for one purpose: every photograph
+# they spent is excluded from this study's population. Their pinned report
+# checksums are the repository's own record of those runs; a directory whose
+# report does not match its pin is refused rather than trusted.
+COMPLETED_CAUSAL_RUNS = {
+    "single_layer_v1": (
+        RUNS_ROOT / "mmpaper_real_24be1d028bf1",
+        "paper_reasoning_swap_report.json",
+        "sha256:a60f3336bf8acdc98dc1a434698104eaa98b3192c44f43fa5ab21212826ae397",
+    ),
+    "single_layer_v2": (
+        RUNS_ROOT / "mmpaper2_real_04ab55235502",
+        "paper_reasoning_swap_v2_report.json",
+        "sha256:b64ce3cec51371769b908d14342fbf42f64a6dccb82f8d235ad81d643815ddc6",
+    ),
+    "alpha2_capability_screen": (
+        RUNS_ROOT / "mmpaperconfirm_real_6b0745c08d84",
+        "paper_reasoning_swap_alpha2_confirmation_report.json",
+        "sha256:37d32605b24984f09c0dfccaab7c7ea98e217bef82412bd28576384b22f23c11",
+    ),
+}
+PROTECTED_RUN_DIRS = (
+    PARENT_CALIBRATION_RUN_DIR,
+    EXTENSION_RUN_DIR,
+    *(directory for directory, _, _ in COMPLETED_CAUSAL_RUNS.values()),
+)
 
 print("mode                        ", MODE)
 print("study version               ", BAND_SWAP_VERSION)
@@ -258,6 +284,7 @@ if REAL_MODE:
         required.append(PARENT_CALIBRATION_RUN_DIR)
     if RUN_STAGE3_BAND_SWAP:
         required += [EXPANDED_MANIFEST_CACHE, PRIOR_EXCLUSION_SET]
+        required += [directory for directory, _, _ in COMPLETED_CAUSAL_RUNS.values()]
     missing = [str(path) for path in required if not path.exists()]
     if missing:
         raise FileNotFoundError(
@@ -1225,6 +1252,43 @@ if RUN_STAGE3_BAND_SWAP:
     _exclusion = json.loads(PRIOR_EXCLUSION_SET.read_bytes())
     _excluded_images = {str(v) for v in _exclusion.get("image_ids", [])}
     _excluded_groups = {str(v) for v in _exclusion.get("group_ids", [])}
+
+    # Every photograph the completed causal runs spent is excluded. Those
+    # populations were examined while their successors were designed, so
+    # drawing from them again would select images already known to be
+    # capability-valid. Nothing in those directories is written.
+    _spent = {}
+    for _name, (_dir, _report_name, _pin) in COMPLETED_CAUSAL_RUNS.items():
+        _report = json.loads((_dir / _report_name).read_text(encoding="utf-8"))
+        if _report.get("report_checksum") != _pin:
+            raise RuntimeError(
+                f"{_name}: {_dir / _report_name} does not match its pinned report "
+                f"checksum; refusing to guess which photographs it spent"
+            )
+        _images, _groups = set(), set()
+        for _path in sorted((_dir / "units" / "capability").glob("*.json")):
+            _row = json.loads(_path.read_text(encoding="utf-8"))
+            _payload = _row.get("payload") if isinstance(_row.get("payload"), dict) else _row
+            if _payload.get("image_id"):
+                _images.add(str(_payload["image_id"]))
+            if _payload.get("group_id"):
+                _groups.add(str(_payload["group_id"]))
+        if not _images:
+            raise RuntimeError(f"{_name}: no capability units found in {_dir}")
+        _spent[_name] = {
+            "report_checksum": _pin,
+            "n_images": len(_images),
+            "image_ids": sorted(_images),
+            "group_ids": sorted(_groups),
+        }
+        _excluded_images |= _images
+        _excluded_groups |= _groups
+        print(f"  excluded {len(_images):3d} images spent by {_name}")
+    EXCLUSION_DIGEST = payload_checksum({
+        "prior_exclusion_set": str(PRIOR_EXCLUSION_SET),
+        "completed_causal_runs": _spent,
+    })
+    print("  exclusion digest", EXCLUSION_DIGEST)
     _eligible = [
         row for row in _payload["groups"]
         if str(row.get("image_id")) not in _excluded_images
@@ -1242,7 +1306,11 @@ if RUN_STAGE3_BAND_SWAP:
         seed=SELECTION_SEED,
     )
     del _payload, _raw, _eligible
+    if {str(row["image_id"]) for row in POPULATION["groups"]} & _excluded_images:
+        raise RuntimeError("the new population overlaps the exclusion set")
     print("population digest", POPULATION["population_digest"])
+    print("population images ", POPULATION["n_distinct_images"],
+          "  none of them spent by a completed causal run")
 
     DIRECTED_PAIRS = []
     for _source, _target in (PAIR_CONCEPTS, tuple(reversed(PAIR_CONCEPTS))):
@@ -1321,6 +1389,8 @@ if RUN_STAGE3_BAND_SWAP:
         directed_pairs=DIRECTED_PAIRS,
         sample_identities={
             "population_digest": POPULATION["population_digest"],
+            "prior_exclusion_digest": EXCLUSION_DIGEST,
+            "completed_causal_runs_excluded": sorted(COMPLETED_CAUSAL_RUNS),
             "selection_seed": SELECTION_SEED,
             "candidate_images_per_concept": CANDIDATE_IMAGES_PER_CONCEPT,
             "max_analysis_images_per_cell": MAX_ANALYSIS_IMAGES_PER_CELL,
