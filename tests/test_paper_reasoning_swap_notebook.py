@@ -125,3 +125,10 @@ def test_every_repository_symbol_imported_by_the_real_dictionary_cell_exists():
     source = _source(_payload())
     assert "build_dictionaries" not in source
     assert "selected lens vectors built" in source
+
+
+def test_transcript_leakage_guard_is_scoped_to_non_text_modalities():
+    source = _source(_payload())
+    assert 'offline_transcript = group["caption"] if modality != "text" else None' in source
+    assert "BACKEND, built, transcript=offline_transcript" in source
+    assert 'build_backend_inputs(BACKEND, built, transcript=group["caption"])' not in source

@@ -566,7 +566,13 @@ if STORE is not None:
             source=concept_spec(source), target=concept_spec(target),
             encode_candidate=BACKEND.encode_candidate,
         )
-        inputs = build_backend_inputs(BACKEND, built, transcript=group["caption"])
+        # Text intentionally carries the caption as its evidence.  The offline
+        # transcript-leakage guard applies only to non-text modalities, where
+        # that caption must remain absent from the model-visible inputs.
+        offline_transcript = group["caption"] if modality != "text" else None
+        inputs = build_backend_inputs(
+            BACKEND, built, transcript=offline_transcript
+        )
         return built, inputs
 
     print("candidate ids", CANDIDATE_IDS)
