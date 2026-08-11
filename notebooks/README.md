@@ -1,6 +1,6 @@
 # Notebooks
 
-Seven notebooks at this level are the **active research workflow**. Everything
+Eight notebooks at this level are the **active research workflow**. Everything
 else has been moved into `archive/`, where it is preserved rather than
 preserved-and-confusing: an archived notebook produced a completed result, and
 re-running it today would re-run an *older protocol*.
@@ -29,10 +29,11 @@ published, and none of them fits a lens except the first two.
 | 3 | `multimodal_jspace_spokencoco_native_audio_colab.ipynb` | The completed three-modality transfer study at L35 (text / image / native spoken audio). **Canonical** for the L35 causal result. | the L35 transfer run |
 | 4 | `multimodal_jspace_spokencoco_l32_followup_colab.ipynb` | The L32 open-prompt follow-up: integrity, representational transfer, causal transfer, native convergence, and a paired L35 reference under the same open prompt. **Canonical** for the open-prompt L32 result. | `mml32_*` run |
 | 5 | `multimodal_jspace_l32_convergence_resolution_colab.ipynb` | **New.** The independent L32 convergence-resolution study: a fresh, verified-disjoint SpokenCOCO population scored against the *already frozen* criterion, with an optional conditional Stage-B causal replication. | `mml32res_*` run |
-| 6 | `multimodal_jspace_coordinate_swap_mock_colab.ipynb` | MOCK-only. The Anthropic two-coordinate swap: its algebra, refusals, controls and involution on a synthetic world. Its real-run switch **raises** — no contiguous confirmed layer band exists today. | nothing scientific; a protocol under test |
+| 6 | `multimodal_jspace_coordinate_swap_mock_colab.ipynb` | MOCK-only. The Anthropic two-coordinate swap: its algebra, refusals, controls and involution on a synthetic world. Use notebook 8 for the real study. | nothing scientific; a protocol test |
 | 7 | `research_grade_l27_l31_preconvergence_study_colab.ipynb` | **New.** The bounded L27–L31 transition study: the one interval left open by L26 (failed confirmation), L32 (confirmed but AMBIGUOUS twice) and L35 (CONVERGED). Fits all five candidates fresh at scale 250, confirms them on a genuinely untouched set, selects the *earliest* passer, and conditionally measures native convergence and cross-modal causal transfer on a fourth independent SpokenCOCO population. | `mmpre_*` run |
+| 8 | `multimodal_jspace_anthropic_reasoning_swap_colab.ipynb` | **Primary paper-method test.** Uses Anthropic's published two-coordinate exchange and compares hidden animal-coordinate swaps directly with matched leg-answer coordinate swaps over the same confirmed sampled layer suffixes in text, image and spoken audio. | `mmpaper_*` run and `paper_reasoning_swap_report.json` |
 
-Notebooks 1–5 and 7 are all **switched off** in the committed file. Opening one
+Notebooks 1–5, 7 and 8 are all **switched off** in the committed file. Opening one
 starts nothing, downloads nothing and spends nothing.
 
 ### Notebook 7 is a *transition* study, and it is bounded on purpose
@@ -86,6 +87,7 @@ semantics and what a fresh process reconstructs versus re-proves.
 | L32 causal transfer under an **open** prompt, and the paired L35 reference | (4) L32 follow-up |
 | L32 native direct-readout convergence on an **independent** population | (5) convergence resolution |
 | anything about physical layers 27–31 | (7) the L27–L31 transition study |
+| paper-style hidden-intermediate exchange versus the answer-swap confound | (8) Anthropic reasoning swap |
 
 ---
 

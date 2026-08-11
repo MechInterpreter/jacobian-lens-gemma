@@ -1,7 +1,8 @@
 # Anthropic-style J-lens coordinate swap — method, audit, and protocol
 
-**Status: implemented and MOCK-validated. No real run exists, and none can be
-designed yet.** This document specifies the intervention, records the
+**Status: implemented, MOCK-validated, and packaged as a switched-off real
+Colab study. No real result exists until that notebook is run.** This document
+specifies the intervention, records the
 repository audit it was built from, and states what it may and may not be used
 to claim.
 
@@ -25,7 +26,7 @@ Primary source: <https://transformer-circuits.pub/2026/workspace/index.html>,
 |---|---|---|---|
 | **A** | Source-derived J-space steering | `h' = h ± α·v_concept`, `v_concept = V·ReLU(mean_pos_code − mean_neg_code)` | `jlens/mmpilot/causal.py` — **the completed three-modality result** |
 | | Single-vector J-lens steering | `h' = h + α·(v_target − v_source)` | not implemented; named here only to be excluded |
-| **B** | Exact two-coordinate patching | `V = [v_source v_target]`, `c = pinv(V)h`, `h_patched = h + α·V(σ(c) − c)` | `jlens/mmpilot/coordinate_swap.py` — **planned, no result yet** |
+| **B** | Exact two-coordinate patching | `V = [v_source v_target]`, `c = pinv(V)h`, `h_patched = h + α·V(σ(c) − c)` | `jlens/mmpilot/coordinate_swap.py` — implemented; real notebook ready, no result yet |
 
 A is a valid causal steering experiment and is what the completed run measured.
 It must not be called a coordinate swap. Its terminology —
@@ -130,18 +131,18 @@ records `n_candidate_positions_skipped` on every forward pass, and
 `tests/test_coordinate_swap.py` asserts byte-identity of those positions'
 activations.
 
-**Layer band.** Contiguous, explicitly configured, and gated: `build_layer_band`
-refuses any layer that is not in the recorded validated set. Coordinates are
+**Layer band.** Explicitly configured and confirmation-gated. Coordinates are
 **recomputed from each layer's own current activation** — one update is never
 computed once and replayed, and a test asserts the per-layer pre-swap
 coordinates differ.
 
-**Today there is no admissible band.** The completed research-grade calibration
-confirmed layers **35, 38 and 40** on its untouched confirmation set — three
-isolated layers. Layer 32 and every earlier tested layer **failed**. A
-contiguous band over 35..38 is therefore refused today, which is exactly why the
-MOCK notebook's switch raises instead of running. Whether an admissible band
-exists is what the running earlier-layer calibration decides.
+The current real study uses the independently confirmed sampled grid
+**L32/L35/L38/L40**. Its tested suffixes are `[32,35,38,40]`, `[35,38,40]`,
+`[38,40]`, and `[40]`, matching the paper's practice of reporting on a sampled
+layer grid. Physical layers between those samples are explicitly unpatched;
+the result can localize an onset only among these four tested starts.
+The original published set at scale 100 was **35, 38 and 40**; L32 comes from
+the separate scale-250 early-layer extension and its untouched confirmation set.
 
 ### The exchange is an involution, and a band has to survive that
 
@@ -183,7 +184,7 @@ registered leakage audit passed. The candidate-listed prompt remains available
 as a **labelled comparison condition**, never as the primary. Full
 specification: [`prompt_protocol.md`](prompt_protocol.md).
 
-**The planned study is animal-only.** Both of its questions presume an animal,
+**The real study is animal-only.** Both of its questions presume an animal,
 so every source, target and externally scored identity must carry the
 predeclared `animal` domain — `toilet` and `microwave`, which are in the
 pilot's six-concept set, are refused — and the leg counts come from a registry
@@ -193,7 +194,7 @@ ranking and evidence audit. **General object identification is a separate
 protocol**: `mmpilot.open_entity_identification.v1` asks a domain-neutral
 question, takes a mixed category set, and supports no legs or multi-hop claim.
 
-For the planned bird → cat example:
+For the predeclared bird → cat study:
 
 | | identity condition | downstream condition |
 |---|---|---|
@@ -207,9 +208,10 @@ stays restricted to original prompt and evidence positions; the teacher-forced
 identity and property-answer tokens remain outside the intervention boundary by
 `PROMPT_BOUNDARY_RULE`, for every position rule.
 
-The `hidden_animal_legs` protocol — neither entity label nor any registered
-alias in any model-visible text, and for spoken audio neither in the offline
-transcript — is a **later, stronger stage**. It is not designed yet.
+The primary downstream arm uses `hidden_animal_legs`: neither entity label nor
+any registered alias appears in model-visible text, and for spoken audio none
+appears in the offline transcript. The target answer and externally scored
+candidates are also absent from the prompt.
 
 ---
 
@@ -225,7 +227,7 @@ model behavior. In the likely SpokenCOCO animal pool, `bird` is the only
 two-leg contrast among predominantly four-legged animals; that limitation is
 reported rather than hidden.
 
-## 6. Controls for the future study
+## 6. Controls for the real study
 
 | Control | What it rules out |
 |---|---|
