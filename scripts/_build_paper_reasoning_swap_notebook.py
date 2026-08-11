@@ -123,6 +123,7 @@ code(
 RUN_REAL_PAPER_SWAP = False
 CONFIRM_MODEL_LOAD = False
 CONFIRM_PASS_BUDGET = False
+RUN_DIRECTION_MATCHED_AMENDMENT = False
 
 # Frozen v2 scientific design.  The completed v1 run is read only and its
 # images are excluded below.
@@ -168,6 +169,13 @@ COMPLETED_V1_RUN_DIR = Path(
 COMPLETED_V1_REPORT_CHECKSUM = (
     "sha256:a60f3336bf8acdc98dc1a434698104eaa98b3192c44f43fa5ab21212826ae397"
 )
+COMPLETED_V2_RUN_DIR = Path(
+    "/content/drive/MyDrive/jacobian-lens-gemma/runs/"
+    "mmpaper2_real_04ab55235502"
+)
+COMPLETED_V2_REPORT_CHECKSUM = (
+    "sha256:b64ce3cec51371769b908d14342fbf42f64a6dccb82f8d235ad81d643815ddc6"
+)
 EXTENSION_RUN_DIR = Path(
     "/content/drive/MyDrive/jacobian-lens-gemma/runs/rgext_real_c18f03f06e7b"
 )
@@ -194,6 +202,7 @@ THRESHOLDS = PaperSwapV2Thresholds(
 print("RUN_REAL_PAPER_SWAP", RUN_REAL_PAPER_SWAP)
 print("CONFIRM_MODEL_LOAD ", CONFIRM_MODEL_LOAD)
 print("CONFIRM_PASS_BUDGET", CONFIRM_PASS_BUDGET)
+print("RUN_DIRECTION_MATCHED_AMENDMENT", RUN_DIRECTION_MATCHED_AMENDMENT)
 print("layers", SAMPLED_LAYERS, "conditions", CONDITIONS)
 print("candidate images/concept", CANDIDATE_IMAGES_PER_CONCEPT)
 print("analysis images/cell", MAX_ANALYSIS_IMAGES_PER_CELL)
@@ -204,10 +213,17 @@ print("threshold digest", THRESHOLDS.digest)
 markdown("## 3. Mount Drive and fail fast on every pin")
 code(
     r'''
-if RUN_REAL_PAPER_SWAP:
+if RUN_REAL_PAPER_SWAP or RUN_DIRECTION_MATCHED_AMENDMENT:
     if IN_COLAB:
         from google.colab import drive
         drive.mount("/content/drive", force_remount=False)
+if RUN_DIRECTION_MATCHED_AMENDMENT:
+    _completed_v2_report = COMPLETED_V2_RUN_DIR / "paper_reasoning_swap_v2_report.json"
+    if not _completed_v2_report.is_file():
+        raise FileNotFoundError(
+            f"completed v2 report is missing: {_completed_v2_report}"
+        )
+if RUN_REAL_PAPER_SWAP:
     missing = [
         str(path) for path in (
             EXPANDED_MANIFEST_CACHE, PRIOR_EXCLUSION_SET,
@@ -938,7 +954,64 @@ if STORE is not None:
     print("and is refused rather than mixed.")
     print("\nSend back paper_reasoning_swap_v2_report.json and the verdict block above.")
 else:
-    print("To run: set all three section-2 switches True and use an L4 or A100.")
+    if RUN_DIRECTION_MATCHED_AMENDMENT:
+        print("scientific stages skipped as designed; continue to section 14")
+    else:
+        print("To run: set all three section-2 switches True and use an L4 or A100.")
+'''
+)
+
+markdown("## 14. CPU-only direction-matched amendment of the completed v2 report")
+code(
+    r'''
+AMENDED_DIRECTION_REPORT = None
+if RUN_DIRECTION_MATCHED_AMENDMENT:
+    import os
+
+    from jlens.mmpilot.paper_reasoning_swap import (
+        amend_paper_v2_report_direction_matching,
+    )
+
+    original_path = COMPLETED_V2_RUN_DIR / "paper_reasoning_swap_v2_report.json"
+    original_report = json.loads(original_path.read_text(encoding="utf-8"))
+    AMENDED_DIRECTION_REPORT = amend_paper_v2_report_direction_matching(
+        original_report,
+        expected_report_checksum=COMPLETED_V2_REPORT_CHECKSUM,
+    )
+    amended_path = (
+        COMPLETED_V2_RUN_DIR
+        / "paper_reasoning_swap_v2_report_direction_matched_v3.json"
+    )
+    tmp_path = amended_path.with_suffix(".json.tmp")
+    tmp_path.write_text(
+        json.dumps(AMENDED_DIRECTION_REPORT, indent=2, default=str),
+        encoding="utf-8",
+    )
+    os.replace(tmp_path, amended_path)
+
+    print("=" * 72)
+    print("DIRECTION-MATCHED AMENDMENT")
+    print("=" * 72)
+    print("verdict             ", AMENDED_DIRECTION_REPORT["verdict"])
+    print("primary α=1         ", AMENDED_DIRECTION_REPORT["primary_verdict"])
+    print(
+        "α=2 sensitivity    ",
+        AMENDED_DIRECTION_REPORT["alpha2_sensitivity_verdict"],
+    )
+    print("original verdict    ", AMENDED_DIRECTION_REPORT["original_verdict"])
+    print("scientific recompute", AMENDED_DIRECTION_REPORT["scientific_units_recomputed"])
+    for condition, rows in AMENDED_DIRECTION_REPORT["matched_pair_results"].items():
+        print(f"\n{condition}")
+        for pair_name, row in rows.items():
+            print(
+                f"  {pair_name:10s} intermediate={row['intermediate_onset']} "
+                f"answer={row['answer_onset']}  {row['classification']}"
+            )
+    print("\namended report", amended_path)
+    print("checksum      ", AMENDED_DIRECTION_REPORT["report_checksum"])
+    print("The original report and every scientific unit remain unchanged.")
+else:
+    print("skipped: set RUN_DIRECTION_MATCHED_AMENDMENT=True for the CPU-only amendment")
 '''
 )
 

@@ -94,6 +94,7 @@ def test_safe_defaults_execute_without_drive_model_or_cuda():
     finally:
         os.chdir(old_cwd)
     assert namespace["RUN_REAL_PAPER_SWAP"] is False
+    assert namespace["RUN_DIRECTION_MATCHED_AMENDMENT"] is False
     assert namespace["BACKEND"] is None
     assert namespace["STORE"] is None
     assert namespace["TOTAL_PASSES"] == 0
@@ -104,6 +105,7 @@ def test_real_path_is_one_clean_three_switch_run():
     assert "RUN_REAL_PAPER_SWAP = False" in source
     assert "CONFIRM_MODEL_LOAD = False" in source
     assert "CONFIRM_PASS_BUDGET = False" in source
+    assert "RUN_DIRECTION_MATCHED_AMENDMENT = False" in source
     assert source.count("= False") >= 3
     assert "RUN_REAL_PAPER_SWAP = True" not in source
     assert "expected the pinned 125,198-group cache" in source
@@ -119,6 +121,7 @@ def test_every_repository_symbol_imported_by_the_real_dictionary_cell_exists():
     )
     from jlens.mmpilot.paper_reasoning_swap import (
         PAPER_REASONING_SWAP_V2_VERSION,
+        amend_paper_v2_report_direction_matching,
         independent_layer_record,
         paper_onset_verdict_v2,
         select_capability_eligible_samples,
@@ -138,6 +141,7 @@ def test_every_repository_symbol_imported_by_the_real_dictionary_cell_exists():
             independent_layer_record,
             paper_onset_verdict_v2,
             select_capability_eligible_samples,
+            amend_paper_v2_report_direction_matching,
         )
     )
     assert PAPER_REASONING_SWAP_V2_VERSION.endswith(".v2")
@@ -178,3 +182,13 @@ def test_alpha2_has_matched_controls_and_position_is_descriptive_only():
     assert 'condition.startswith("random_")' in source
     assert 'condition.startswith("unrelated_")' in source
     assert "cannot veto a result" in source
+
+
+def test_completed_run_has_a_cpu_only_direction_matched_amendment():
+    source = _source(_payload())
+    assert "amend_paper_v2_report_direction_matching" in source
+    assert "paper_reasoning_swap_v2_report_direction_matched_v3.json" in source
+    assert "scientific_units_recomputed" in source
+    assert "The original report and every scientific unit remain unchanged." in source
+    assert "mmpaper2_real_04ab55235502" in source
+    assert "sha256:b64ce3cec51371769b908d14342fbf42f64a6dccb82f8d235ad81d643815ddc6" in source

@@ -53,6 +53,9 @@ PAPER_REASONING_SWAP_V2_VERSION = "mmpilot.paper_reasoning_coordinate_swap.v2"
 INDEPENDENT_LAYER_VERSION = "mmpilot.confirmed_independent_layers.v2"
 CAPABILITY_SELECTION_VERSION = "mmpilot.paper_capability_selection.v2"
 VERDICT_V2_VERSION = "mmpilot.paper_reasoning_onset_verdict.v2"
+DIRECTION_MATCHED_AMENDMENT_VERSION = (
+    "mmpilot.paper_reasoning_direction_matched_amendment.v3"
+)
 
 
 class PaperSwapRefused(RuntimeError):
@@ -811,6 +814,16 @@ def paper_onset_verdict_v2(
         condition: {"intermediate": [], "answer": []}
         for condition in conditions
     }
+    pair_names = [
+        f"{pair['source']}->{pair['target']}" for pair in directed_pairs
+    ]
+    passing_by_pair: dict[str, dict[str, dict[str, list[int]]]] = {
+        condition: {
+            pair_name: {"intermediate": [], "answer": []}
+            for pair_name in pair_names
+        }
+        for condition in conditions
+    }
     for condition in conditions:
         for arm in ("intermediate", "answer"):
             for layer in layer_grid:
@@ -866,39 +879,85 @@ def paper_onset_verdict_v2(
                 )
                 if passed:
                     passing[condition][arm].append(layer)
+                for pair_name, pair_passed in pair_pass.items():
+                    if pair_passed:
+                        passing_by_pair[condition][pair_name][arm].append(layer)
 
     def onset(condition: str, arm: str) -> int | None:
         return min(passing[condition][arm], default=None)
+
+    def pair_result(condition: str, pair_name: str) -> dict:
+        arms = passing_by_pair[condition][pair_name]
+        intermediate = min(arms["intermediate"], default=None)
+        answer = min(arms["answer"], default=None)
+        if intermediate is not None and answer is not None:
+            if intermediate < answer:
+                classification = "EARLIER_INTERMEDIATE"
+            elif intermediate == answer:
+                classification = "SAME_TESTED_LAYER"
+            else:
+                classification = "ANSWER_EARLIER"
+        elif answer is not None:
+            classification = "INTERMEDIATE_NULL_WITH_ANSWER_POSITIVE"
+        elif intermediate is not None:
+            classification = "ANSWER_NULL_WITH_INTERMEDIATE_POSITIVE"
+        else:
+            classification = "INCONCLUSIVE"
+        return {
+            "pair": pair_name,
+            "intermediate_onset": intermediate,
+            "answer_onset": answer,
+            "classification": classification,
+            "intermediate_passing_layers": list(arms["intermediate"]),
+            "answer_passing_layers": list(arms["answer"]),
+        }
+
+    matched_pair_results = {
+        condition: {
+            pair_name: pair_result(condition, pair_name)
+            for pair_name in pair_names
+        }
+        for condition in conditions
+    }
+
+    def any_pair(condition: str, classification: str) -> bool:
+        return any(
+            row["classification"] == classification
+            for row in matched_pair_results[condition].values()
+        )
+
+    def condition_verdict(condition: str, *, sensitivity: bool) -> str:
+        prefix = "PAPER_STYLE_ALPHA2_SENSITIVITY_" if sensitivity else "PAPER_STYLE_"
+        if any_pair(condition, "EARLIER_INTERMEDIATE"):
+            return prefix + "EARLIER_INTERMEDIATE"
+        if any_pair(condition, "SAME_TESTED_LAYER"):
+            return prefix + "SAME_TESTED_LAYER"
+        if any_pair(condition, "ANSWER_EARLIER"):
+            return prefix + "ANSWER_EARLIER"
+        if any_pair(condition, "INTERMEDIATE_NULL_WITH_ANSWER_POSITIVE"):
+            return prefix + "INTERMEDIATE_NULL_WITH_ANSWER_POSITIVE"
+        if any_pair(condition, "ANSWER_NULL_WITH_INTERMEDIATE_POSITIVE"):
+            return prefix + "ANSWER_NULL_WITH_INTERMEDIATE_POSITIVE"
+        return prefix + "INCONCLUSIVE"
+
+    primary_verdict = condition_verdict("swap_alpha1", sensitivity=False)
+    sensitivity_verdict = condition_verdict("swap_alpha2", sensitivity=True)
+    verdict = primary_verdict
+    if primary_verdict == "PAPER_STYLE_INCONCLUSIVE":
+        verdict = sensitivity_verdict
+    if verdict == "PAPER_STYLE_EARLIER_INTERMEDIATE":
+        verdict = "PAPER_STYLE_EARLIER_INTERMEDIATE_GO"
 
     primary_intermediate = onset("swap_alpha1", "intermediate")
     primary_answer = onset("swap_alpha1", "answer")
     sensitivity_intermediate = onset("swap_alpha2", "intermediate")
     sensitivity_answer = onset("swap_alpha2", "answer")
 
-    if primary_intermediate is not None and primary_answer is not None:
-        if primary_intermediate < primary_answer:
-            verdict = "PAPER_STYLE_EARLIER_INTERMEDIATE_GO"
-        elif primary_intermediate == primary_answer:
-            verdict = "PAPER_STYLE_SAME_TESTED_LAYER"
-        else:
-            verdict = "PAPER_STYLE_ANSWER_EARLIER"
-    elif primary_answer is not None and primary_intermediate is None:
-        verdict = "PAPER_STYLE_INTERMEDIATE_NULL_WITH_ANSWER_POSITIVE"
-    elif sensitivity_intermediate is not None and sensitivity_answer is not None:
-        if sensitivity_intermediate < sensitivity_answer:
-            verdict = "PAPER_STYLE_ALPHA2_SENSITIVITY_EARLIER_INTERMEDIATE"
-        elif sensitivity_intermediate == sensitivity_answer:
-            verdict = "PAPER_STYLE_ALPHA2_SENSITIVITY_SAME_LAYER"
-        else:
-            verdict = "PAPER_STYLE_ALPHA2_SENSITIVITY_ANSWER_EARLIER"
-    elif sensitivity_answer is not None and sensitivity_intermediate is None:
-        verdict = "PAPER_STYLE_ALPHA2_INTERMEDIATE_NULL_WITH_ANSWER_POSITIVE"
-    else:
-        verdict = "PAPER_STYLE_INCONCLUSIVE"
-
     payload = {
         "version": VERDICT_V2_VERSION,
         "verdict": verdict,
+        "primary_verdict": primary_verdict,
+        "alpha2_sensitivity_verdict": sensitivity_verdict,
         "primary_alpha": 1.0,
         "sensitivity_alpha": 2.0,
         "primary_onsets": {
@@ -911,6 +970,19 @@ def paper_onset_verdict_v2(
         },
         "tested_layers": list(layer_grid),
         "passing_layers": passing,
+        "passing_layers_by_pair": passing_by_pair,
+        "matched_pair_results": matched_pair_results,
+        "cross_arm_direction_matching_required": True,
+        "descriptive_unmatched_global_onsets": {
+            "swap_alpha1": {
+                "intermediate": primary_intermediate,
+                "answer": primary_answer,
+            },
+            "swap_alpha2": {
+                "intermediate": sensitivity_intermediate,
+                "answer": sensitivity_answer,
+            },
+        },
         "layer_cells": layer_cells,
         "direction_cells": direction_cells,
         "thresholds": asdict(thresholds),
@@ -928,6 +1000,69 @@ def paper_onset_verdict_v2(
     return {**payload, "verdict_digest": payload_checksum(payload)}
 
 
+def amend_paper_v2_report_direction_matching(
+    report: Mapping,
+    *,
+    expected_report_checksum: str,
+) -> dict:
+    """Recompute only the cross-arm direction join from a completed v2 report.
+
+    The original report is checksum-verified and remains immutable.  No model,
+    lens, media, prompt, or intervention unit is read or recomputed.
+    """
+    original = dict(report)
+    stored_checksum = str(original.pop("report_checksum", ""))
+    if stored_checksum != str(expected_report_checksum):
+        raise PaperSwapRefused(
+            "completed v2 report checksum does not match the pinned checksum"
+        )
+    if payload_checksum(original) != stored_checksum:
+        raise PaperSwapRefused(
+            "completed v2 report payload no longer matches its own checksum"
+        )
+    if original.get("schema") != "mmpilot.paper_reasoning_swap_report.v2":
+        raise PaperSwapRefused(
+            f"expected the completed v2 report schema, got {original.get('schema')!r}"
+        )
+    cells = original.get("cells_full")
+    if not isinstance(cells, list) or not cells:
+        raise PaperSwapRefused("completed v2 report carries no aggregated cells")
+    threshold_payload = dict(original.get("thresholds") or {})
+    if "blocking_controls" in threshold_payload:
+        threshold_payload["blocking_controls"] = tuple(
+            threshold_payload["blocking_controls"]
+        )
+    thresholds = PaperSwapV2Thresholds(**threshold_payload)
+    if thresholds.digest != original.get("threshold_digest"):
+        raise PaperSwapRefused("the completed v2 threshold digest does not match")
+    recomputed = paper_onset_verdict_v2(
+        cells,
+        layers=original["tested_layers"],
+        directed_pairs=original["directed_pairs"],
+        modalities=original["capability_selection"]["modalities"],
+        thresholds=thresholds,
+    )
+    amended = {
+        **original,
+        **recomputed,
+        "schema": "mmpilot.paper_reasoning_swap_report.direction_matched.v3",
+        "amendment_version": DIRECTION_MATCHED_AMENDMENT_VERSION,
+        "original_report_checksum": stored_checksum,
+        "original_verdict": original.get("verdict"),
+        "original_primary_onsets": original.get("primary_onsets"),
+        "original_sensitivity_onsets": original.get("sensitivity_onsets"),
+        "source_cells_digest": payload_checksum(cells),
+        "scientific_units_recomputed": 0,
+        "model_loaded": False,
+        "amendment_scope": (
+            "reporting only: require the same directed source-to-target pair "
+            "for intermediate and answer onset comparisons"
+        ),
+    }
+    amended["report_checksum"] = payload_checksum(amended)
+    return amended
+
+
 __all__ = [
     "PAPER_REASONING_SWAP_VERSION",
     "POPULATION_VERSION",
@@ -937,6 +1072,7 @@ __all__ = [
     "INDEPENDENT_LAYER_VERSION",
     "PAPER_REASONING_SWAP_V2_VERSION",
     "VERDICT_V2_VERSION",
+    "DIRECTION_MATCHED_AMENDMENT_VERSION",
     "PaperSwapRefused",
     "PaperSwapThresholds",
     "PaperSwapV2Thresholds",
@@ -944,6 +1080,7 @@ __all__ = [
     "independent_layer_record",
     "paper_onset_verdict",
     "paper_onset_verdict_v2",
+    "amend_paper_v2_report_direction_matching",
     "sampled_band_record",
     "sampled_suffix_bands",
     "select_capability_eligible_samples",

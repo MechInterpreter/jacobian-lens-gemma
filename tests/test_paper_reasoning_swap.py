@@ -7,6 +7,7 @@ from jlens.mmpilot.paper_reasoning_swap import (
     PaperSwapRefused,
     PaperSwapThresholds,
     PaperSwapV2Thresholds,
+    amend_paper_v2_report_direction_matching,
     hidden_animal_population,
     independent_layer_record,
     paper_onset_verdict,
@@ -15,6 +16,7 @@ from jlens.mmpilot.paper_reasoning_swap import (
     select_capability_eligible_samples,
     summarize_cells,
 )
+from jlens.mmpilot.store import payload_checksum
 
 
 def test_sampled_suffix_bands_are_ranges_on_the_confirmed_grid():
@@ -309,7 +311,17 @@ def test_v2_verdict_uses_independent_layers_and_nonblocking_position_diagnostic(
         thresholds=PaperSwapV2Thresholds(),
     )
     assert verdict["verdict"] == "PAPER_STYLE_EARLIER_INTERMEDIATE_GO"
+    assert verdict["primary_verdict"] == "PAPER_STYLE_EARLIER_INTERMEDIATE"
     assert verdict["primary_onsets"] == {"intermediate": 32, "answer": 35}
+    assert verdict["matched_pair_results"]["swap_alpha1"]["bird->cat"] == {
+        "pair": "bird->cat",
+        "intermediate_onset": 32,
+        "answer_onset": 35,
+        "classification": "EARLIER_INTERMEDIATE",
+        "intermediate_passing_layers": [32, 35],
+        "answer_passing_layers": [35],
+    }
+    assert verdict["cross_arm_direction_matching_required"] is True
     assert verdict["repeated_coordinate_exchange_used"] is False
     assert verdict["position_diagnostic_is_blocking"] is False
     l32_intermediate = next(
@@ -347,6 +359,83 @@ def test_v2_alpha2_controls_are_intensity_matched():
     )
     assert alpha2_l32["passed"] is False
     assert "identity_beats_random_alpha2" in alpha2_l32["failed_clauses"]
+
+
+def test_v2_reports_alpha2_matched_sensitivity_beside_primary_null():
+    rows = _v2_raw_records()
+    for row in rows:
+        if row["condition"] == "swap_alpha1" and row["arm"] == "intermediate":
+            row["prediction"] = row["source_answer"]
+            row["target_margin_change"] = 0.0
+    verdict = paper_onset_verdict_v2(
+        summarize_cells(rows),
+        layers=(32, 35),
+        directed_pairs=({"source": "bird", "target": "cat"},),
+        modalities=("text",),
+    )
+    assert verdict["verdict"] == (
+        "PAPER_STYLE_INTERMEDIATE_NULL_WITH_ANSWER_POSITIVE"
+    )
+    assert verdict["primary_verdict"] == (
+        "PAPER_STYLE_INTERMEDIATE_NULL_WITH_ANSWER_POSITIVE"
+    )
+    assert verdict["alpha2_sensitivity_verdict"] == (
+        "PAPER_STYLE_ALPHA2_SENSITIVITY_EARLIER_INTERMEDIATE"
+    )
+
+
+def test_v2_never_compares_intermediate_and_answer_from_opposite_directions():
+    bird_rows = _v2_raw_records()
+    for row in bird_rows:
+        if row["arm"] == "answer":
+            row["prediction"] = row["source_answer"]
+            row["target_margin_change"] = 0.0
+
+    cat_rows = []
+    for source_row in _v2_raw_records():
+        row = dict(source_row)
+        row["source"], row["target"] = "cat", "bird"
+        row["image_id"] = str(row["image_id"]).replace("bird-", "cat-")
+        row["source_answer"] = (
+            "cat" if row["readout"] == "identity" else "four"
+        )
+        row["target_answer"] = (
+            "bird" if row["readout"] == "identity" else "two"
+        )
+        row["clean_prediction"] = row["source_answer"]
+        should_flip = (
+            row["arm"] == "answer"
+            and row["start_layer"] == 35
+            and row["readout"] == "property"
+            and row["condition"]
+            in {"swap_alpha1", "swap_alpha2", "position_descriptive"}
+        )
+        row["prediction"] = (
+            row["target_answer"] if should_flip else row["source_answer"]
+        )
+        row["target_margin_change"] = 2.0 if should_flip else 0.0
+        cat_rows.append(row)
+
+    verdict = paper_onset_verdict_v2(
+        summarize_cells([*bird_rows, *cat_rows]),
+        layers=(32, 35),
+        directed_pairs=(
+            {"source": "bird", "target": "cat"},
+            {"source": "cat", "target": "bird"},
+        ),
+        modalities=("text",),
+    )
+    assert verdict["descriptive_unmatched_global_onsets"]["swap_alpha1"] == {
+        "intermediate": 32,
+        "answer": 35,
+    }
+    assert verdict["matched_pair_results"]["swap_alpha1"]["bird->cat"][
+        "answer_onset"
+    ] is None
+    assert verdict["matched_pair_results"]["swap_alpha1"]["cat->bird"][
+        "intermediate_onset"
+    ] is None
+    assert verdict["verdict"] != "PAPER_STYLE_EARLIER_INTERMEDIATE_GO"
 
 
 def test_v2_cannot_stitch_different_directions_across_modalities():
@@ -429,3 +518,43 @@ def test_v2_cannot_stitch_different_directions_across_modalities():
         "cat->bird": False,
     }
     assert row["passed"] is False
+
+
+def test_direction_matched_amendment_is_reporting_only_and_checksum_bound():
+    cells = summarize_cells(_v2_raw_records())
+    result = paper_onset_verdict_v2(
+        cells,
+        layers=(32, 35),
+        directed_pairs=({"source": "bird", "target": "cat"},),
+        modalities=("text",),
+    )
+    report = {
+        **result,
+        "schema": "mmpilot.paper_reasoning_swap_report.v2",
+        "cells_full": cells,
+        "directed_pairs": [{"source": "bird", "target": "cat"}],
+        "capability_selection": {"modalities": ["text"]},
+    }
+    report["report_checksum"] = payload_checksum(report)
+    amended = amend_paper_v2_report_direction_matching(
+        report,
+        expected_report_checksum=report["report_checksum"],
+    )
+    assert amended["scientific_units_recomputed"] == 0
+    assert amended["model_loaded"] is False
+    assert amended["original_report_checksum"] == report["report_checksum"]
+    assert amended["matched_pair_results"]["swap_alpha1"]["bird->cat"][
+        "classification"
+    ] == "EARLIER_INTERMEDIATE"
+    assert amended["primary_verdict"] == "PAPER_STYLE_EARLIER_INTERMEDIATE"
+    assert amended["report_checksum"] == payload_checksum(
+        {key: value for key, value in amended.items() if key != "report_checksum"}
+    )
+
+    tampered = dict(report)
+    tampered["verdict"] = "TAMPERED"
+    with pytest.raises(PaperSwapRefused, match="payload no longer matches"):
+        amend_paper_v2_report_direction_matching(
+            tampered,
+            expected_report_checksum=report["report_checksum"],
+        )
