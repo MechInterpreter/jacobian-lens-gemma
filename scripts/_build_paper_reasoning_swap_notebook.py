@@ -36,25 +36,28 @@ Both arms use the exact operation
 
 `h' = h + V (sigma(pinv(V) h) - pinv(V) h)`
 
-at **every original prompt position** and every sampled layer in the tested
-suffix. Each layer reads and exchanges its own current coordinates, exactly as
-specified by the public method. The target entity and answer are absent from
-the model-visible prompt; candidates exist only in the external teacher-forced
+at **every original prompt position**. Each forward pass performs this exchange
+at exactly **one independently confirmed physical layer**. This matters because
+the exchange is an involution: repeating it at several layers can undo an
+earlier exchange. Each tested layer reads and exchanges its own current
+coordinates once. The target entity and answer are absent from the
+model-visible prompt; candidates exist only in the external teacher-forced
 scorer.
 
 The old source-derived steering result and the bespoke native-readout
-`NOT_CONVERGED` gate are not used. The primary verdict asks whether the
-intermediate-coordinate intervention first changes the downstream answer at a
-shallower tested start depth than the direct answer-coordinate intervention.
+`NOT_CONVERGED` gate are not used. The primary alpha=1 verdict asks whether the
+intermediate-coordinate intervention first changes both the hidden identity
+and its downstream answer at a shallower tested layer than the direct
+answer-coordinate intervention. Alpha=2 is a separately labelled sensitivity
+analysis, not a replacement for the primary test.
 
 ## Honest scope
 
 Anthropic reports 25 evenly spaced layer samples. Gemma currently has
 independently confirmed J-lenses at physical layers 32, 35, 38 and 40. This
-notebook therefore patches the confirmed sampled suffixes
-`[32,35,38,40]`, `[35,38,40]`, `[38,40]`, `[40]`. It does **not** pretend the
-unmeasured physical layers between them were patched, and it localizes onset
-only among those four tested starts.
+notebook tests layers 32, 35, 38 and 40 independently. It does **not** pretend
+the unmeasured physical layers between them were tested, and it localizes onset
+only among those four points.
 
 ## Safe execution
 
@@ -62,6 +65,10 @@ Opening the notebook spends nothing. Set the three switches in section 2 and
 run top-to-bottom on an L4 or A100. The 125,198-group evidence join is loaded
 from one pinned cache and never rebuilt. Every clean score and every
 intervention/readout condition is checksum-valid and atomically saved to Drive.
+Clean behavior is screened first on 24 fresh candidates per concept/modality;
+only a predeclared stable sample of up to eight correctly solved images per
+cell enters the expensive causal stage. If any cell has fewer than four, the
+causal stage stops before spending those passes.
 Rerunning the same notebook resumes; changing any scientific input refuses the
 old directory instead of mixing results.
 """
@@ -117,16 +124,24 @@ RUN_REAL_PAPER_SWAP = False
 CONFIRM_MODEL_LOAD = False
 CONFIRM_PASS_BUDGET = False
 
-# Frozen scientific design.
+# Frozen v2 scientific design.  The completed v1 run is read only and its
+# images are excluded below.
 SAMPLED_LAYERS = (32, 35, 38, 40)
 PAIR_CONCEPTS = ("bird", "cat")       # 2 legs versus 4 legs
 CONTROL_CONCEPTS = ("zebra", "giraffe")
 POPULATION_CONCEPTS = (*PAIR_CONCEPTS, *CONTROL_CONCEPTS)
-IMAGES_PER_CONCEPT = 6
+CANDIDATE_IMAGES_PER_CONCEPT = 24
+MAX_ANALYSIS_IMAGES_PER_CELL = 8
+MIN_ANALYSIS_IMAGES_PER_CELL = 4
 MODALITIES = ("text", "image", "spoken_audio")
 POSITION_RULE = "all_prompt_positions"
-CONDITIONS = ("swap", "zero", "random", "unrelated", "position_control")
-SELECTION_SEED = "anthropic-hidden-animal-swap-gemma-v1"
+CONDITIONS = (
+    "swap_alpha1", "swap_alpha2", "zero",
+    "random_alpha1", "random_alpha2",
+    "unrelated_alpha1", "unrelated_alpha2",
+    "position_descriptive",
+)
+SELECTION_SEED = "anthropic-hidden-animal-swap-gemma-v2-independent"
 
 MODEL_REPO_ID = "google/gemma-4-E4B-it"
 MODEL_REVISION = "fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd"
@@ -146,6 +161,13 @@ PRIOR_EXCLUSION_SET = Path(
     "jlens_l32_resolution_prep_v1/"
     "prep_020ebbe6f832aece5ece6cb8bee994ca/exclusion_set.json"
 )
+COMPLETED_V1_RUN_DIR = Path(
+    "/content/drive/MyDrive/jacobian-lens-gemma/runs/"
+    "mmpaper_real_24be1d028bf1"
+)
+COMPLETED_V1_REPORT_CHECKSUM = (
+    "sha256:a60f3336bf8acdc98dc1a434698104eaa98b3192c44f43fa5ab21212826ae397"
+)
 EXTENSION_RUN_DIR = Path(
     "/content/drive/MyDrive/jacobian-lens-gemma/runs/rgext_real_c18f03f06e7b"
 )
@@ -159,10 +181,9 @@ LATE_LENS_PINS = {
     40: ("lens.layer40.scale100.validated.pt", "sha256:8a90f67eeb9bb5db14e6715b8bc516a899da1c3210d0662ec7fa177b5409f7d7"),
 }
 
-from jlens.mmpilot.paper_reasoning_swap import PaperSwapThresholds
-THRESHOLDS = PaperSwapThresholds(
+from jlens.mmpilot.paper_reasoning_swap import PaperSwapV2Thresholds
+THRESHOLDS = PaperSwapV2Thresholds(
     min_images=4,
-    min_clean_accuracy=0.70,
     min_target_flip_rate=0.50,
     min_joint_intermediate_rate=0.50,
     max_answer_identity_flip_rate=0.25,
@@ -174,6 +195,8 @@ print("RUN_REAL_PAPER_SWAP", RUN_REAL_PAPER_SWAP)
 print("CONFIRM_MODEL_LOAD ", CONFIRM_MODEL_LOAD)
 print("CONFIRM_PASS_BUDGET", CONFIRM_PASS_BUDGET)
 print("layers", SAMPLED_LAYERS, "conditions", CONDITIONS)
+print("candidate images/concept", CANDIDATE_IMAGES_PER_CONCEPT)
+print("analysis images/cell", MAX_ANALYSIS_IMAGES_PER_CELL)
 print("threshold digest", THRESHOLDS.digest)
 '''
 )
@@ -188,7 +211,7 @@ if RUN_REAL_PAPER_SWAP:
     missing = [
         str(path) for path in (
             EXPANDED_MANIFEST_CACHE, PRIOR_EXCLUSION_SET,
-            EXTENSION_RUN_DIR, PUBLISHED_LENS_DIR,
+            EXTENSION_RUN_DIR, PUBLISHED_LENS_DIR, COMPLETED_V1_RUN_DIR,
         )
         if not path.exists()
     ]
@@ -212,6 +235,7 @@ EXCLUSION_FILE_CHECKSUM = None
 if RUN_REAL_PAPER_SWAP:
     from jlens.mmpilot.evidence import EvidenceConfig
     from jlens.mmpilot.paper_reasoning_swap import hidden_animal_population
+    from jlens.mmpilot.store import payload_checksum
 
     raw_bytes = EXPANDED_MANIFEST_CACHE.read_bytes()
     MANIFEST_FILE_CHECKSUM = "sha256:" + hashlib.sha256(raw_bytes).hexdigest()
@@ -225,6 +249,42 @@ if RUN_REAL_PAPER_SWAP:
     exclusion = json.loads(exclusion_bytes)
     excluded_images = {str(value) for value in exclusion.get("image_ids", [])}
     excluded_groups = {str(value) for value in exclusion.get("group_ids", [])}
+
+    # The completed v1 population was examined while designing v2.  Its pair
+    # images are therefore spent and must not enter this confirmatory run.
+    v1_report_path = COMPLETED_V1_RUN_DIR / "paper_reasoning_swap_report.json"
+    v1_report = json.loads(v1_report_path.read_text(encoding="utf-8"))
+    if v1_report.get("report_checksum") != COMPLETED_V1_REPORT_CHECKSUM:
+        raise RuntimeError(
+            "completed v1 paper report checksum mismatch; refusing to guess "
+            "which population was previously examined"
+        )
+    v1_capability_files = sorted(
+        (COMPLETED_V1_RUN_DIR / "units" / "capability").glob("*.json")
+    )
+    if not v1_capability_files:
+        raise RuntimeError("completed v1 run has no capability units")
+    v1_images = set()
+    v1_groups = set()
+    for path in v1_capability_files:
+        row = json.loads(path.read_text(encoding="utf-8"))
+        payload_row = row.get("payload") if isinstance(row.get("payload"), dict) else row
+        if payload_row.get("image_id"):
+            v1_images.add(str(payload_row["image_id"]))
+        if payload_row.get("group_id"):
+            v1_groups.add(str(payload_row["group_id"]))
+    if len(v1_images) != 12:
+        raise RuntimeError(
+            f"expected 12 spent pair images in completed v1, found {len(v1_images)}"
+        )
+    excluded_images.update(v1_images)
+    excluded_groups.update(v1_groups)
+    EXCLUSION_FILE_CHECKSUM = payload_checksum({
+        "base_exclusion_file_checksum": EXCLUSION_FILE_CHECKSUM,
+        "completed_v1_report_checksum": COMPLETED_V1_REPORT_CHECKSUM,
+        "completed_v1_image_ids": sorted(v1_images),
+        "completed_v1_group_ids": sorted(v1_groups),
+    })
     eligible_groups = [
         row for row in payload["groups"]
         if str(row.get("image_id")) not in excluded_images
@@ -240,7 +300,7 @@ if RUN_REAL_PAPER_SWAP:
         eligible_groups,
         concept_names=POPULATION_CONCEPTS,
         evidence_config=evidence_config,
-        images_per_concept=IMAGES_PER_CONCEPT,
+        images_per_concept=CANDIDATE_IMAGES_PER_CONCEPT,
         seed=SELECTION_SEED,
     )
     selected_images = {str(row["image_id"]) for row in POPULATION["groups"]}
@@ -251,6 +311,7 @@ if RUN_REAL_PAPER_SWAP:
     print("manifest checksum", MANIFEST_FILE_CHECKSUM)
     print("prior exclusion checksum", EXCLUSION_FILE_CHECKSUM)
     print("prior excluded images/groups", len(excluded_images), len(excluded_groups))
+    print("completed v1 pair images excluded", len(v1_images))
     print("population digest", POPULATION["population_digest"])
     print("groups/images", POPULATION["n_groups"], POPULATION["n_distinct_images"])
     print("coverage")
@@ -323,12 +384,12 @@ code(
 BAND_RECORD = None
 DIRECTED_PAIRS = None
 if RUN_REAL_PAPER_SWAP:
-    from jlens.mmpilot.paper_reasoning_swap import sampled_band_record
+    from jlens.mmpilot.paper_reasoning_swap import independent_layer_record
     from jlens.mmpilot.prompt_protocol import (
         HIDDEN_ANIMAL_LEGS, OPEN_ANIMAL_IDENTIFICATION,
         assert_property_contrast,
     )
-    BAND_RECORD = sampled_band_record(
+    BAND_RECORD = independent_layer_record(
         SAMPLED_LAYERS, validated_layers=tuple(LENS_CHECKSUMS)
     )
     DIRECTED_PAIRS = []
@@ -339,14 +400,18 @@ if RUN_REAL_PAPER_SWAP:
             "source_property_value": contrast["source_value"],
             "target_property_value": contrast["target_value"],
         })
-    print("sampled suffix bands", BAND_RECORD["bands"])
+    print("independent single-layer interventions", BAND_RECORD["bands"])
+    print("repeated exchange forbidden", BAND_RECORD["repeated_exchange_forbidden"])
     print("directed pairs", DIRECTED_PAIRS)
     print("identity protocol", OPEN_ANIMAL_IDENTIFICATION)
     print("property protocol", HIDDEN_ANIMAL_LEGS)
-    n_source_images = len(PAIR_CONCEPTS) * IMAGES_PER_CONCEPT
-    clean_passes = n_source_images * len(MODALITIES) * 2 * 2
+    n_candidate_images = len(PAIR_CONCEPTS) * CANDIDATE_IMAGES_PER_CONCEPT
+    clean_passes = n_candidate_images * len(MODALITIES) * 2 * 2
+    n_selected_cells = (
+        len(PAIR_CONCEPTS) * len(MODALITIES) * MAX_ANALYSIS_IMAGES_PER_CELL
+    )
     intervention_passes = (
-        n_source_images * len(MODALITIES) * len(BAND_RECORD["bands"])
+        n_selected_cells * len(BAND_RECORD["bands"])
         * 2 * len(CONDITIONS) * 2 * 2
     )
     TOTAL_PASSES = clean_passes + intervention_passes
@@ -355,6 +420,8 @@ if RUN_REAL_PAPER_SWAP:
     print("  intervention candidate passes", f"{intervention_passes:,}")
     print("  TOTAL                        ", f"{TOTAL_PASSES:,}")
     print("  expected L4 wall time: roughly 2–5 hours; A100 is usually faster")
+    print("  capability screening runs first; causal work is skipped if any")
+    print("  concept/modality cell has fewer than", MIN_ANALYSIS_IMAGES_PER_CELL, "clean images")
     if not (CONFIRM_MODEL_LOAD and CONFIRM_PASS_BUDGET):
         print("\nBLOCKED: set both confirmation switches in section 2.")
 else:
@@ -413,6 +480,7 @@ if BACKEND is not None:
         random_two_direction_basis,
         resolve_concept_token,
     )
+    from jlens.mmpilot.paper_reasoning_swap import PAPER_REASONING_SWAP_V2_VERSION
     from jlens.mmpilot.store import RunFingerprint, UnitStore, payload_checksum
 
     if METHOD_VERSION != "jlens.mmpilot.coordinate_swap.v1":
@@ -486,13 +554,18 @@ if BACKEND is not None:
         manifest_checksum=MANIFEST_FILE_CHECKSUM,
         split_id=SELECTION_SEED,
         intervention_config={
-            "method": METHOD_VERSION,
-            "family": "anthropic_coordinate_swap",
+            "method": PAPER_REASONING_SWAP_V2_VERSION,
+            "coordinate_algebra": METHOD_VERSION,
+            "family": "anthropic_independent_single_layer_coordinate_swap",
             "bands": BAND_RECORD["bands"],
             "position_rule": POSITION_RULE,
             "conditions": list(CONDITIONS),
             "arms": ["intermediate", "answer"],
-            "alpha": 1.0,
+            "primary_alpha": 1.0,
+            "sensitivity_alpha": 2.0,
+            "one_exchange_per_forward_pass": True,
+            "repeated_exchange_forbidden": True,
+            "position_descriptive_is_blocking": False,
         },
         selection_config={
             "population_digest": POPULATION["population_digest"],
@@ -500,19 +573,23 @@ if BACKEND is not None:
             "population_concepts": list(POPULATION_CONCEPTS),
             "pair_concepts": list(PAIR_CONCEPTS),
             "control_concepts": list(CONTROL_CONCEPTS),
-            "images_per_concept": IMAGES_PER_CONCEPT,
+            "candidate_images_per_concept": CANDIDATE_IMAGES_PER_CONCEPT,
+            "max_analysis_images_per_cell": MAX_ANALYSIS_IMAGES_PER_CELL,
+            "min_analysis_images_per_cell": MIN_ANALYSIS_IMAGES_PER_CELL,
+            "capability_selection_seed": SELECTION_SEED,
         },
         extra={
-            "study": "mmpilot.paper_reasoning_coordinate_swap.v1",
+            "study": PAPER_REASONING_SWAP_V2_VERSION,
             "audio_protocol_fingerprint": AUDIO_PROTOCOL_FINGERPRINT,
             "per_layer_lens_checksums": {str(k): v for k, v in sorted(LENS_CHECKSUMS.items())},
             "band_digest": BAND_RECORD["digest"],
             "threshold_digest": THRESHOLDS.digest,
+            "completed_v1_report_checksum": COMPLETED_V1_REPORT_CHECKSUM,
             "prompt_protocols": ["mmpilot.open_animal_identification.v1", "mmpilot.hidden_animal_legs.v1"],
             "target_and_candidates_absent_from_prompt": True,
         },
     )
-    RUN_DIR = RUNS_ROOT / f"mmpaper_real_{fingerprint.digest.split(':')[1][:12]}"
+    RUN_DIR = RUNS_ROOT / f"mmpaper2_real_{fingerprint.digest.split(':')[1][:12]}"
     STORE = UnitStore(RUN_DIR, fingerprint)
     print("run directory", RUN_DIR)
     print("run state    ", STORE.open())
@@ -586,8 +663,10 @@ else:
 markdown("## 10. Clean behavioral gate — atomically saved per image/modality/readout")
 code(
     r'''
+CAUSAL_SELECTION = None
 if STORE is not None:
     from jlens.mmpilot.capability import prediction_and_margin, score_candidate_sequences
+    from jlens.mmpilot.paper_reasoning_swap import select_capability_eligible_samples
     from jlens.mmpilot.store import safe_key
 
     source_groups = [row for row in POPULATION["groups"] if row["concept"] in PAIR_CONCEPTS]
@@ -623,6 +702,27 @@ if STORE is not None:
         for modality in MODALITIES:
             rows = [r for r in clean_units if r["source"] == source and r["modality"] == modality]
             print(source, modality, {kind: sum(r["correct"] for r in rows if r["readout"] == kind) for kind in ("identity", "property")})
+    CAUSAL_SELECTION = select_capability_eligible_samples(
+        clean_units,
+        concepts=PAIR_CONCEPTS,
+        modalities=MODALITIES,
+        max_images_per_cell=MAX_ANALYSIS_IMAGES_PER_CELL,
+        min_images_per_cell=MIN_ANALYSIS_IMAGES_PER_CELL,
+        seed=SELECTION_SEED,
+    )
+    STORE.save("metric", "paper_v2_capability_selection", CAUSAL_SELECTION)
+    print("\nCAPABILITY-FROZEN CAUSAL POPULATION")
+    for row in CAUSAL_SELECTION["cells"]:
+        print(
+            f"  {row['concept']:6s} {row['modality']:12s} "
+            f"eligible={row['n_eligible']:2d} selected={row['n_selected']:2d} "
+            f"sufficient={row['sufficient']}"
+        )
+    print("  all cells sufficient", CAUSAL_SELECTION["all_cells_sufficient"])
+    print("  selection digest    ", CAUSAL_SELECTION["digest"])
+    print("  swap results consulted", CAUSAL_SELECTION["swap_results_consulted"])
+    if not CAUSAL_SELECTION["all_cells_sufficient"]:
+        print("CAUSAL STAGE STOPPED BEFORE INTERVENTIONS: clean capability was insufficient.")
 else:
     print("skipped")
 '''
@@ -631,7 +731,7 @@ else:
 markdown("## 11. Exact intermediate and answer swaps — smart-save after every condition")
 code(
     r'''
-if STORE is not None:
+if STORE is not None and CAUSAL_SELECTION["all_cells_sufficient"]:
     from jlens.mmpilot.coordinate_swap import run_swap_condition
     from jlens.mmpilot.store import safe_key
 
@@ -639,7 +739,11 @@ if STORE is not None:
         (row["group_id"], row["modality"], row["readout"]): row
         for row in STORE.load_all("capability").values()
     }
-    computed = reused = skipped = 0
+    selected_by_cell = {
+        key: set(group_ids)
+        for key, group_ids in CAUSAL_SELECTION["selected_group_ids"].items()
+    }
+    computed = reused = 0
     source_groups = [row for row in POPULATION["groups"] if row["concept"] in PAIR_CONCEPTS]
     for group in source_groups:
         source = group["concept"]
@@ -648,12 +752,16 @@ if STORE is not None:
         source_property = leg_count_surfaces(resolve_leg_count(source))[0]
         target_property = leg_count_surfaces(resolve_leg_count(target))[0]
         for modality in MODALITIES:
-            required_clean = [clean_by_key[(group["group_id"], modality, r)] for r in ("identity", "property")]
-            clean_eligible = all(row["correct"] for row in required_clean)
+            if group["group_id"] not in selected_by_cell[f"{source}|{modality}"]:
+                continue
             evidence = None
             inputs_by_readout = {}
             built_by_readout = {}
             for band in BAND_RECORD["bands"]:
+                if len(band) != 1:
+                    raise RuntimeError(
+                        "v2 forbids repeated coordinate exchange in one forward pass"
+                    )
                 start = band[0]
                 for arm in ("intermediate", "answer"):
                     for condition in CONDITIONS:
@@ -664,16 +772,6 @@ if STORE is not None:
                             )
                             if STORE.has("intervention", key):
                                 reused += 1
-                                continue
-                            if not clean_eligible:
-                                STORE.save("intervention", key, {
-                                    "status": "capability_ineligible",
-                                    "group_id": group["group_id"], "image_id": group["image_id"],
-                                    "source": source, "target": target, "modality": modality,
-                                    "start_layer": start, "band": list(band), "arm": arm,
-                                    "condition": condition, "readout": readout,
-                                })
-                                skipped += 1
                                 continue
                             if evidence is None:
                                 evidence = load_evidence(group, modality)
@@ -688,15 +786,26 @@ if STORE is not None:
                             target_answer = target if readout == "identity" else target_property
                             source_answer = source if readout == "identity" else source_property
                             bank = BASES[pair_key][start]
-                            if condition == "unrelated":
-                                bases, alpha, position = bank["unrelated"], 1.0, POSITION_RULE
-                            elif condition == "random":
+                            if condition.startswith("unrelated_"):
+                                alpha = 2.0 if condition.endswith("alpha2") else 1.0
+                                bases, position = bank["unrelated"], POSITION_RULE
+                            elif condition.startswith("random_"):
                                 bases = bank[f"random_{arm}"]
-                                alpha, position = 1.0, POSITION_RULE
+                                alpha = 2.0 if condition.endswith("alpha2") else 1.0
+                                position = POSITION_RULE
                             else:
                                 bases = bank[arm]
-                                alpha = 0.0 if condition == "zero" else 1.0
-                                position = "final_prompt_token_only" if condition == "position_control" else POSITION_RULE
+                                alpha = {
+                                    "swap_alpha1": 1.0,
+                                    "swap_alpha2": 2.0,
+                                    "zero": 0.0,
+                                    "position_descriptive": 1.0,
+                                }[condition]
+                                position = (
+                                    "final_prompt_token_only"
+                                    if condition == "position_descriptive"
+                                    else POSITION_RULE
+                                )
                             result = run_swap_condition(
                                 BACKEND, inputs, bases=bases, alpha=alpha,
                                 candidate_ids=CANDIDATE_IDS[readout],
@@ -708,14 +817,17 @@ if STORE is not None:
                                 "image_id": group["image_id"], "source": source, "target": target,
                                 "source_answer": source_answer, "target_answer": target_answer,
                                 "modality": modality, "start_layer": start, "band": list(band),
-                                "arm": arm, "condition": condition, "readout": readout,
+                                "arm": arm, "condition": condition, "alpha": alpha,
+                                "readout": readout,
                                 "prompt_hash": built_by_readout[readout].prompt_hash,
                                 **result,
                             })
                             computed += 1
                             if computed % 10 == 0 or computed == 1:
-                                print(f"intervention {computed:,} computed  {reused:,} reused  {skipped:,} gated")
-    print("intervention complete", {"computed": computed, "reused": reused, "gated": skipped})
+                                print(f"intervention {computed:,} computed  {reused:,} reused")
+    print("intervention complete", {"computed": computed, "reused": reused})
+elif STORE is not None:
+    print("skipped: the clean capability gate failed before causal spending")
 else:
     print("skipped")
 '''
@@ -727,7 +839,11 @@ code(
 RESULT = None
 if STORE is not None:
     import os
-    from jlens.mmpilot.paper_reasoning_swap import paper_onset_verdict, summarize_cells
+    from jlens.mmpilot.paper_reasoning_swap import (
+        VERDICT_V2_VERSION,
+        paper_onset_verdict_v2,
+        summarize_cells,
+    )
     from jlens.mmpilot.store import payload_checksum
 
     records = [
@@ -735,28 +851,51 @@ if STORE is not None:
         if row.get("status") == "complete"
     ]
     CELLS = summarize_cells(records)
-    RESULT = paper_onset_verdict(
-        CELLS, bands=BAND_RECORD["bands"], directed_pairs=DIRECTED_PAIRS,
-        modalities=MODALITIES, thresholds=THRESHOLDS,
-    )
+    if CAUSAL_SELECTION["all_cells_sufficient"]:
+        RESULT = paper_onset_verdict_v2(
+            CELLS,
+            layers=SAMPLED_LAYERS,
+            directed_pairs=DIRECTED_PAIRS,
+            modalities=MODALITIES,
+            thresholds=THRESHOLDS,
+        )
+    else:
+        RESULT = {
+            "version": VERDICT_V2_VERSION,
+            "verdict": "PAPER_STYLE_CAPABILITY_NO_GO",
+            "primary_onsets": {"intermediate": None, "answer": None},
+            "sensitivity_onsets": {"intermediate": None, "answer": None},
+            "tested_layers": list(SAMPLED_LAYERS),
+            "thresholds": THRESHOLDS.__dict__,
+            "threshold_digest": THRESHOLDS.digest,
+            "reason": (
+                "at least one concept/modality cell had too few independently "
+                "selected images with both clean identity and property answers correct"
+            ),
+        }
     RESULT.update({
-        "schema": "mmpilot.paper_reasoning_swap_report.v1",
+        "schema": "mmpilot.paper_reasoning_swap_report.v2",
         "run_dir": str(RUN_DIR),
         "run_fingerprint": STORE.fingerprint.digest,
         "population_digest": POPULATION["population_digest"],
         "prior_exclusion_checksum": EXCLUSION_FILE_CHECKSUM,
+        "completed_v1_report_checksum": COMPLETED_V1_REPORT_CHECKSUM,
+        "capability_selection": CAUSAL_SELECTION,
         "band_record": BAND_RECORD,
         "directed_pairs": DIRECTED_PAIRS,
         "lens_checksums": {str(k): v for k, v in sorted(LENS_CHECKSUMS.items())},
         "cells_full": CELLS,
         "method_statement": (
-            "exact two-coordinate exchange at every sampled suffix layer and "
-            "every original prompt position; "
-            "intermediate and answer arms differ only in which token pair defines V"
+            "one exact two-coordinate exchange at one independently confirmed "
+            "physical layer per forward pass, applied at every original prompt "
+            "position; intermediate and answer arms differ only in which token "
+            "pair defines V"
         ),
         "anthropic_comparison": (
-            "method and confound comparison replicated; model, dataset, modalities, "
-            "and sparse four-start layer grid differ"
+            "the exact two-coordinate equation and intermediate-vs-answer "
+            "confound comparison are replicated; independent one-layer "
+            "localization is a Gemma adaptation because only four physical "
+            "layers have confirmed lenses; model, dataset and modalities also differ"
         ),
         "public_method_reference": (
             "https://transformer-circuits.pub/2026/workspace/index.html"
@@ -765,23 +904,24 @@ if STORE is not None:
     })
     RESULT["report_checksum"] = payload_checksum(RESULT)
 
-    report_path = RUN_DIR / "paper_reasoning_swap_report.json"
+    report_path = RUN_DIR / "paper_reasoning_swap_v2_report.json"
     tmp = report_path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(RESULT, indent=2, default=str), encoding="utf-8")
     os.replace(tmp, report_path)
-    STORE.save("metric", "paper_reasoning_onset_verdict", RESULT)
+    STORE.save("metric", "paper_reasoning_onset_verdict_v2", RESULT)
 
     print("=" * 72)
     print("VERDICT", RESULT["verdict"])
     print("=" * 72)
-    print("intermediate onset", RESULT["intermediate_onset_start_layer"])
-    print("answer onset      ", RESULT["answer_onset_start_layer"])
-    print("tested starts     ", RESULT["tested_start_layers"])
+    print("primary alpha=1 onsets", RESULT["primary_onsets"])
+    print("alpha=2 sensitivity  ", RESULT["sensitivity_onsets"])
+    print("tested layers        ", RESULT["tested_layers"])
     print("report            ", report_path)
     print("checksum          ", RESULT["report_checksum"])
     print()
     print("This verdict does not use the old native direct-readout convergence gate.")
     print("It compares the paper's two causal interventions directly.")
+    print("The final-token-only position diagnostic is reported but cannot veto a result.")
 else:
     print("skipped")
 '''
@@ -796,7 +936,7 @@ if STORE is not None:
     print("A changed lens, cache, pair, layer grid, threshold, prompt protocol,")
     print("audio protocol, condition set, or model revision changes the fingerprint")
     print("and is refused rather than mixed.")
-    print("\nSend back paper_reasoning_swap_report.json and the verdict block above.")
+    print("\nSend back paper_reasoning_swap_v2_report.json and the verdict block above.")
 else:
     print("To run: set all three section-2 switches True and use an L4 or A100.")
 '''

@@ -50,7 +50,14 @@ def test_design_is_the_paper_comparison_not_the_old_surrogates():
     assert "source_derived_jspace_steering" not in source
     assert "NOT_CONVERGED" in source and "not used" in source
     assert "25 evenly spaced" in source
-    assert "physical_layers_between_samples_are_unpatched" not in source
+    assert '"bands": [[layer] for layer in grid]' not in source
+    assert "independent_layer_record" in source
+    assert "repeated_exchange_forbidden" in source
+    assert '"one_exchange_per_forward_pass": True' in source
+    assert '"position_descriptive_is_blocking": False' in source
+    assert '"primary_alpha": 1.0' in source
+    assert '"sensitivity_alpha": 2.0' in source
+    assert "mmpaper2_real_" in source
 
 
 def test_every_expensive_unit_is_fingerprint_gated_and_atomically_saved():
@@ -70,6 +77,8 @@ def test_every_expensive_unit_is_fingerprint_gated_and_atomically_saved():
         "prompt_protocols",
         "conditions",
         "bands",
+        "completed_v1_report_checksum",
+        "capability_selection_seed",
     ):
         assert bound in source
 
@@ -108,6 +117,12 @@ def test_every_repository_symbol_imported_by_the_real_dictionary_cell_exists():
         random_two_direction_basis,
         resolve_concept_token,
     )
+    from jlens.mmpilot.paper_reasoning_swap import (
+        PAPER_REASONING_SWAP_V2_VERSION,
+        independent_layer_record,
+        paper_onset_verdict_v2,
+        select_capability_eligible_samples,
+    )
     from jlens.mmpilot.store import RunFingerprint, UnitStore, payload_checksum
 
     assert METHOD_VERSION == "jlens.mmpilot.coordinate_swap.v1"
@@ -120,8 +135,12 @@ def test_every_repository_symbol_imported_by_the_real_dictionary_cell_exists():
             RunFingerprint,
             UnitStore,
             payload_checksum,
+            independent_layer_record,
+            paper_onset_verdict_v2,
+            select_capability_eligible_samples,
         )
     )
+    assert PAPER_REASONING_SWAP_V2_VERSION.endswith(".v2")
     source = _source(_payload())
     assert "build_dictionaries" not in source
     assert "selected lens vectors built" in source
@@ -132,3 +151,30 @@ def test_transcript_leakage_guard_is_scoped_to_non_text_modalities():
     assert 'offline_transcript = group["caption"] if modality != "text" else None' in source
     assert "BACKEND, built, transcript=offline_transcript" in source
     assert 'build_backend_inputs(BACKEND, built, transcript=group["caption"])' not in source
+
+
+def test_v2_screens_clean_behavior_before_any_causal_spending():
+    source = _source(_payload())
+    clean = source.index("select_capability_eligible_samples")
+    causal = source.index("run_swap_condition")
+    assert clean < causal
+    assert 'CAUSAL_SELECTION["all_cells_sufficient"]' in source
+    assert 'max_images_per_cell=MAX_ANALYSIS_IMAGES_PER_CELL' in source
+    assert 'swap_results_consulted' in source
+
+
+def test_alpha2_has_matched_controls_and_position_is_descriptive_only():
+    source = _source(_payload())
+    for condition in (
+        "swap_alpha1",
+        "swap_alpha2",
+        "random_alpha1",
+        "random_alpha2",
+        "unrelated_alpha1",
+        "unrelated_alpha2",
+        "position_descriptive",
+    ):
+        assert condition in source
+    assert 'condition.startswith("random_")' in source
+    assert 'condition.startswith("unrelated_")' in source
+    assert "cannot veto a result" in source
