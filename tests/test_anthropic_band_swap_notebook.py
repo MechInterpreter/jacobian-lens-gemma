@@ -337,6 +337,16 @@ def test_the_corrected_control_is_wired_in_and_gates_the_causal_stage():
     assert "immutable historical evidence" in source
     assert "superseded set-dependent-control validation" in source
 
+    # the corrected stages fit nothing: the only call to the fitting entry
+    # point is stage 1's, and it is guarded by stage 1's own switch
+    assert source.count("run_calibration(") == 3  # 1 real + 2 in the MOCK section
+    guarded = source.split("if RUN_STAGE1_FIT_MISSING_LENSES:\n", 1)[1]
+    assert guarded.lstrip().startswith("CONTINUATION = run_calibration(")
+    corrected_stage = source.split("if RUN_STAGE2G_CORRECTED_CONFIRMATION:", 1)[1]
+    corrected_stage = corrected_stage.split("## 11.", 1)[0]
+    assert "run_calibration" not in corrected_stage
+    assert "jlens.fitting" not in corrected_stage
+
 
 def test_the_notebook_says_what_a_mock_run_proves():
     source = _source(_payload())
