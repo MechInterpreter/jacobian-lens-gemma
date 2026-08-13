@@ -61,15 +61,32 @@ confirmed layers, not the range 32-40, and `assert_contiguous` refuses to call
 it one. So this notebook fits and confirms the five layers Gemma is missing
 before it clamps anything.
 
-## The five stages, each resumable
+## The stages, each resumable
 
 | stage | runtime | what it does |
 |---|---|---|
 | 0 | CPU | Read the completed artifacts, print the L32-L40 lens table, freeze the bands. Refuses before any model load if a pin is missing. |
 | 1 | GPU | Fit the missing physical layers 33, 34, 36, 37, 39 at scale 250 on the identical frozen corpus ordering. Atomic checkpoint every 25 prompts. |
-| 2 | GPU | Confirm them on **third-generation** held-out sets under the same frozen gate, and publish only what passes. |
-| 3 | GPU | The band swap itself: `coordinate_swap_band`, alpha=1 primary, alpha=2 secondary, intensity-matched controls. |
+| 2 | GPU | The original confirmation stage. **Its wrong-layer control is superseded** — see below — and it refuses to write into the completed run. |
+| 2C | CPU | Build the fixed control universe from the existing scale-250 snapshots, print the explicit corrected wrong-layer mapping, freeze and persist the protocol. No model, no spend. |
+| 2G | GPU | Score **all nine physical layers 32-40** on one new untouched 256-prompt population under the corrected control, and publish only what passes. Forward passes only; nothing is refitted. |
+| 3 | GPU | The band swap itself: `coordinate_swap_band`, alpha=1 primary, alpha=2 secondary, intensity-matched controls. Blocked until 2G prints a full-band GO. |
 | 4 | CPU | Intermediate-versus-answer timing over the predeclared suffix bands. |
+
+## The correction stages 2C and 2G exist for
+
+Stage 2 built its wrong-layer control with `distant_layer_mapping` over the
+layers it had just fitted, `[33, 34, 36, 37, 39]`. Over that subset the "wrong
+layer" is another nearby late lens (33→39, 34→39, 36→33, 37→33, 39→33), while
+the earlier scale-250 study ran the same nominal control over the broad grid
+`[8, 14, 20, 26, 32, 35, 38, 40]`, where every late layer is compared against
+L8. The same `+0.15` margin was therefore a different test in the two runs.
+
+The completed run returned `BAND_INTERIOR_LENS_NO_GO`. That result is **immutable
+historical evidence** and is not rewritten, deleted or re-labelled — it is
+superseded for band admissibility because its control depended on the fitted
+subset. No threshold is changed and no matrix is refitted. Section 9 has the
+full account.
 
 Run with every switch False and the notebook executes the whole pipeline
 against a synthetic CPU world — no Drive, no model, no download, no spend. **A
@@ -135,7 +152,9 @@ code(
 # ---- stage switches (all False = full MOCK run on CPU) -------------------
 RUN_STAGE0_PREFLIGHT = False           # CPU: read Drive artifacts, freeze the design
 RUN_STAGE1_FIT_MISSING_LENSES = False  # GPU: fit L33/34/36/37/39 at scale 250
-RUN_STAGE2_CONFIRM_AND_PUBLISH = False # GPU: untouched confirmation + publication
+RUN_STAGE2_CONFIRM_AND_PUBLISH = False # GPU: superseded confirmation (see section 9)
+RUN_STAGE2C_CORRECTED_PREFLIGHT = False  # CPU: corrected control, frozen, no model
+RUN_STAGE2G_CORRECTED_CONFIRMATION = False  # GPU: corrected readout over L32-L40
 RUN_STAGE3_BAND_SWAP = False           # GPU: the contiguous-band causal run
 RUN_STAGE4_TIMING = False              # CPU: intermediate-vs-answer onset
 
@@ -144,14 +163,16 @@ RUN_STAGE4_TIMING = False              # CPU: intermediate-vs-answer onset
 # run this session just produced.
 STAGE4_SWAP_RUN_DIR = None
 
-# ---- explicit spend confirmations (read sections 5 and 9 first) ----------
+# ---- explicit spend confirmations (read sections 5, 10 and 13 first) -----
 CONFIRM_MODEL_LOAD = False
 CONFIRM_FIT_BUDGET = False
+CONFIRM_CORRECTED_READOUT_BUDGET = False
 CONFIRM_PASS_BUDGET = False
 
 REAL_MODE = any((
     RUN_STAGE0_PREFLIGHT, RUN_STAGE1_FIT_MISSING_LENSES,
-    RUN_STAGE2_CONFIRM_AND_PUBLISH, RUN_STAGE3_BAND_SWAP, RUN_STAGE4_TIMING,
+    RUN_STAGE2_CONFIRM_AND_PUBLISH, RUN_STAGE2C_CORRECTED_PREFLIGHT,
+    RUN_STAGE2G_CORRECTED_CONFIRMATION, RUN_STAGE3_BAND_SWAP, RUN_STAGE4_TIMING,
 ))
 MODE = "real" if REAL_MODE else "mock"
 
@@ -162,6 +183,11 @@ from jlens.mmpilot.band_lens import (
 from jlens.mmpilot.band_swap import (
     BAND_CONDITIONS, BAND_SWAP_VERSION, PRIMARY_ALPHA, SECONDARY_ALPHA,
     BandSwapThresholds,
+)
+from jlens.mmpilot.band_control import (
+    BAND_SCORING_LAYERS, CORRECTION_PROTOCOL_VERSION, FIXED_CONTROL_UNIVERSE,
+    SUPERSEDED_RUN_NAME, SUPERSEDED_VERDICT, SUPERSEDED_WRONG_LAYER_MAPPING,
+    WRONG_LAYER_MAPPING,
 )
 from jlens.mmpilot.coordinate_swap import PRIMARY_POSITION_RULE
 
@@ -230,9 +256,17 @@ COMPLETED_CAUSAL_RUNS = {
         "sha256:37d32605b24984f09c0dfccaab7c7ea98e217bef82412bd28576384b22f23c11",
     ),
 }
+# The completed band-interior validation. Its wrong-layer control was built
+# over the newly fitted subset alone, so its NO-GO is a superseded
+# set-dependent-control result — immutable historical evidence, read here for
+# exactly two things: the scale-250 matrices it fitted, and the 512 records it
+# opened. Nothing writes into it, and sections 9 and 10 refuse if anything would.
+SUPERSEDED_BAND_RUN_DIR = RUNS_ROOT / "mmband" / SUPERSEDED_RUN_NAME
+
 PROTECTED_RUN_DIRS = (
     PARENT_CALIBRATION_RUN_DIR,
     EXTENSION_RUN_DIR,
+    SUPERSEDED_BAND_RUN_DIR,
     *(directory for directory, _, _ in COMPLETED_CAUSAL_RUNS.values()),
 )
 
@@ -241,6 +275,9 @@ print("study version               ", BAND_SWAP_VERSION)
 print("band window                 ", BAND_WINDOW, "scale", BAND_SCALE)
 print("band starts (contiguous)    ", BAND_START_LAYERS, "-> end", BAND_END_LAYER)
 print("interior layers to fit      ", BAND_INTERIOR_LAYERS)
+print("corrected control protocol  ", CORRECTION_PROTOCOL_VERSION)
+print("fixed control universe      ", list(FIXED_CONTROL_UNIVERSE))
+print("corrected scoring layers    ", list(BAND_SCORING_LAYERS))
 print("position rule               ", POSITION_RULE)
 print("alphas                      ", ALPHAS, "(1 = exchange, 2 = extrapolation)")
 print("conditions                  ", BAND_CONDITIONS)
@@ -249,13 +286,16 @@ for name, value in (
     ("RUN_STAGE0_PREFLIGHT", RUN_STAGE0_PREFLIGHT),
     ("RUN_STAGE1_FIT_MISSING_LENSES", RUN_STAGE1_FIT_MISSING_LENSES),
     ("RUN_STAGE2_CONFIRM_AND_PUBLISH", RUN_STAGE2_CONFIRM_AND_PUBLISH),
+    ("RUN_STAGE2C_CORRECTED_PREFLIGHT", RUN_STAGE2C_CORRECTED_PREFLIGHT),
+    ("RUN_STAGE2G_CORRECTED_CONFIRMATION", RUN_STAGE2G_CORRECTED_CONFIRMATION),
     ("RUN_STAGE3_BAND_SWAP", RUN_STAGE3_BAND_SWAP),
     ("RUN_STAGE4_TIMING", RUN_STAGE4_TIMING),
     ("CONFIRM_MODEL_LOAD", CONFIRM_MODEL_LOAD),
     ("CONFIRM_FIT_BUDGET", CONFIRM_FIT_BUDGET),
+    ("CONFIRM_CORRECTED_READOUT_BUDGET", CONFIRM_CORRECTED_READOUT_BUDGET),
     ("CONFIRM_PASS_BUDGET", CONFIRM_PASS_BUDGET),
 ):
-    print(f"{name:<32} {value}")
+    print(f"{name:<36} {value}")
 if not REAL_MODE:
     print()
     print("MOCK RUN: no Drive, no model, no download, nothing spent.")
@@ -282,6 +322,8 @@ if REAL_MODE:
     required = [EXTENSION_RUN_DIR]
     if RUN_STAGE1_FIT_MISSING_LENSES or RUN_STAGE2_CONFIRM_AND_PUBLISH:
         required.append(PARENT_CALIBRATION_RUN_DIR)
+    if RUN_STAGE2C_CORRECTED_PREFLIGHT or RUN_STAGE2G_CORRECTED_CONFIRMATION:
+        required += [SUPERSEDED_BAND_RUN_DIR, PARENT_CALIBRATION_RUN_DIR]
     if RUN_STAGE3_BAND_SWAP:
         required += [EXPANDED_MANIFEST_CACHE, PRIOR_EXCLUSION_SET]
         required += [directory for directory, _, _ in COMPLETED_CAUSAL_RUNS.values()]
@@ -292,10 +334,12 @@ if REAL_MODE:
             + "\n  ".join(missing)
         )
     if (RUN_STAGE1_FIT_MISSING_LENSES or RUN_STAGE2_CONFIRM_AND_PUBLISH
-            or RUN_STAGE3_BAND_SWAP):
+            or RUN_STAGE2G_CORRECTED_CONFIRMATION or RUN_STAGE3_BAND_SWAP):
         import torch
         if not torch.cuda.is_available():
-            raise RuntimeError("stages 1-3 require a GPU runtime; use L4 or A100")
+            raise RuntimeError(
+                "the GPU stages (1, 2, 2G, 3) require a GPU runtime; use L4 or A100"
+            )
     print("every configured artifact is present")
 else:
     print("MOCK: no Drive mounted, no artifact read.")
@@ -480,20 +524,27 @@ except LayerBandError as _error:
 
 markdown(
     """
-## 5. Stage 1 — the budget for fitting the missing layers
+## 5. The budgets — printed before any model can be loaded
 
-Five layers in **one** pass. The upstream estimator differentiates to every
-requested source layer from a single forward and a single set of backward
-passes, and it starts the graph at the shallowest requested layer — so this fit
-traverses far fewer blocks per backward pass than the extension's did.
+**Stage 1 (fitting).** Five layers in **one** pass. The upstream estimator
+differentiates to every requested source layer from a single forward and a
+single set of backward passes, and it starts the graph at the shallowest
+requested layer — so this fit traverses far fewer blocks per backward pass than
+the extension's did. Two estimates are printed: the span-scaled one is a model
+of that saving; the unscaled one applies the operator's original observation
+with no discount and is the number to plan with.
 
-Two estimates are printed. The span-scaled one is a model of that saving; the
-unscaled one applies the operator's original observation with no discount and
-is the number to plan with.
+**Stage 2G (the corrected confirmation).** No fitting term at all. The
+scale-250 matrices already exist in the two snapshots, so the workload is one
+forward pass per prompt plus five `[d_model, d_model]` products per scored
+layer — 256 forward passes and zero backward passes.
 """
 )
 code(
     r'''
+from jlens.mmpilot.band_control import (
+    corrected_readout_budget, format_corrected_readout_budget,
+)
 from jlens.mmpilot.band_lens import band_capture_plan, band_fit_budget, format_band_fit_budget
 
 BAND_PLAN = band_capture_plan(
@@ -506,9 +557,24 @@ FIT_BUDGET = band_fit_budget(plan=BAND_PLAN, scale=BAND_SCALE)
 print(format_band_fit_budget(FIT_BUDGET))
 print()
 print("capture plan digest", BAND_PLAN.digest)
+print()
+
+# The corrected confirmation's budget, printed here because this cell runs
+# before section 6 can load a model. It has no fitting term: the scale-250
+# matrices already exist and stage 2G only runs forward passes over them.
+CORRECTED_BUDGET = corrected_readout_budget(d_model=EXPECT_D_MODEL)
+print(format_corrected_readout_budget(CORRECTED_BUDGET))
+
 if RUN_STAGE1_FIT_MISSING_LENSES and not (CONFIRM_MODEL_LOAD and CONFIRM_FIT_BUDGET):
     raise RuntimeError(
         "stage 1 needs CONFIRM_MODEL_LOAD and CONFIRM_FIT_BUDGET set by hand"
+    )
+if RUN_STAGE2G_CORRECTED_CONFIRMATION and not (
+    CONFIRM_MODEL_LOAD and CONFIRM_CORRECTED_READOUT_BUDGET
+):
+    raise RuntimeError(
+        "stage 2G needs CONFIRM_MODEL_LOAD and CONFIRM_CORRECTED_READOUT_BUDGET "
+        "set by hand; the budget above is what it costs"
     )
 '''
 )
@@ -549,7 +615,13 @@ CONTINUATION = None
 EXTENSION_REPORT = None
 PARENT = None
 
-if RUN_STAGE1_FIT_MISSING_LENSES or RUN_STAGE2_CONFIRM_AND_PUBLISH:
+NEEDS_CORPUS_RECONSTRUCTION = (
+    RUN_STAGE1_FIT_MISSING_LENSES
+    or RUN_STAGE2_CONFIRM_AND_PUBLISH
+    or RUN_STAGE2G_CORRECTED_CONFIRMATION
+)
+
+if NEEDS_CORPUS_RECONSTRUCTION:
     import torch
     from jlens.calibration.corpus import build_records, collect_records_for_partition_quotas
     from jlens.calibration.extension import (
@@ -687,30 +759,45 @@ if RUN_STAGE1_FIT_MISSING_LENSES or RUN_STAGE2_CONFIRM_AND_PUBLISH:
             "seeded_from_extension_accumulator": False,
         },
     )
-    BAND_RUN_DIR = BAND_RUN_ROOT / f"bandlens_real_{FINGERPRINT.digest[7:19]}"
-    BAND_STORE = BandLensStore(BAND_RUN_DIR, FINGERPRINT)
-    print("band lens run       ", BAND_RUN_DIR)
-    print("resume              ", BAND_STORE.open())
-    BAND_STORE.save("band_preflight", "equivalence", EQUIVALENCE)
-    BAND_STORE.save("band_preflight", "provenance", parent_provenance_manifest(
-        PARENT,
-        audit_parent_run(PARENT, requirements=ParentRequirements(
-            model_repo_id=MODEL_REPO_ID, model_revision=MODEL_REVISION,
-            tokenizer_repo_id=MODEL_REPO_ID, tokenizer_revision=MODEL_REVISION,
-            source_layers=tuple(PARENT.accumulator.source_layers),
-            target_layer=BAND_TARGET_LAYER, d_model=EXPECT_D_MODEL,
-            hook_site="block_output", skip_first=BAND_PLAN.skip_first,
-            max_seq_len=BAND_PLAN.max_seq_len, dim_batch=BAND_PLAN.dim_batch,
-            corpus_hf_dataset="Salesforce/wikitext", corpus_config="wikitext-103-raw-v1",
-            corpus_split="train",
-            estimator="jlens.fitting.fit (upstream, unmodified)",
-            artifact_format_version="jlens.calibration.artifact.v1",
-            baseline_scale=100, expected_n_done=100,
-        )),
-        immutability=PARENT_CHECKSUMS_BEFORE,
-        extension_protocol_version=BAND_LENS_PROTOCOL,
-        extension_run_dir=str(BAND_RUN_DIR),
-    ))
+    # The band store belongs to the stages that fit and publish interior lenses.
+    # The corrected stages never open it: they read the completed run's matrices
+    # and write into their own directory.
+    if RUN_STAGE1_FIT_MISSING_LENSES or RUN_STAGE2_CONFIRM_AND_PUBLISH:
+        BAND_RUN_DIR = BAND_RUN_ROOT / f"bandlens_real_{FINGERPRINT.digest[7:19]}"
+        if BAND_RUN_DIR.resolve() == SUPERSEDED_BAND_RUN_DIR.resolve():
+            raise RuntimeError(
+                f"stages 1 and 2 resolve to {BAND_RUN_DIR}, which is the completed "
+                f"{SUPERSEDED_VERDICT} run. That directory is immutable historical "
+                "evidence and re-running these stages would overwrite its units "
+                "and its report.\n"
+                "Its scale-250 matrices already exist and nothing needs refitting: "
+                "run the corrected stages (RUN_STAGE2C_CORRECTED_PREFLIGHT then "
+                "RUN_STAGE2G_CORRECTED_CONFIRMATION) instead, which read that run "
+                "read-only."
+            )
+        BAND_STORE = BandLensStore(BAND_RUN_DIR, FINGERPRINT)
+        print("band lens run       ", BAND_RUN_DIR)
+        print("resume              ", BAND_STORE.open())
+        BAND_STORE.save("band_preflight", "equivalence", EQUIVALENCE)
+        BAND_STORE.save("band_preflight", "provenance", parent_provenance_manifest(
+            PARENT,
+            audit_parent_run(PARENT, requirements=ParentRequirements(
+                model_repo_id=MODEL_REPO_ID, model_revision=MODEL_REVISION,
+                tokenizer_repo_id=MODEL_REPO_ID, tokenizer_revision=MODEL_REVISION,
+                source_layers=tuple(PARENT.accumulator.source_layers),
+                target_layer=BAND_TARGET_LAYER, d_model=EXPECT_D_MODEL,
+                hook_site="block_output", skip_first=BAND_PLAN.skip_first,
+                max_seq_len=BAND_PLAN.max_seq_len, dim_batch=BAND_PLAN.dim_batch,
+                corpus_hf_dataset="Salesforce/wikitext",
+                corpus_config="wikitext-103-raw-v1", corpus_split="train",
+                estimator="jlens.fitting.fit (upstream, unmodified)",
+                artifact_format_version="jlens.calibration.artifact.v1",
+                baseline_scale=100, expected_n_done=100,
+            )),
+            immutability=PARENT_CHECKSUMS_BEFORE,
+            extension_protocol_version=BAND_LENS_PROTOCOL,
+            extension_run_dir=str(BAND_RUN_DIR),
+        ))
 
 if RUN_STAGE1_FIT_MISSING_LENSES:
     CONTINUATION = run_calibration(
@@ -758,6 +845,16 @@ The gate is the frozen one, unchanged: `EXTENSION_GATE` on development and
 band layers passed. Nothing is loosened, and the layer list and pass criteria
 are fixed before the confirmation vault opens. A layer publishes only if it
 passes; a band exists only if every physical layer in it does.
+
+> **This stage's wrong-layer control is superseded.** It builds the control with
+> `distant_layer_mapping(layers)` over the layers *this stage fits*, so on the
+> subset `[33, 34, 36, 37, 39]` the "wrong layer" is another nearby late lens
+> (33→39, 34→39, 36→33, 37→33, 39→33) rather than a genuinely distant one. The
+> completed run under this stage returned `BAND_INTERIOR_LENS_NO_GO`; that
+> result stands as historical evidence and is not rewritten here. Band
+> admissibility is decided by **sections 9-11**, which recompute the control
+> over a fixed layer universe. The stage is left exactly as it ran, and it
+> refuses to write into the completed run's directory.
 """
 )
 code(
@@ -970,6 +1067,8 @@ if RUN_STAGE2_CONFIRM_AND_PUBLISH:
             if row["usable"] and row["layer"] not in BAND_INTERIOR_LAYERS
         ],
         window=BAND_WINDOW,
+        matrix_layers=BAND_INTERIOR_LAYERS,
+        published_layers=BAND_PUBLICATION["published_layers"],
     )
     BAND_STORE.save("band_verdict", "verdict", BAND_VERDICT)
     _report = {
@@ -1002,9 +1101,18 @@ if RUN_STAGE2_CONFIRM_AND_PUBLISH:
     print("  largest admissible ", BAND_VERDICT["largest_admissible_contiguous_band"])
     print("  ", BAND_VERDICT["statement"])
     print("  report", _report_dir / "band_interior_lens_report.json")
+    print("  published layers", BAND_PUBLICATION["published_layers"],
+          " failed", BAND_PUBLICATION["failed_layers"])
     print()
-    print("Re-run section 3 after this: the inventory picks the new lenses up and")
-    print("the band design in section 4 stops being blocked.")
+    if BAND_VERDICT["verdict"] == "BAND_INTERIOR_LENS_GO":
+        print("Re-run section 3 after this: the inventory picks the newly published")
+        print("lenses up and the band design in section 4 stops being blocked.")
+    else:
+        print("STAGE 3 REMAINS BLOCKED. Nothing was published for the failing")
+        print("layer(s), so re-running the section 3 inventory cannot admit them —")
+        print("the inventory reads published artifacts, and a layer that failed")
+        print("confirmation has none. The band stays refused until every physical")
+        print("layer in it passes an untouched confirmation.")
 else:
     print("skipped: RUN_STAGE2_CONFIRM_AND_PUBLISH is False")
 '''
@@ -1105,8 +1213,695 @@ else:
 )
 
 markdown(
+    r"""
+## 9. Stage 2C — the corrected wrong-layer control (CPU, no model)
+
+### What was wrong
+
+The completed band-interior validation built its wrong-layer control as
+`layer_mapped_lens(lens, distant_layer_mapping(layers))` with `layers` equal to
+the **newly fitted subset** `[33, 34, 36, 37, 39]`. `distant_layer_mapping` maps
+each layer to the farthest *fitted* layer, so over that subset the control
+became
+
+| applied at | J fitted at |
+|---|---|
+| 33 | 39 |
+| 34 | 39 |
+| 36 | 33 |
+| 37 | 33 |
+| 39 | 33 |
+
+— every substitution another nearby, strong, late-workspace lens. The earlier
+scale-250 study that admitted L32/L35/L38/L40 ran the *same nominal control*
+over its broad fitted grid `[8, 14, 20, 26, 32, 35, 38, 40]`, where the same
+function sends every late layer to **L8**. So the identical `+0.15` margin was a
+materially different test depending only on which layers happened to be fitted
+together, and the two validations are not comparable. L36/L37/L39 failed **only**
+that clause; L33/L34 additionally failed fold stability, whose folds must beat
+the same control.
+
+### What changes, and what does not
+
+The control's **layer inventory** is fixed, and nothing else moves:
+
+* the mapping is computed once from `FIXED_CONTROL_UNIVERSE =
+  [8, 14, 20, 26, 32, 33, 34, 35, 36, 37, 38, 39, 40]` and does not depend on
+  which layers a run fitted;
+* every threshold is `EXTENSION_CONFIRMATION_GATE`, used unchanged — this
+  notebook constructs no gate and lowers no number;
+* **no matrix is refitted.** The scale-250 matrices come from the two existing
+  snapshots and are proved equivalent clause by clause before they are merged;
+* the completed run is opened read-only, checksummed before and after.
+
+Layers 8/14/20/26 define controls. They are **not** band members, and the scored
+layers are exactly the nine physical layers 32-40 a `[32, 40]` clamp patches.
+
+This cell loads no model and costs nothing. It prints the explicit mapping, then
+freezes and persists the protocol — **before** any new confirmation data exists.
+"""
+)
+code(
+    r'''
+from jlens.mmpilot.band_control import (
+    CORRECTED_GATE, CORRECTED_SCALE, CORRECTED_TARGET_LAYER,
+    CORRECTED_VALIDATION_DIRNAME, CorrectedControlRefused, CorrectedControlStore,
+    band_interior_snapshot_facts, build_control_universe, corrected_protocol_record,
+    extension_snapshot_facts, format_corrected_protocol, format_wrong_layer_mapping,
+    superseded_run_digest,
+)
+
+CORRECTED_UNIVERSE = None
+CORRECTED_PROTOCOL = None
+CORRECTED_STORE = None
+CORRECTED_RUN_DIR = None
+SUPERSEDED_DIGEST_BEFORE = None
+CORRECTED_SNAPSHOTS = []
+
+# The mapping is printed unconditionally, in every mode, before anything else
+# in this correction can run. It is the whole repair, and it is not a number
+# that may appear after a result.
+print(format_wrong_layer_mapping(
+    WRONG_LAYER_MAPPING, superseded=SUPERSEDED_WRONG_LAYER_MAPPING
+))
+print()
+print("corrected artifacts go to artifacts/" + CORRECTED_VALIDATION_DIRNAME)
+print("budget for stage 2G was printed in section 5, before any model load")
+print()
+
+if RUN_STAGE2C_CORRECTED_PREFLIGHT or RUN_STAGE2G_CORRECTED_CONFIRMATION:
+    from jlens.calibration.state import CalibrationFingerprint
+    from jlens.metadata import file_sha256
+    from jlens.mmpilot.l32_followup import read_extension_report
+
+    # --- the completed run, checksummed before anything reads it
+    SUPERSEDED_DIGEST_BEFORE = superseded_run_digest(SUPERSEDED_BAND_RUN_DIR)
+    print("superseded run     ", SUPERSEDED_BAND_RUN_DIR.name)
+    print("  files            ", SUPERSEDED_DIGEST_BEFORE["n_files"])
+    print("  tree checksum    ", SUPERSEDED_DIGEST_BEFORE["tree_checksum"])
+
+    # --- the two scale-250 snapshots, every clause read from the runs themselves
+    _extension_snapshot = extension_snapshot_facts(
+        EXTENSION_RUN_DIR, scale=CORRECTED_SCALE
+    )
+    _interior_snapshot = band_interior_snapshot_facts(
+        SUPERSEDED_BAND_RUN_DIR, hook_convention_from=_extension_snapshot,
+        scale=CORRECTED_SCALE,
+    )
+    CORRECTED_SNAPSHOTS = [_extension_snapshot, _interior_snapshot]
+    CORRECTED_UNIVERSE = build_control_universe(CORRECTED_SNAPSHOTS)
+    print()
+    for _snapshot in CORRECTED_SNAPSHOTS:
+        print(f"  {_snapshot.name:<34} layers {list(_snapshot.layers)}")
+        print(f"    {_snapshot.path}")
+        print(f"    file {_snapshot.file_checksum}")
+    print("  universe checksum  ", CORRECTED_UNIVERSE.digest)
+    print("  matrices loaded for", CORRECTED_UNIVERSE.source_layers_needed())
+
+    # --- every source an exclusion is derived from, pinned by checksum
+    _extension_report_path, _ = read_extension_report(EXTENSION_RUN_DIR)
+    EXCLUSION_SOURCES = {
+        "extension_report": file_sha256(str(_extension_report_path)),
+        "superseded_band_report": file_sha256(str(
+            SUPERSEDED_BAND_RUN_DIR / "artifacts" / "band_interior_lens_report.json"
+        )),
+        "superseded_run_tree": SUPERSEDED_DIGEST_BEFORE["tree_checksum"],
+        "parent_calibration_report": file_sha256(str(
+            PARENT_CALIBRATION_RUN_DIR / "artifacts" / "calibration_report.json"
+        )),
+    }
+
+    CORRECTED_PROTOCOL = corrected_protocol_record(
+        universe=CORRECTED_UNIVERSE,
+        gate=CORRECTED_GATE,
+        model_repo_id=MODEL_REPO_ID,
+        model_revision=MODEL_REVISION,
+        transformers_version=TRANSFORMERS_VERSION_EXPECTED,
+        exclusion_sources=EXCLUSION_SOURCES,
+        superseded_run={
+            "name": SUPERSEDED_RUN_NAME,
+            "dir": str(SUPERSEDED_BAND_RUN_DIR),
+            "verdict": SUPERSEDED_VERDICT,
+            "tree_checksum": SUPERSEDED_DIGEST_BEFORE["tree_checksum"],
+            "status": (
+                "immutable historical result; superseded for band admissibility "
+                "because its wrong-layer control depended on the fitted subset"
+            ),
+        },
+    )
+    print()
+    print(format_corrected_protocol(CORRECTED_PROTOCOL))
+
+    _fingerprint = CalibrationFingerprint(
+        mode="real",
+        protocol_version=CORRECTION_PROTOCOL_VERSION,
+        model_repo_id=MODEL_REPO_ID,
+        model_revision=MODEL_REVISION,
+        tokenizer_revision=MODEL_REVISION,
+        capture_plan_digest=CORRECTED_UNIVERSE.digest,
+        corpus_manifest_checksum=CORRECTED_PROTOCOL["fit_prefix_checksum"] or "",
+        gate_digest=CORRECTED_GATE.digest,
+        plateau_rule_digest="not_applicable_no_scale_selection",
+        scale_points=(CORRECTED_SCALE,),
+        artifact_format_version="jlens.calibration.artifact.v1",
+        extra={"protocol_digest": CORRECTED_PROTOCOL["protocol_digest"]},
+    )
+    CORRECTED_RUN_DIR = BAND_RUN_ROOT / f"bandcorr_real_{_fingerprint.digest[7:19]}"
+    if CORRECTED_RUN_DIR.resolve() == SUPERSEDED_BAND_RUN_DIR.resolve():
+        raise RuntimeError(
+            "the corrected run resolves to the superseded run directory; refusing"
+        )
+    CORRECTED_STORE = CorrectedControlStore(CORRECTED_RUN_DIR, _fingerprint)
+    print()
+    print("corrected run       ", CORRECTED_RUN_DIR)
+    print("resume              ", CORRECTED_STORE.open())
+
+    # Persisted now, before any new confirmation record is drawn or opened.
+    CORRECTED_STORE.save("corrected_universe", "universe", CORRECTED_UNIVERSE.evidence)
+    CORRECTED_STORE.save("corrected_protocol", "protocol", CORRECTED_PROTOCOL)
+    CORRECTED_STORE.save("corrected_protocol", "budget", CORRECTED_BUDGET)
+    print("protocol and universe persisted; the population may now be built")
+else:
+    print("skipped: RUN_STAGE2C_CORRECTED_PREFLIGHT is False")
+'''
+)
+
+markdown(
     """
-## 9. Stage 3 — the pass budget for the band swap
+## 10. Stage 2G — the corrected confirmation over all nine band layers
+
+The correction was designed **after** the failed report was read, so every
+record that report opened is development history. This stage therefore:
+
+1. rebuilds the extension's fresh sets and the superseded run's own 256+256
+   sets, and **proves** each rebuild reproduces that run's recorded checksums —
+   an unproven reconstruction would exclude the wrong records;
+2. draws one deterministic, untouched 256-prompt confirmation population with
+   all of those excluded, plus the parent's sets, plus every fit record, plus
+   exact and near-duplicate matches under the repository's frozen SimHash rule;
+3. writes the population's manifest — seed, corpus revision, exclusion digest,
+   record ids, prompt hashes, target-token protocol, diversity requirements —
+   **before** scoring it;
+4. scores **all nine physical layers 32-40 together** on that one population,
+   under one gate, one readout, one control universe and one wrong-layer
+   mapping;
+5. publishes only layers that pass, into a new versioned directory, and refuses
+   to overwrite anything.
+
+There is **one** predeclared selection. The population is not re-drawn, and no
+seed is searched for a friendlier outcome.
+
+The development diagnostics rescore records earlier runs already opened, under
+the repaired control. They are labelled development and are never independent
+confirmation.
+
+Workload is forward-pass only: one forward per prompt, then five
+`[d_model, d_model]` products per scored layer. No fitting function is called.
+Each prompt's rows are written as one atomic, checksum-valid unit, so a
+disconnect resumes at the prompt (and, within a prompt, at the layer) rather
+than restarting all 256.
+"""
+)
+code(
+    r'''
+from jlens.mmpilot.band_control import (
+    assert_no_opened_records, assert_protocol_persisted,
+    assert_superseded_run_unchanged, build_corrected_confirmation_population,
+    corrected_band_verdict, corrected_confirmation_manifest,
+    corrected_validation_report, evaluate_corrected_layers,
+    format_corrected_verdict, publish_corrected_layer,
+    score_corrected_readout_rows, verify_reconstructed_superseded_splits,
+)
+
+CORRECTED_POPULATION = None
+CORRECTED_MANIFEST = None
+CORRECTED_CONFIRMATION = None
+CORRECTED_DEVELOPMENT = None
+CORRECTED_VERDICT = None
+CORRECTED_PUBLICATION = None
+CORRECTED_REPORT = None
+
+if RUN_STAGE2G_CORRECTED_CONFIRMATION:
+    import json as _json
+
+    from jlens.calibration.extension import (
+        EXTENSION_CONFIRMATION_GATE, build_fresh_evaluation_splits,
+    )
+    from jlens.calibration.gate import (
+        ordinary_next_token_argmax, select_diverse_validation_prompts,
+    )
+    from jlens.lens import JacobianLens
+    from jlens.mmpilot.band_control import CORRECTED_CONFIRMATION_PROMPT_SEED
+    from jlens.mmpilot.band_lens import (
+        BAND_DEVELOPMENT_PROMPT_SEED, build_band_evaluation_splits,
+        verify_reconstructed_extension_splits,
+    )
+    from jlens.mmpilot.store import payload_checksum
+
+    if CORRECTED_STORE is None:
+        raise RuntimeError(
+            "stage 2G needs the corrected protocol from section 9; set "
+            "RUN_STAGE2C_CORRECTED_PREFLIGHT=True as well"
+        )
+    if not CONFIRM_CORRECTED_READOUT_BUDGET or not CONFIRM_MODEL_LOAD:
+        raise RuntimeError(
+            "stage 2G needs CONFIRM_MODEL_LOAD and CONFIRM_CORRECTED_READOUT_BUDGET "
+            "set by hand; read the budget printed in section 9 first"
+        )
+    print("protocol persisted  ", assert_protocol_persisted(CORRECTED_STORE))
+
+    # --- 1. rebuild and prove every previously opened set
+    _prior_excluded = {
+        "old_fit": OLD_FIT, "old_development": OLD_VALIDATION,
+        "old_confirmation": OLD_CONFIRMATION, "new_fit": EXTENSION_FIT_RECORDS,
+    }
+    EXTENSION_SPLITS = build_fresh_evaluation_splits(
+        EXTENSION_POOL, excluded=_prior_excluded,
+        corpus_id=EXTENSION_REPORT["corpus"]["corpus_id"],
+    )
+    EXTENSION_SPLIT_PROOF = verify_reconstructed_extension_splits(
+        EXTENSION_SPLITS, extension_report=EXTENSION_REPORT
+    )
+    _band_excluded = {
+        **_prior_excluded,
+        "extension_development": EXTENSION_SPLITS.development,
+        "extension_confirmation": EXTENSION_SPLITS.confirmation,
+    }
+    SUPERSEDED_SPLITS, _ = build_band_evaluation_splits(
+        EXTENSION_POOL, excluded=_band_excluded,
+        corpus_id=EXTENSION_REPORT["corpus"]["corpus_id"],
+    )
+    SUPERSEDED_REPORT = _json.loads((
+        SUPERSEDED_BAND_RUN_DIR / "artifacts" / "band_interior_lens_report.json"
+    ).read_text(encoding="utf-8"))
+    SUPERSEDED_SPLIT_PROOF = verify_reconstructed_superseded_splits(
+        SUPERSEDED_SPLITS, band_report=SUPERSEDED_REPORT
+    )
+    print("extension sets rebuilt and verified :", EXTENSION_SPLIT_PROOF["all_match"])
+    print("superseded sets rebuilt and verified:", SUPERSEDED_SPLIT_PROOF["all_match"])
+
+    # --- 2. one deterministic, untouched population
+    CORRECTED_EXCLUDED = {
+        **_band_excluded,
+        "superseded_development": SUPERSEDED_SPLITS.development,
+        "superseded_confirmation": SUPERSEDED_SPLITS.confirmation,
+    }
+    CORRECTED_POPULATION, CORRECTED_LEAKAGE = build_corrected_confirmation_population(
+        EXTENSION_POOL, excluded=CORRECTED_EXCLUDED,
+        corpus_id=EXTENSION_REPORT["corpus"]["corpus_id"],
+    )
+    OPENED_RECORD_AUDIT = assert_no_opened_records(
+        CORRECTED_POPULATION,
+        opened_record_ids={
+            "extension_development": (
+                EXTENSION_REPORT["fresh_splits"]["record_ids"]["development"]
+            ),
+            "extension_confirmation": (
+                EXTENSION_REPORT["fresh_splits"]["record_ids"]["confirmation"]
+            ),
+            "superseded_development": (
+                SUPERSEDED_REPORT["fresh_splits"]["record_ids"]["development"]
+            ),
+            "superseded_confirmation": (
+                SUPERSEDED_REPORT["fresh_splits"]["record_ids"]["confirmation"]
+            ),
+        },
+    )
+    EXCLUSION_DIGEST_CORRECTED = payload_checksum({
+        "sources": EXCLUSION_SOURCES,
+        "sizes": {k: len(v) for k, v in sorted(CORRECTED_EXCLUDED.items())},
+    })
+    print(f"  confirmation      {len(CORRECTED_POPULATION.confirmation):>4} records  "
+          f"{CORRECTED_POPULATION.checksum('confirmation')}")
+    print("  leakage audit    ", "CLEAN" if CORRECTED_LEAKAGE["ok"] else "FAILED")
+    print("  opened-record audit", "CLEAN" if OPENED_RECORD_AUDIT["ok"] else "FAILED")
+
+    # --- 3. target tokens from the ordinary output path, then freeze the manifest
+    _target_token = lambda prompt: ordinary_next_token_argmax(
+        MODEL, prompt, max_length=BAND_PLAN.max_seq_len
+    )
+    CORRECTED_PROMPTS, CORRECTED_SELECTION = select_diverse_validation_prompts(
+        [record.text for record in CORRECTED_POPULATION.confirmation],
+        n_prompts=CORRECTED_GATE.n_prompts, gate=CORRECTED_GATE,
+        seed=CORRECTED_CONFIRMATION_PROMPT_SEED,
+        target_token_for_prompt=_target_token,
+    )
+    CORRECTED_MANIFEST = corrected_confirmation_manifest(
+        CORRECTED_POPULATION,
+        protocol=CORRECTED_PROTOCOL,
+        prompts=CORRECTED_PROMPTS,
+        selection=CORRECTED_SELECTION,
+        exclusion_digest=EXCLUSION_DIGEST_CORRECTED,
+        corpus_revision=EXTENSION_REPORT["corpus"]["revision"],
+        leakage_audit=CORRECTED_LEAKAGE,
+        opened_record_audit=OPENED_RECORD_AUDIT,
+    )
+    CORRECTED_STORE.save("corrected_population", "manifest", CORRECTED_MANIFEST)
+    CORRECTED_STORE.save("corrected_population", "leakage_audit", CORRECTED_LEAKAGE)
+    CORRECTED_STORE.save("corrected_population", "proofs", {
+        "extension_split_proof": EXTENSION_SPLIT_PROOF,
+        "superseded_split_proof": SUPERSEDED_SPLIT_PROOF,
+        "opened_record_audit": OPENED_RECORD_AUDIT,
+        "exclusion_sources": EXCLUSION_SOURCES,
+        "exclusion_digest": EXCLUSION_DIGEST_CORRECTED,
+    })
+    print("  manifest         ", CORRECTED_MANIFEST["manifest_checksum"])
+
+    # --- 4. the universe lens, assembled from the two snapshots, never refitted
+    _needed = set(CORRECTED_UNIVERSE.source_layers_needed())
+    _jacobians = {}
+    for _snapshot in CORRECTED_SNAPSHOTS:
+        _wanted = sorted((_needed & set(_snapshot.layers)) - set(_jacobians))
+        if not _wanted:
+            continue
+        _loaded = JacobianLens.load(_snapshot.path)
+        for _layer in _wanted:
+            _jacobians[_layer] = _loaded.jacobians[_layer].detach().float().cpu()
+        del _loaded
+    CORRECTED_LENS = JacobianLens(
+        jacobians=_jacobians, n_prompts=CORRECTED_SCALE, d_model=EXPECT_D_MODEL
+    )
+    print("  lens layers      ", CORRECTED_LENS.source_layers)
+
+    # --- 5. score all nine band layers on the one population
+    CORRECTED_ROWS, CORRECTED_READOUT = score_corrected_readout_rows(
+        MODEL, CORRECTED_LENS, CORRECTED_PROMPTS,
+        scoring_layers=BAND_SCORING_LAYERS,
+        target_layer=CORRECTED_TARGET_LAYER,
+        max_seq_len=BAND_PLAN.max_seq_len,
+        store=CORRECTED_STORE, stage="corrected_readout",
+        progress=print,
+    )
+    CORRECTED_STORE.save("corrected_readout", "record", CORRECTED_READOUT)
+    CORRECTED_CONFIRMATION = evaluate_corrected_layers(
+        CORRECTED_ROWS,
+        manifest_checksum=CORRECTED_MANIFEST["manifest_checksum"],
+        layers=BAND_SCORING_LAYERS, scale=CORRECTED_SCALE, stage="confirmation",
+    )
+    CORRECTED_STORE.save("corrected_confirmation", f"scale{CORRECTED_SCALE}", {
+        "scale": CORRECTED_SCALE,
+        "confirmation_manifest_checksum": CORRECTED_MANIFEST["manifest_checksum"],
+        "by_layer": {str(k): v for k, v in CORRECTED_CONFIRMATION.items()},
+    })
+
+    # --- 6. development diagnostics: previously opened records, repaired control
+    _dev_prompts, _dev_selection = select_diverse_validation_prompts(
+        [record.text for record in SUPERSEDED_SPLITS.development],
+        n_prompts=EXTENSION_CONFIRMATION_GATE.n_prompts,
+        gate=EXTENSION_CONFIRMATION_GATE,
+        seed=BAND_DEVELOPMENT_PROMPT_SEED, target_token_for_prompt=_target_token,
+    )
+    _dev_rows, _dev_readout = score_corrected_readout_rows(
+        MODEL, CORRECTED_LENS, _dev_prompts,
+        scoring_layers=BAND_SCORING_LAYERS,
+        target_layer=CORRECTED_TARGET_LAYER,
+        max_seq_len=BAND_PLAN.max_seq_len,
+        store=CORRECTED_STORE, stage="corrected_development_readout",
+        progress=print,
+    )
+    CORRECTED_DEVELOPMENT = evaluate_corrected_layers(
+        _dev_rows,
+        manifest_checksum="development:" + payload_checksum(
+            [record.record_id for record in SUPERSEDED_SPLITS.development]
+        ),
+        layers=BAND_SCORING_LAYERS, scale=CORRECTED_SCALE, stage="development",
+    )
+    CORRECTED_STORE.save("corrected_development", f"scale{CORRECTED_SCALE}", {
+        "scale": CORRECTED_SCALE,
+        "records": "the superseded run's already-opened development set",
+        "is_independent_confirmation": False,
+        "by_layer": {str(k): v for k, v in CORRECTED_DEVELOPMENT.items()},
+    })
+
+    # --- 7. every read of the completed run is done; prove it is unchanged
+    #        before a single corrected artifact is written.
+    SUPERSEDED_IMMUTABILITY = assert_superseded_run_unchanged(
+        SUPERSEDED_DIGEST_BEFORE, superseded_run_digest(SUPERSEDED_BAND_RUN_DIR)
+    )
+    CORRECTED_STORE.save(
+        "corrected_publication", "superseded_immutability", SUPERSEDED_IMMUTABILITY
+    )
+    print("superseded run unchanged:", SUPERSEDED_IMMUTABILITY["identical"])
+
+    # --- 8. the verdict, then publication for the layers that earned it
+    _preliminary = corrected_band_verdict(
+        CORRECTED_CONFIRMATION,
+        confirmation_manifest_checksum=CORRECTED_MANIFEST["manifest_checksum"],
+        scale=CORRECTED_SCALE, development=CORRECTED_DEVELOPMENT,
+        matrix_present={l: True for l in BAND_SCORING_LAYERS},
+        protocol=CORRECTED_PROTOCOL,
+    )
+    _published, _refused = [], []
+    for _layer in _preliminary["publication_eligible_layers"]:
+        try:
+            _published.append(publish_corrected_layer(
+                layer=_layer, scale=CORRECTED_SCALE,
+                lens=JacobianLens(
+                    jacobians={_layer: CORRECTED_LENS.jacobians[_layer]},
+                    n_prompts=CORRECTED_SCALE, d_model=EXPECT_D_MODEL,
+                ),
+                destination=CORRECTED_STORE.published_path(_layer, CORRECTED_SCALE),
+                confirmation_verdict=CORRECTED_CONFIRMATION[_layer],
+                development_verdict=CORRECTED_DEVELOPMENT.get(_layer),
+                universe=CORRECTED_UNIVERSE,
+                protocol=CORRECTED_PROTOCOL,
+                confirmation_manifest=CORRECTED_MANIFEST,
+                corrected_dir=CORRECTED_STORE.corrected_dir,
+                superseded_immutability=SUPERSEDED_IMMUTABILITY,
+                protected_run_dirs=PROTECTED_RUN_DIRS,
+            ))
+        except CorrectedControlRefused as _error:
+            print(f"  refused L{_layer}: {_error}")
+            _refused.append({"layer": _layer, "reason": str(_error)})
+    CORRECTED_PUBLICATION = {
+        "directory": str(CORRECTED_STORE.corrected_dir),
+        "n_published": len(_published),
+        "published_layers": sorted(int(a["physical_layer"]) for a in _published),
+        "published_checksums": {
+            str(a["physical_layer"]): a["lens_checksum"] for a in _published
+        },
+        "refused": _refused,
+        "existing_artifacts_overwritten": False,
+    }
+    CORRECTED_STORE.save(
+        "corrected_publication", f"scale{CORRECTED_SCALE}", CORRECTED_PUBLICATION
+    )
+
+    # --- 9. the final verdict and the corrected report
+    CORRECTED_VERDICT = corrected_band_verdict(
+        CORRECTED_CONFIRMATION,
+        confirmation_manifest_checksum=CORRECTED_MANIFEST["manifest_checksum"],
+        scale=CORRECTED_SCALE, development=CORRECTED_DEVELOPMENT,
+        matrix_present={l: True for l in BAND_SCORING_LAYERS},
+        published_layers=CORRECTED_PUBLICATION["published_layers"],
+        protocol=CORRECTED_PROTOCOL,
+    )
+    CORRECTED_STORE.save("corrected_verdict", "verdict", CORRECTED_VERDICT)
+    CORRECTED_REPORT = corrected_validation_report(
+        mode="real",
+        protocol=CORRECTED_PROTOCOL,
+        universe=CORRECTED_UNIVERSE,
+        confirmation_manifest=CORRECTED_MANIFEST,
+        development=CORRECTED_DEVELOPMENT,
+        confirmation=CORRECTED_CONFIRMATION,
+        verdict=CORRECTED_VERDICT,
+        publication=CORRECTED_PUBLICATION,
+        superseded_immutability=SUPERSEDED_IMMUTABILITY,
+        leakage_audit=CORRECTED_LEAKAGE,
+        opened_record_audit=OPENED_RECORD_AUDIT,
+        readout_record=CORRECTED_READOUT,
+        budget=CORRECTED_BUDGET,
+        resume=CORRECTED_STORE.status_report(),
+    )
+    _corrected_dir = CORRECTED_STORE.corrected_dir
+    _corrected_dir.mkdir(parents=True, exist_ok=True)
+    _path = _corrected_dir / "band_interior_corrected_validation_report.json"
+    _tmp = _path.with_suffix(".json.tmp")
+    _tmp.write_text(_json.dumps(CORRECTED_REPORT, indent=2, default=str), encoding="utf-8")
+    os.replace(_tmp, _path)
+
+    print()
+    print(format_corrected_verdict(CORRECTED_VERDICT))
+    print()
+    print("report", _path)
+    if not CORRECTED_VERDICT["full_band_available"]:
+        print()
+        print("STAGE 3 REMAINS BLOCKED: the full contiguous band L32-L40 needs every")
+        print("one of its nine physical layers to pass this same confirmation.")
+else:
+    print("skipped: RUN_STAGE2G_CORRECTED_CONFIRMATION is False")
+'''
+)
+
+markdown(
+    """
+## 11. MOCK — the corrected control against known cases
+
+The real merge, the real refusals, the real gate, the real manifest binding and
+the real verdict, over fixture rows with controlled rank structure. Three
+commissioned cases, and the pipeline must treat them differently:
+
+| case | required outcome |
+|---|---|
+| every layer 32-40 passes | full-band GO, stage 3 unblocked |
+| L36 fails | no full band; the largest contiguous passing sub-band is reported |
+| L35 — *previously confirmed* — fails on the common population | no full band |
+
+The third is the one worth watching. The corrected protocol re-evaluates all
+nine layers on one population, so a layer's earlier verdict cannot carry it, and
+the pipeline must refuse the full band rather than fall back on the old result.
+
+**A green MOCK run is evidence about this code and about nothing else.**
+"""
+)
+code(
+    r'''
+CORRECTED_MOCK_RESULTS = {}
+if not REAL_MODE:
+    import tempfile as _tempfile
+
+    from jlens.calibration.state import CalibrationFingerprint
+    from jlens.mmpilot.band_control import (
+        CORRECTED_GATE as _CORRECTED_GATE, CORRECTED_SCALE as _CORRECTED_SCALE,
+        CorrectedControlRefused as _CorrectedControlRefused,
+        CorrectedControlStore as _CorrectedControlStore,
+        assert_protocol_persisted as _assert_protocol_persisted,
+        corrected_band_verdict as _corrected_band_verdict,
+        corrected_protocol_record as _corrected_protocol_record,
+        format_corrected_verdict as _format_corrected_verdict,
+    )
+    from jlens.mmpilot.band_control_mock import (
+        CORRECTED_MOCK_MANIFEST_CHECKSUM, CORRECTED_MOCK_SCENARIOS,
+        mock_control_universe, mock_corrected_confirmation,
+    )
+
+    _universe = mock_control_universe()
+    assert dict(_universe.mapping) == dict(WRONG_LAYER_MAPPING)
+    _protocol = _corrected_protocol_record(
+        universe=_universe, model_repo_id="mock", model_revision="mock",
+        exclusion_sources={"mock": "sha256:mock-exclusions"},
+    )
+    _mock_fingerprint = CalibrationFingerprint(
+        mode="mock", protocol_version=CORRECTION_PROTOCOL_VERSION,
+        model_repo_id="mock", model_revision="mock", tokenizer_revision="mock",
+        capture_plan_digest=_universe.digest,
+        corpus_manifest_checksum="sha256:mock-corpus",
+        gate_digest=_CORRECTED_GATE.digest,
+        plateau_rule_digest="not_applicable_no_scale_selection",
+        scale_points=(_CORRECTED_SCALE,),
+        artifact_format_version="jlens.calibration.artifact.v1",
+    )
+    # A fresh directory every run, so the persistence gate below is exercised
+    # against an empty store rather than against whatever a previous run left.
+    _mock_root = Path(_tempfile.mkdtemp(prefix="jlens_band_corrected_mock_"))
+    _mock_store = _CorrectedControlStore(
+        _mock_root / f"bandcorr_mock_{_mock_fingerprint.digest[7:19]}", _mock_fingerprint
+    )
+    print("mock corrected run", _mock_store.root, _mock_store.open())
+
+    # The persistence gate is load-bearing: before the protocol is on disk, the
+    # population may not be opened.
+    try:
+        _assert_protocol_persisted(_mock_store)
+        raise AssertionError("unreachable: an unpersisted protocol must refuse")
+    except _CorrectedControlRefused as _refusal:
+        print("  persistence gate:", str(_refusal).splitlines()[0])
+    _mock_store.save("corrected_universe", "universe", _universe.evidence)
+    _mock_store.save("corrected_protocol", "protocol", _protocol)
+    print("  persisted:", _assert_protocol_persisted(_mock_store))
+    print()
+
+    for _key, _scenario in CORRECTED_MOCK_SCENARIOS.items():
+        _confirmation = mock_corrected_confirmation(_scenario)
+        _development = mock_corrected_confirmation(_scenario, stage="development")
+        _verdict = _corrected_band_verdict(
+            _confirmation,
+            confirmation_manifest_checksum=CORRECTED_MOCK_MANIFEST_CHECKSUM,
+            development=_development, protocol=_protocol,
+        )
+        CORRECTED_MOCK_RESULTS[_key] = _verdict
+        print(f"{_key:<28} {_verdict['verdict']:<30} "
+              f"full={str(_verdict['full_band_available']):<5} "
+              f"band={_verdict['largest_admissible_contiguous_band']} "
+              f"failing={_verdict['layers_failing']}")
+        assert _verdict["verdict"] == _scenario.expected_verdict, _key
+        assert _verdict["publication_eligible_layers"] == sorted(
+            _scenario.expected_published_layers
+        ), _key
+        for _row in _verdict["layers"]:
+            assert _row["publication_eligible"] is (
+                _row["confirmation_passed"] and _row["matrix_artifact_exists"]
+            ), (_key, _row["layer"])
+
+    # Verdicts from two different populations may never be combined.
+    _mixed = dict(mock_corrected_confirmation("all_nine_pass"))
+    _mixed[35] = {**_mixed[35], "confirmation_manifest_checksum": "sha256:some-old-run"}
+    try:
+        _corrected_band_verdict(
+            _mixed, confirmation_manifest_checksum=CORRECTED_MOCK_MANIFEST_CHECKSUM
+        )
+        raise AssertionError("unreachable: mixed manifests must refuse")
+    except _CorrectedControlRefused as _refusal:
+        print()
+        print("mixed-manifest refusal:", str(_refusal).splitlines()[0])
+
+    # The readout itself, for real, on the tiny stack: the real control
+    # construction, the real tie-aware scorer, the real atomic units — so the
+    # resume path is exercised rather than described.
+    import torch as _torch
+
+    from jlens.calibration.mock import MockCalibrationModel, mock_corpus_texts
+    from jlens.lens import JacobianLens as _JacobianLens
+    from jlens.mmpilot.band_control import (
+        score_corrected_readout_rows as _score_corrected_readout_rows,
+    )
+
+    _mock_model = MockCalibrationModel()
+    _generator = _torch.Generator().manual_seed(20260901)
+    _mock_lens = _JacobianLens(
+        jacobians={
+            _layer: _torch.randn(
+                _mock_model.d_model, _mock_model.d_model, generator=_generator
+            ) * 0.05
+            for _layer in FIXED_CONTROL_UNIVERSE
+        },
+        n_prompts=_CORRECTED_SCALE, d_model=_mock_model.d_model,
+    )
+    _mock_prompts = mock_corpus_texts(6)
+    _rows_a, _record_a = _score_corrected_readout_rows(
+        _mock_model, _mock_lens, _mock_prompts, max_seq_len=48,
+        store=_mock_store, stage="corrected_readout",
+    )
+    _rows_b, _record_b = _score_corrected_readout_rows(
+        _mock_model, _mock_lens, _mock_prompts, max_seq_len=48,
+        store=_mock_store, stage="corrected_readout",
+    )
+    print()
+    print("readout      ", len(_rows_a), "rows over layers",
+          _record_a["scoring_layers"])
+    print("  first pass  computed", _record_a["n_prompts_computed"],
+          " reused", _record_a["n_prompts_reused"],
+          " forward passes", _record_a["forward_passes"],
+          " backward passes", _record_a["backward_passes"])
+    print("  resumed     computed", _record_b["n_prompts_computed"],
+          " reused", _record_b["n_prompts_reused"])
+    print("  identical rows after resume:", _rows_a == _rows_b)
+    assert _record_b["n_prompts_computed"] == 0 and _rows_a == _rows_b
+    assert _record_a["fitting_performed"] is False
+
+    print()
+    print(_format_corrected_verdict(CORRECTED_MOCK_RESULTS["one_interior_fails"]))
+    print()
+    print("MOCK corrected-control stages complete. Real gate, real merge, real")
+    print("control construction, real scorer, real resume, fixture rows.")
+else:
+    print("skipped: real mode")
+'''
+)
+
+markdown(
+    """
+## 12. Stage 3 — the pass budget for the band swap
 
 Every band is a full clamp: `4 bands x 2 arms x 7 conditions x 2 readouts x 3
 modalities x 2 directions x 8 photographs`, each scoring the predeclared
@@ -1147,7 +1942,7 @@ else:
 
 markdown(
     """
-## 10. Stage 3 — the contiguous-band coordinate swap
+## 13. Stage 3 — the contiguous-band coordinate swap
 
 `coordinate_swap_band` installs one hook per physical band layer, all at once,
 for the whole scored forward pass. Each layer reads its own activation, builds
@@ -1197,6 +1992,34 @@ if RUN_STAGE3_BAND_SWAP:
         raise RuntimeError(
             "stage 3 is blocked: no admissible contiguous band exists yet.\n"
             + str(BAND_DESIGN_BLOCKED)
+        )
+    # The causal stage runs only behind a printed full-band GO from the
+    # corrected control. A band admitted by the superseded set-dependent control
+    # is not admitted.
+    if CORRECTED_VERDICT is None:
+        raise RuntimeError(
+            "stage 3 is blocked: the corrected confirmation (sections 9-10) has "
+            f"not been run in this session. The completed {SUPERSEDED_VERDICT} "
+            "result was produced under a wrong-layer control whose difficulty "
+            "depended on the fitted subset, so it cannot admit a band. Run "
+            "RUN_STAGE2C_CORRECTED_PREFLIGHT and RUN_STAGE2G_CORRECTED_CONFIRMATION "
+            "first, and read the printed verdict block."
+        )
+    if not CORRECTED_VERDICT["full_band_available"]:
+        raise RuntimeError(
+            "stage 3 is blocked: the corrected confirmation returned "
+            f"{CORRECTED_VERDICT['verdict']}. Physical layer(s) "
+            f"{CORRECTED_VERDICT['layers_failing']} did not pass on the new "
+            "population, and a contiguous band needs every one of its nine "
+            "physical layers. Largest contiguous passing sub-band: "
+            f"{CORRECTED_VERDICT['largest_admissible_contiguous_band']}."
+        )
+    if sorted(PRIMARY_BAND.layers) != sorted(CORRECTED_VERDICT["layers_passing"]):
+        raise RuntimeError(
+            f"the frozen primary band {sorted(PRIMARY_BAND.layers)} is not the set "
+            f"of layers the corrected confirmation passed "
+            f"{CORRECTED_VERDICT['layers_passing']}; refusing to clamp a band the "
+            "corrected control did not admit"
         )
 
     if not os.environ.get("HF_TOKEN"):
@@ -1583,7 +2406,7 @@ else:
 
 markdown(
     """
-## 11. MOCK — stage 3 against the synthetic world
+## 14. MOCK — stage 3 against the synthetic world
 
 The same `run_swap_condition`, the same `band_trial_record`, the same
 conditions and the same aggregation. The world is
@@ -1619,7 +2442,7 @@ else:
 
 markdown(
     """
-## 12. Stage 3 — aggregate and judge
+## 15. Stage 3 — aggregate and judge
 
 Image-level aggregation with a seeded bootstrap interval, then the verdict.
 
@@ -1691,7 +2514,7 @@ else:
 
 markdown(
     """
-## 13. Stage 4 — intermediate versus answer, over the same suffix bands
+## 16. Stage 4 — intermediate versus answer, over the same suffix bands
 
 The same operator, twice: once exchanging the inferred animal's coordinates and
 once exchanging the leg-count answer's, over the identical bands, with the
@@ -1746,7 +2569,7 @@ else:
 
 markdown(
     """
-## 14. Report, resume status, and what to send back
+## 17. Report, resume status, and what to send back
 """
 )
 code(
@@ -1765,6 +2588,27 @@ if REASONING is not None:
         "lens_discovery": DISCOVERY,
         "band_lens_run": str(BAND_RUN_DIR) if BAND_RUN_DIR else None,
         "band_lens_verdict": BAND_VERDICT,
+        "corrected_control_run": str(CORRECTED_RUN_DIR) if CORRECTED_RUN_DIR else None,
+        "corrected_control_protocol": CORRECTION_PROTOCOL_VERSION,
+        "corrected_wrong_layer_mapping": {
+            str(k): int(v) for k, v in sorted(WRONG_LAYER_MAPPING.items())
+        },
+        "corrected_band_verdict": CORRECTED_VERDICT,
+        "corrected_confirmation_manifest_checksum": (
+            (CORRECTED_MANIFEST or {}).get("manifest_checksum")
+        ),
+        "band_admitted_by_corrected_control": bool(
+            (CORRECTED_VERDICT or {}).get("full_band_available", False)
+        ),
+        "superseded_band_run": {
+            "name": SUPERSEDED_RUN_NAME,
+            "verdict": SUPERSEDED_VERDICT,
+            "wrong_layer_mapping": {
+                str(k): int(v) for k, v in sorted(SUPERSEDED_WRONG_LAYER_MAPPING.items())
+            },
+            "status": "immutable superseded set-dependent-control validation",
+            "read_or_modified_by_this_run": "read-only",
+        },
         "swap_run": str(SWAP_RUN_DIR) if SWAP_RUN_DIR else None,
         "stage4_reanalysis_of": STAGE4_CONTEXT,
         "directed_pairs": DIRECTED_PAIRS,
@@ -1803,7 +2647,11 @@ if REASONING is not None:
         print("report", _path)
     print("report checksum", REPORT["report_checksum"])
 
-for _store, _label in ((BAND_STORE, "band lens run"), (SWAP_STORE, "band swap run")):
+for _store, _label in (
+    (BAND_STORE, "band lens run"),
+    (CORRECTED_STORE, "corrected control run"),
+    (SWAP_STORE, "band swap run"),
+):
     if _store is not None:
         print()
         print(_label)
@@ -1812,13 +2660,22 @@ for _store, _label in ((BAND_STORE, "band lens run"), (SWAP_STORE, "band swap ru
 print()
 if MODE == "real":
     print("Send back:")
-    print("  artifacts/band_interior_lens_report.json   (stages 1-2)")
-    print("  anthropic_band_swap_report.json           (stages 3-4)")
-    print("  the inventory table, the verdict block and the timing block above")
+    print("  artifacts/corrected_validation_v1/"
+          "band_interior_corrected_validation_report.json   (stages 2C-2G)")
+    print("  anthropic_band_swap_report.json                          (stages 3-4)")
+    print("  the printed CORRECTED WRONG-LAYER CONTROL mapping block")
+    print("  the printed CORRECTED CONTROL PROTOCOL block")
+    print("  the printed CORRECTED BAND VERDICT table")
+    print("  the inventory table and the timing block above")
+    print()
+    print("The completed band_interior_lens_report.json in", SUPERSEDED_RUN_NAME)
+    print("is unchanged and stays where it is: it is the superseded")
+    print("set-dependent-control validation, not a deleted one.")
 else:
     print("MOCK RUN COMPLETE — pipeline behaviour only.")
-    print("No scientific claim about Gemma 4, about layers 33-39, about any")
-    print("modality, and about the workspace hypothesis is made or implied.")
+    print("No scientific claim about Gemma 4, about layers 32-40, about the")
+    print("corrected control's outcome on real data, about any modality, or about")
+    print("the workspace hypothesis is made or implied.")
 '''
 )
 

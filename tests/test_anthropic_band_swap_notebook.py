@@ -40,10 +40,20 @@ def test_notebook_is_output_free_and_every_cell_parses():
 
 
 def test_notebook_matches_its_generator():
-    """Requirement 19. Editing the notebook by hand fails here."""
+    """Requirement 19. Editing the notebook by hand fails here.
+
+    The checked-in bytes are restored before the assertion, so a drifted
+    notebook fails the test instead of being silently repaired by running it.
+    """
     before = NOTEBOOK.read_bytes()
     subprocess.run([sys.executable, str(BUILDER)], cwd=ROOT, check=True)
-    assert NOTEBOOK.read_bytes() == before
+    rebuilt = NOTEBOOK.read_bytes()
+    if rebuilt != before:
+        NOTEBOOK.write_bytes(before)
+    assert rebuilt == before, (
+        "the checked-in notebook is not what its builder produces; edit "
+        f"{BUILDER.name} and regenerate rather than editing the notebook"
+    )
 
 
 def test_the_historical_single_layer_notebook_is_untouched():
@@ -152,10 +162,14 @@ def test_the_completed_runs_are_read_only_and_their_photographs_are_spent():
     assert "does not match its pinned report" in source
     assert "the new population overlaps the exclusion set" in source
     assert "prior_exclusion_digest" in source
-    # Read-only: nothing writes into a completed causal run.
-    assert "STORE.save" not in source.replace("SWAP_STORE.save", "").replace(
-        "BAND_STORE.save", ""
-    )
+    # Read-only: nothing writes into a completed causal run. Every store write
+    # in the notebook belongs to one of this session's own stores, and the
+    # completed band-interior run is protected the same way.
+    remaining = source
+    for allowed in ("SWAP_STORE.save", "BAND_STORE.save", "CORRECTED_STORE.save"):
+        remaining = remaining.replace(allowed, "")
+    assert "STORE.save" not in remaining
+    assert "SUPERSEDED_BAND_RUN_DIR," in source  # a member of PROTECTED_RUN_DIRS
 
 
 def test_safe_defaults_execute_the_whole_mock_pipeline_without_drive_or_cuda():
@@ -204,6 +218,124 @@ def test_safe_defaults_execute_the_whole_mock_pipeline_without_drive_or_cuda():
         < row["deepest_effective_start"]["answer"]
     )
     assert namespace["REPORT"]["mock_proves_pipeline_only"] is True
+
+    # The corrected control ran too: three commissioned cases, and the case
+    # that matters most is the previously confirmed layer failing.
+    assert namespace["RUN_STAGE2C_CORRECTED_PREFLIGHT"] is False
+    assert namespace["RUN_STAGE2G_CORRECTED_CONFIRMATION"] is False
+    assert namespace["CORRECTED_STORE"] is None
+    assert namespace["CORRECTED_VERDICT"] is None
+    corrected = namespace["CORRECTED_MOCK_RESULTS"]
+    assert set(corrected) == {
+        "all_nine_pass", "one_interior_fails", "previously_confirmed_fails"
+    }
+    assert corrected["all_nine_pass"]["verdict"] == "BAND_CORRECTED_CONTROL_GO"
+    assert corrected["all_nine_pass"]["full_band_available"] is True
+    assert corrected["all_nine_pass"]["largest_admissible_contiguous_band"] == [32, 40]
+    for key, failing, band in (
+        ("one_interior_fails", [36], [32, 35]),
+        ("previously_confirmed_fails", [35], [36, 40]),
+    ):
+        assert corrected[key]["verdict"] == "BAND_CORRECTED_CONTROL_NO_GO", key
+        assert corrected[key]["full_band_available"] is False, key
+        assert corrected[key]["layers_failing"] == failing, key
+        assert corrected[key]["largest_admissible_contiguous_band"] == band, key
+        assert corrected[key]["stage3_unblocked"] is False, key
+    assert namespace["WRONG_LAYER_MAPPING"] == {
+        8: 40, 14: 40, 20: 40, 26: 8,
+        32: 8, 33: 8, 34: 8, 35: 8, 36: 8, 37: 8, 38: 8, 39: 8, 40: 8,
+    }
+    assert namespace["SUPERSEDED_WRONG_LAYER_MAPPING"] == {
+        33: 39, 34: 39, 36: 33, 37: 33, 39: 33
+    }
+    assert namespace["CORRECTED_BUDGET"]["backward_passes"] == 0
+    assert namespace["CORRECTED_BUDGET"]["fitting_performed"] is False
+
+
+def test_the_no_go_prose_does_not_tell_the_operator_to_rerun_the_inventory():
+    """Requirement 18 of the correction.
+
+    Under `BAND_INTERIOR_LENS_NO_GO` the notebook used to print, unconditionally,
+    that re-running section 3 would pick the new lenses up. Nothing was
+    published for a failed layer, so the inventory cannot admit it and stage 3
+    stays blocked. The instruction is now guarded by the GO branch and the NO-GO
+    branch says the opposite.
+    """
+    source = _source(_payload())
+    guard = 'if BAND_VERDICT["verdict"] == "BAND_INTERIOR_LENS_GO":'
+    assert guard in source
+    before, after = source.split(guard, 1)
+    assert "the inventory picks the new lenses up" not in before
+    go_branch, no_go_branch = after.split("else:", 1)
+    assert "inventory picks the newly published" in go_branch
+    for phrase in (
+        "STAGE 3 REMAINS BLOCKED",
+        "re-running the section 3 inventory cannot admit them",
+        "a layer that failed",
+    ):
+        assert phrase in no_go_branch, phrase
+    assert "publishable" not in source
+
+
+def test_the_corrected_control_is_wired_in_and_gates_the_causal_stage():
+    """The correction's notebook requirements: a CPU-only preflight that prints
+    the explicit mapping and freezes the protocol, a GPU confirmation over all
+    nine band layers, and a stage 3 that will not run without a full-band GO."""
+    source = _source(_payload())
+
+    # switches, in the required order and both defaulting to False
+    assert "RUN_STAGE2C_CORRECTED_PREFLIGHT = False" in source
+    assert "RUN_STAGE2G_CORRECTED_CONFIRMATION = False" in source
+    assert "CONFIRM_CORRECTED_READOUT_BUDGET = False" in source
+
+    # the mapping is printed before any confirmation data can be opened
+    assert "format_wrong_layer_mapping" in source
+    assert "superseded=SUPERSEDED_WRONG_LAYER_MAPPING" in source
+    index_mapping = source.index("print(format_wrong_layer_mapping(")
+    index_population = source.index("build_corrected_confirmation_population(")
+    assert index_mapping < index_population
+
+    # the fixed universe and the nine scored layers
+    assert "FIXED_CONTROL_UNIVERSE" in source
+    assert "scoring_layers=BAND_SCORING_LAYERS" in source
+
+    # protocol persisted before the population is opened
+    index_persist = source.index('CORRECTED_STORE.save("corrected_protocol", "protocol"')
+    assert index_persist < index_population
+    assert "assert_protocol_persisted(CORRECTED_STORE)" in source
+
+    # the budget is printed in section 5, which runs before section 6 can load
+    # a model, and stage 2G will not start without an explicit confirmation
+    assert "format_corrected_readout_budget" in source
+    assert "corrected_readout_budget(d_model=EXPECT_D_MODEL)" in source
+    index_budget = source.index("format_corrected_readout_budget(CORRECTED_BUDGET)")
+    assert index_budget < source.index("load_gemma4(")
+    assert "stage 2G needs CONFIRM_MODEL_LOAD and CONFIRM_CORRECTED_READOUT_BUDGET" in (
+        source
+    )
+
+    # resumable readout and atomic units
+    assert "score_corrected_readout_rows(" in source
+    assert 'stage="corrected_readout"' in source
+    assert "store=CORRECTED_STORE" in source
+
+    # publication into a new versioned directory, never over an artifact
+    assert "publish_corrected_layer(" in source
+    assert "corrected_dir=CORRECTED_STORE.corrected_dir" in source
+    assert "protected_run_dirs=PROTECTED_RUN_DIRS" in source
+    assert "SUPERSEDED_BAND_RUN_DIR" in source
+    assert "assert_superseded_run_unchanged(" in source
+
+    # stage 3 is blocked without a full-band GO
+    assert 'if CORRECTED_VERDICT["full_band_available"]' in source or (
+        'if not CORRECTED_VERDICT["full_band_available"]:' in source
+    )
+    assert "stage 3 is blocked: the corrected confirmation" in source
+    assert "a contiguous band needs every one of its nine" in source
+
+    # nothing rewrites the completed run
+    assert "immutable historical evidence" in source
+    assert "superseded set-dependent-control validation" in source
 
 
 def test_the_notebook_says_what_a_mock_run_proves():
