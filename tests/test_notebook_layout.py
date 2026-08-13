@@ -28,6 +28,7 @@ ACTIVE = {
     "research_grade_l27_l31_preconvergence_study_colab.ipynb",
     "multimodal_jspace_anthropic_reasoning_swap_colab.ipynb",
     "multimodal_jspace_anthropic_band_swap_colab.ipynb",
+    "multimodal_jspace_anthropic_band33_40_swap_colab.ipynb",
 }
 
 #: The archive categories, and what each is for.

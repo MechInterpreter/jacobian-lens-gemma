@@ -35,9 +35,27 @@ published, and none of them fits a lens except the first two.
 
 | 9 | `multimodal_jspace_anthropic_band_swap_colab.ipynb` | **New. Anthropic's primary protocol: the contiguous-layer-band clamp.** The same exact two-coordinate exchange, applied at every original prompt position at *every physical layer* of a contiguous band, with the coordinates recomputed per layer. Because a band needs a confirmed lens at every layer inside it, stages 1–2 first fit and confirm physical layers 33, 34, 36, 37 and 39 at scale 250 on the extension's own frozen corpus ordering; stages 3–4 then run the band swap and the intermediate-versus-answer timing. `[32, 35, 38, 40]` is refused as non-contiguous. | `bandlens_real_*` (lenses) and `mmband_real_*` (causal) runs |
 
-Notebooks 1–5 and 7–9 are all **switched off** in the committed file. Opening one
-starts nothing, downloads nothing and spends nothing. Notebook 9's off state is
-a complete MOCK run on CPU.
+| 10 | `multimodal_jspace_anthropic_band33_40_swap_colab.ipynb` | **New. The prospective causal follow-up over the validated band L33–L40.** Notebook 9's corrected lens validation returned `BAND_CORRECTED_CONTROL_NO_GO` for the planned L32–L40 study: L32 failed the frozen coverage/nondegeneracy clause (tied-at-max 0.51171875 against a ceiling of 0.50) and L33–L40 passed. This notebook runs the identical two-coordinate band clamp over the band that *was* validated, with the four predeclared suffix starts 33/35/38/40. It reads the completed corrected run, proves it byte-for-byte unchanged, re-checksums the eight published artifacts, and fits nothing. | `band3340_real_*` run |
+
+Notebooks 1–5 and 7–10 are all **switched off** in the committed file. Opening
+one starts nothing, downloads nothing and spends nothing. Notebook 9's and
+notebook 10's off states are complete MOCK runs on CPU.
+
+### Notebook 10 is not notebook 9's confirmation
+
+Notebook 9's planned L32–L40 confirmatory band **remains
+`BAND_CORRECTED_CONTROL_NO_GO`**, permanently, and its stage 3 correctly stayed
+blocked. Notebook 10 is a *prospective causal follow-up*: its band was selected
+after seeing an independent, text-only lens-validation outcome, so a favourable
+result there can support a claim about L33–L40 under that protocol and can
+support no claim about a band beginning at L32 or about any layer earlier
+than 33. It is never relabelled as notebook 9's confirmation, and every report
+it writes says so in its own payload.
+
+L32 failed only one clause — it passed MRR-vs-noise, MRR-vs-wrong-layer,
+rank/top-10 and fold stability. That does not make it validated, and it is not a
+reason to change the tie ceiling or re-draw the population. There is no
+configuration of notebook 10 that admits L32.
 
 ### Notebook 8 versus notebook 9
 
@@ -109,6 +127,8 @@ semantics and what a fresh process reconstructs versus re-proves.
 | anything about physical layers 27–31 | (7) the L27–L31 transition study |
 | paper-style hidden-intermediate exchange versus the answer-swap confound, one layer at a time | (8) Anthropic reasoning swap |
 | the paper's contiguous-band clamp, and the lenses for physical layers 33/34/36/37/39 | (9) Anthropic band swap |
+| causal exchange across the **validated** band L33–L40 | (10) the L33–L40 follow-up |
+| anything about a band beginning at L32, or any layer earlier than 33 | nothing. L32 failed the frozen gate and no notebook may claim it |
 
 ---
 
