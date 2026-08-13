@@ -669,6 +669,43 @@ def _capture_geometry(plan: Mapping | None) -> dict | None:
     return {field: int(geometry[field]) for field in CAPTURE_GEOMETRY_FIELDS}
 
 
+def _extension_capture_geometry(report: Mapping, artifact: Mapping) -> dict | None:
+    """Resolve extension geometry from immutable records, preferring publication.
+
+    Older early-layer extension reports did not copy the complete capture plan
+    into the top-level report.  The published lens sidecar did, because
+    :func:`jlens.calibration.publication.build_artifact` records the exact plan
+    used to fit the published matrix.  Treat that sidecar as the primary source
+    and use a complete report-side plan only as corroboration.  Two complete
+    sources that disagree are evidence of an inconsistent run and are refused.
+    """
+    report_plan = dict((report.get("continuation") or {}).get("capture_plan") or {})
+    if not report_plan:
+        report_plan = dict((report.get("budget") or {}).get("anchor") or {})
+
+    sources = {
+        "published_artifact_sidecar": _capture_geometry(
+            artifact.get("capture_plan")
+        ),
+        "extension_report": _capture_geometry(report_plan),
+    }
+    complete = {name: value for name, value in sources.items() if value is not None}
+    if not complete:
+        return None
+
+    reference_name, reference = next(iter(complete.items()))
+    disagreements = {
+        name: value for name, value in complete.items() if value != reference
+    }
+    if disagreements:
+        rendered = {reference_name: reference, **disagreements}
+        raise CorrectedControlRefused(
+            "the extension run's immutable capture-geometry records disagree: "
+            f"{rendered}. Refusing rather than choosing one by source order."
+        )
+    return dict(reference)
+
+
 def read_scale_snapshot(
     run_dir: str | os.PathLike[str],
     *,
@@ -749,9 +786,7 @@ def extension_snapshot_facts(
     _, artifact = read_artifact_sidecar(Path(discovered.lens_path))
 
     corpus = dict(report.get("corpus") or {})
-    plan = dict((report.get("continuation") or {}).get("capture_plan") or {})
-    if not plan:
-        plan = dict((report.get("budget") or {}).get("anchor") or {})
+    capture_geometry = _extension_capture_geometry(report, artifact)
     path, file_checksum, layers = read_scale_snapshot(run_dir, scale=scale)
     checksums, d_model = _matrix_checksums(path)
     return LensSnapshot(
@@ -763,7 +798,10 @@ def extension_snapshot_facts(
         scale=int(scale),
         model_repo_id=artifact.get("model_repo_id"),
         model_revision=artifact.get("model_revision"),
-        target_layer=artifact.get("target_layer") or plan.get("target_layer"),
+        target_layer=(
+            artifact.get("target_layer")
+            or (capture_geometry or {}).get("target_layer")
+        ),
         hook_site=artifact.get("hook_site"),
         residual_convention=artifact.get("residual_convention"),
         d_model=d_model,
@@ -773,7 +811,7 @@ def extension_snapshot_facts(
             str(int(scale))
         ),
         estimator="jlens.fitting.fit (upstream, unmodified)",
-        capture_geometry=_capture_geometry(plan),
+        capture_geometry=capture_geometry,
         hook_site_source=(
             f"published scale-{int(scale)} artifact sidecar for L{int(published_layer)}"
         ),

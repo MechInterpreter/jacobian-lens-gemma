@@ -47,6 +47,7 @@ from jlens.mmpilot.band_control import (
     ControlUniverse,
     CorrectedControlRefused,
     CorrectedControlStore,
+    _extension_capture_geometry,
     assert_no_opened_records,
     assert_protocol_persisted,
     assert_superseded_run_unchanged,
@@ -399,6 +400,42 @@ def test_an_unrecorded_clause_is_refused_rather_than_assumed():
     first, second = mock_lens_snapshots()
     with pytest.raises(CorrectedControlRefused, match="has not been demonstrated"):
         build_control_universe([first, replace(second, fit_prefix_checksum=None)])
+
+
+def test_legacy_extension_geometry_comes_from_published_sidecar():
+    """The real extension report predates its sidecar's complete capture plan."""
+    geometry = {
+        "target_layer": 41,
+        "d_model": 2560,
+        "dim_batch": 8,
+        "max_seq_len": 128,
+        "skip_first": 16,
+        "n_layers": 42,
+    }
+    report = {"budget": {"anchor": {"target_layer": 41}}}
+    artifact = {"capture_plan": {**geometry, "layers": [8, 14, 20, 26, 32]}}
+
+    assert _extension_capture_geometry(report, artifact) == geometry
+
+
+def test_complete_extension_geometry_sources_must_agree():
+    geometry = {
+        "target_layer": 41,
+        "d_model": 2560,
+        "dim_batch": 8,
+        "max_seq_len": 128,
+        "skip_first": 16,
+        "n_layers": 42,
+    }
+    report = {"continuation": {"capture_plan": geometry}}
+    artifact = {"capture_plan": {**geometry, "max_seq_len": 256}}
+
+    with pytest.raises(CorrectedControlRefused, match="records disagree"):
+        _extension_capture_geometry(report, artifact)
+
+
+def test_missing_extension_geometry_is_not_defaulted():
+    assert _extension_capture_geometry({}, {}) is None
 
 
 def test_mixed_scale_artifacts_are_refused():
