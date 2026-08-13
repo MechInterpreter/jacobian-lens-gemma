@@ -1445,7 +1445,7 @@ if RUN_STAGE2G_CORRECTED_CONFIRMATION:
     import json as _json
 
     from jlens.calibration.extension import (
-        EXTENSION_CONFIRMATION_GATE, build_fresh_evaluation_splits,
+        EXTENSION_GATE, build_fresh_evaluation_splits,
     )
     from jlens.calibration.gate import (
         ordinary_next_token_argmax, select_diverse_validation_prompts,
@@ -1466,7 +1466,7 @@ if RUN_STAGE2G_CORRECTED_CONFIRMATION:
     if not CONFIRM_CORRECTED_READOUT_BUDGET or not CONFIRM_MODEL_LOAD:
         raise RuntimeError(
             "stage 2G needs CONFIRM_MODEL_LOAD and CONFIRM_CORRECTED_READOUT_BUDGET "
-            "set by hand; read the budget printed in section 9 first"
+            "set by hand; read the budget printed in section 5 first"
         )
     print("protocol persisted  ", assert_protocol_persisted(CORRECTED_STORE))
 
@@ -1605,10 +1605,12 @@ if RUN_STAGE2G_CORRECTED_CONFIRMATION:
     })
 
     # --- 6. development diagnostics: previously opened records, repaired control
+    # The same records, the same seed and the same gate the superseded run used
+    # to pick its development prompts, so this is a like-for-like rescoring of
+    # prompts that have already been opened rather than a new sample.
     _dev_prompts, _dev_selection = select_diverse_validation_prompts(
         [record.text for record in SUPERSEDED_SPLITS.development],
-        n_prompts=EXTENSION_CONFIRMATION_GATE.n_prompts,
-        gate=EXTENSION_CONFIRMATION_GATE,
+        n_prompts=EXTENSION_GATE.n_prompts, gate=EXTENSION_GATE,
         seed=BAND_DEVELOPMENT_PROMPT_SEED, target_token_for_prompt=_target_token,
     )
     _dev_rows, _dev_readout = score_corrected_readout_rows(
