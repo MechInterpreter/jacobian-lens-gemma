@@ -1339,6 +1339,7 @@ def score_corrected_readout_rows(
     control_seed: int = CONTROL_SEED,
     store: CorrectedControlStore | None = None,
     stage: str = "corrected_readout",
+    manifest_checksum: str | None = None,
     progress: Callable[[str], None] | None = None,
 ) -> tuple[list[dict], dict]:
     """Tie-aware rows for every (prompt, layer, variant), resumable per prompt.
@@ -1353,6 +1354,12 @@ def score_corrected_readout_rows(
     unit written under a different fingerprint or a torn unit is ignored by
     :meth:`~jlens.calibration.state.CalibrationStore.load` and recomputed, so a
     disconnect costs at most the prompts that were in flight.
+
+    Args:
+        manifest_checksum: The population manifest these rows belong to. Stored
+            in every unit and required to match on resume, so a confirmation
+            unit can never be reused as a development unit or vice versa. The
+            prompt hash is checked as well; both have to agree.
 
     Returns:
         ``(rows, progress_record)``.
@@ -1377,7 +1384,11 @@ def score_corrected_readout_rows(
         key = f"prompt{index:05d}"
         stored = store.load(stage, key) if store is not None else None
         cached: dict[int, list[dict]] = {}
-        if stored is not None and stored.get("prompt_sha") == sha:
+        if (
+            stored is not None
+            and stored.get("prompt_sha") == sha
+            and stored.get("manifest_checksum") == manifest_checksum
+        ):
             for layer_key, layer_rows in (stored.get("layers") or {}).items():
                 if int(layer_key) in set(scored) and layer_rows:
                     cached[int(layer_key)] = list(layer_rows)
@@ -1427,6 +1438,7 @@ def score_corrected_readout_rows(
                 key,
                 {
                     "correction_protocol_version": CORRECTION_PROTOCOL_VERSION,
+                    "manifest_checksum": manifest_checksum,
                     "prompt_index": index,
                     "prompt_sha": sha,
                     "scoring_layers": scored,
@@ -1445,6 +1457,7 @@ def score_corrected_readout_rows(
     record = {
         "protocol": CORRECTION_PROTOCOL_VERSION,
         "stage": stage,
+        "manifest_checksum": manifest_checksum,
         "n_prompts": len(list(prompts)),
         "n_prompts_reused": n_reused_prompts,
         "n_prompts_computed": n_computed_prompts,

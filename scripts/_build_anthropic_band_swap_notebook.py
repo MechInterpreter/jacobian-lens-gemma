@@ -1590,6 +1590,7 @@ if RUN_STAGE2G_CORRECTED_CONFIRMATION:
         target_layer=CORRECTED_TARGET_LAYER,
         max_seq_len=BAND_PLAN.max_seq_len,
         store=CORRECTED_STORE, stage="corrected_readout",
+        manifest_checksum=CORRECTED_MANIFEST["manifest_checksum"],
         progress=print,
     )
     CORRECTED_STORE.save("corrected_readout", "record", CORRECTED_READOUT)
@@ -1613,25 +1614,32 @@ if RUN_STAGE2G_CORRECTED_CONFIRMATION:
         n_prompts=EXTENSION_GATE.n_prompts, gate=EXTENSION_GATE,
         seed=BAND_DEVELOPMENT_PROMPT_SEED, target_token_for_prompt=_target_token,
     )
+    DEVELOPMENT_MANIFEST_CHECKSUM = "development:" + payload_checksum({
+        "records": [record.record_id for record in SUPERSEDED_SPLITS.development],
+        "prompt_seed": BAND_DEVELOPMENT_PROMPT_SEED,
+        "protocol_digest": CORRECTED_PROTOCOL["protocol_digest"],
+        "is_independent_confirmation": False,
+    })
     _dev_rows, _dev_readout = score_corrected_readout_rows(
         MODEL, CORRECTED_LENS, _dev_prompts,
         scoring_layers=BAND_SCORING_LAYERS,
         target_layer=CORRECTED_TARGET_LAYER,
         max_seq_len=BAND_PLAN.max_seq_len,
         store=CORRECTED_STORE, stage="corrected_development_readout",
+        manifest_checksum=DEVELOPMENT_MANIFEST_CHECKSUM,
         progress=print,
     )
     CORRECTED_DEVELOPMENT = evaluate_corrected_layers(
-        _dev_rows,
-        manifest_checksum="development:" + payload_checksum(
-            [record.record_id for record in SUPERSEDED_SPLITS.development]
-        ),
+        _dev_rows, manifest_checksum=DEVELOPMENT_MANIFEST_CHECKSUM,
         layers=BAND_SCORING_LAYERS, scale=CORRECTED_SCALE, stage="development",
     )
     CORRECTED_STORE.save("corrected_development", f"scale{CORRECTED_SCALE}", {
         "scale": CORRECTED_SCALE,
         "records": "the superseded run's already-opened development set",
+        "development_manifest_checksum": DEVELOPMENT_MANIFEST_CHECKSUM,
+        "selection_checksum": _dev_selection["selection_checksum"],
         "is_independent_confirmation": False,
+        "readout": _dev_readout,
         "by_layer": {str(k): v for k, v in CORRECTED_DEVELOPMENT.items()},
     })
 

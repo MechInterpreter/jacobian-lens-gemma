@@ -314,10 +314,12 @@ def test_the_corrected_control_is_wired_in_and_gates_the_causal_stage():
         source
     )
 
-    # resumable readout and atomic units
+    # resumable readout, atomic units, and units bound to their population
     assert "score_corrected_readout_rows(" in source
     assert 'stage="corrected_readout"' in source
     assert "store=CORRECTED_STORE" in source
+    assert 'manifest_checksum=CORRECTED_MANIFEST["manifest_checksum"]' in source
+    assert "manifest_checksum=DEVELOPMENT_MANIFEST_CHECKSUM" in source
 
     # publication into a new versioned directory, never over an artifact
     assert "publish_corrected_layer(" in source

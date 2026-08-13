@@ -746,6 +746,43 @@ def test_interrupted_scoring_resumes_at_fine_granularity(tmp_path):
     assert fourth["n_prompts_computed"] == 1
 
 
+def test_units_from_another_population_are_never_reused(tmp_path):
+    """A changed manifest refuses resume rather than mixing units: a
+    confirmation unit must not be reused as a development one, or vice versa."""
+    model = MockCalibrationModel()
+    lens = _small_lens(model)
+    prompts = mock_corpus_texts(4)
+    store = CorrectedControlStore(tmp_path / "bandcorr", _fingerprint())
+    store.open()
+
+    _, first = score_corrected_readout_rows(
+        model, lens, prompts, max_seq_len=48, store=store,
+        manifest_checksum="sha256:confirmation-population",
+    )
+    assert first["n_prompts_computed"] == 4
+    assert first["manifest_checksum"] == "sha256:confirmation-population"
+
+    _, same = score_corrected_readout_rows(
+        model, lens, prompts, max_seq_len=48, store=store,
+        manifest_checksum="sha256:confirmation-population",
+    )
+    assert same["n_prompts_reused"] == 4
+
+    _, other = score_corrected_readout_rows(
+        model, lens, prompts, max_seq_len=48, store=store,
+        manifest_checksum="development:sha256:the-opened-records",
+    )
+    assert other["n_prompts_computed"] == 4
+    assert other["n_prompts_reused"] == 0
+
+    # Different prompts under the same manifest are recomputed too.
+    _, moved = score_corrected_readout_rows(
+        model, lens, mock_corpus_texts(8)[4:], max_seq_len=48, store=store,
+        manifest_checksum="development:sha256:the-opened-records",
+    )
+    assert moved["n_prompts_computed"] == 4
+
+
 def test_the_readout_is_forward_pass_only_and_calls_no_fitting_function(
     tmp_path, monkeypatch
 ):
