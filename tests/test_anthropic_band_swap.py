@@ -1039,6 +1039,53 @@ def test_a_partial_interior_pass_reports_the_largest_admissible_sub_band():
     assert full["largest_admissible_contiguous_band"] == [32, 40]
 
 
+def test_a_failed_layer_is_never_reported_as_publication_eligible():
+    """The completed report carried ``"publishable": true`` on layers whose
+    confirmation had failed and for which publication wrote zero artifacts.
+
+    That field said only "this layer was a publication *target*", which is not
+    what a reader takes it to mean beside a failed verdict. It is replaced by
+    four independent facts, and a failure can never claim eligibility.
+    """
+    confirmation = {
+        layer: {"passed": layer != 36, "layer": layer, "metrics": {}}
+        for layer in BAND_INTERIOR_LAYERS
+    }
+    verdict = band_layer_verdict(
+        confirmation,
+        scale=BAND_SCALE,
+        selection={"selection_checksum": "sha256:s"},
+        already_confirmed_layers=(32, 35, 38, 40),
+        matrix_layers=BAND_INTERIOR_LAYERS,
+        published_layers=(33, 34, 37, 39),
+    )
+    rows = {row["layer"]: row for row in verdict["layers"]}
+    for row in rows.values():
+        assert "publishable" not in row
+        assert row["publication_eligible"] is (
+            row["confirmation_passed"] and row["matrix_artifact_exists"]
+            and row["publication_target"]
+        )
+        assert not (row["published"] and not row["publication_eligible"])
+    assert rows[36]["confirmation_passed"] is False
+    assert rows[36]["matrix_artifact_exists"] is True
+    assert rows[36]["publication_eligible"] is False
+    assert rows[36]["published"] is False
+    assert rows[33]["publication_eligible"] is True
+    assert rows[33]["published"] is True
+
+    # A layer this run holds no matrix for is not eligible however it scored.
+    without = band_layer_verdict(
+        confirmation,
+        scale=BAND_SCALE,
+        selection={"selection_checksum": "sha256:s"},
+        matrix_layers=(33, 34, 37, 39),
+    )
+    absent = next(row for row in without["layers"] if row["layer"] == 36)
+    assert absent["matrix_artifact_exists"] is False
+    assert absent["publication_eligible"] is False
+
+
 def _unit(path, payload):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(

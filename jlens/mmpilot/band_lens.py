@@ -512,6 +512,8 @@ def band_layer_verdict(
     interior_layers: Sequence[int] = BAND_INTERIOR_LAYERS,
     already_confirmed_layers: Sequence[int] = (),
     window: tuple[int, int] = BAND_WINDOW,
+    matrix_layers: Sequence[int] | None = None,
+    published_layers: Sequence[int] = (),
 ) -> dict:
     """GO or NO-GO for the band's interior layers, from confirmation alone.
 
@@ -520,11 +522,31 @@ def band_layer_verdict(
     available when every physical layer in it is confirmed. A partial pass is
     reported with the largest admissible contiguous sub-band, computed from
     layer geometry alone — no causal outcome exists yet, and none is consulted.
+
+    Each layer row reports four independent facts rather than one ambiguous
+    ``publishable`` flag. The old field said only "this layer was a publication
+    *target*", which read as ``true`` beside a failed confirmation and zero
+    written artifacts:
+
+    ``matrix_artifact_exists``  this run fitted a matrix for the layer.
+    ``confirmation_passed``     the frozen gate passed on the untouched set.
+    ``publication_eligible``    both of the above — never true for a failure.
+    ``published``               an artifact was actually written.
+
+    Args:
+        matrix_layers: Layers this run holds a fitted matrix for. Defaults to
+            ``interior_layers``, which is what the fit produces.
+        published_layers: Layers an artifact was actually written for.
     """
     from jlens.mmpilot.band_swap import largest_admissible_band
 
     results = {int(layer): dict(row) for layer, row in confirmation.items()}
     interior = tuple(int(layer) for layer in interior_layers)
+    with_matrix = {
+        int(layer)
+        for layer in (interior if matrix_layers is None else matrix_layers)
+    }
+    published = {int(layer) for layer in published_layers}
     passed = sorted(
         layer for layer in interior if results.get(layer, {}).get("passed", False)
     )
@@ -536,12 +558,14 @@ def band_layer_verdict(
     for layer in sorted(results):
         row = results[layer]
         metrics = (row.get("metrics") or {}).get("j_lens", {})
+        layer_passed = bool(row.get("passed", False))
+        has_matrix = layer in with_matrix
         layers.append(
             {
                 "layer": layer,
                 "normalized_depth": normalized_depth(layer),
                 "role": "band_interior" if layer in set(interior) else "reported_only",
-                "confirmation_passed": bool(row.get("passed", False)),
+                "confirmation_passed": layer_passed,
                 "confirmation_failed_checks": list(row.get("failed_checks", [])),
                 "mean_reciprocal_rank": metrics.get("mean_reciprocal_rank"),
                 "median_midrank": metrics.get("median_midrank"),
@@ -552,7 +576,12 @@ def band_layer_verdict(
                     if development
                     else None
                 ),
-                "publishable": layer in set(interior),
+                "matrix_artifact_exists": bool(has_matrix),
+                "publication_target": layer in set(interior),
+                "publication_eligible": bool(
+                    has_matrix and layer in set(interior) and layer_passed
+                ),
+                "published": bool(layer in published),
             }
         )
 
