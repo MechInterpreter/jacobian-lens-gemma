@@ -535,17 +535,26 @@ of that saving; the unscaled one applies the operator's original observation
 with no discount and is the number to plan with.
 
 **Stage 2G (the corrected confirmation).** No fitting term at all. The
-scale-250 matrices already exist in the two snapshots, so the workload is one
-forward pass per prompt plus five `[d_model, d_model]` products per scored
-layer — 256 forward passes and zero backward passes.
+scale-250 matrices already exist in the two snapshots, so the workload is two
+forward passes per prompt — one for target-token discovery through the ordinary
+output path, one for the readout — plus five `[d_model, d_model]` products per
+scored layer, over the 256-prompt untouched confirmation and the 256-prompt
+development rescoring. Zero backward passes.
+
+The printed range covers the scored work. Loading the model and rebuilding the
+corpus ordering are on top of it, and the reconstruction is the same one the
+completed run paid for.
 """
 )
 code(
     r'''
+from jlens.calibration.extension import EXTENSION_GATE as _EXTENSION_GATE
 from jlens.mmpilot.band_control import (
     corrected_readout_budget, format_corrected_readout_budget,
 )
 from jlens.mmpilot.band_lens import band_capture_plan, band_fit_budget, format_band_fit_budget
+
+EXTENSION_CONFIRMATION_GATE_N_PROMPTS = _EXTENSION_GATE.n_prompts
 
 BAND_PLAN = band_capture_plan(
     layers=BAND_INTERIOR_LAYERS,
@@ -561,8 +570,12 @@ print()
 
 # The corrected confirmation's budget, printed here because this cell runs
 # before section 6 can load a model. It has no fitting term: the scale-250
-# matrices already exist and stage 2G only runs forward passes over them.
-CORRECTED_BUDGET = corrected_readout_budget(d_model=EXPECT_D_MODEL)
+# matrices already exist and stage 2G only runs forward passes over them. Both
+# arms are counted -- the untouched 256-prompt confirmation and the 256-prompt
+# development rescoring of records earlier runs already opened.
+CORRECTED_BUDGET = corrected_readout_budget(
+    d_model=EXPECT_D_MODEL, n_development=EXTENSION_CONFIRMATION_GATE_N_PROMPTS
+)
 print(format_corrected_readout_budget(CORRECTED_BUDGET))
 
 if RUN_STAGE1_FIT_MISSING_LENSES and not (CONFIRM_MODEL_LOAD and CONFIRM_FIT_BUDGET):

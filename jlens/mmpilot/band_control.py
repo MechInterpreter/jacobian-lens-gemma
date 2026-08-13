@@ -1915,13 +1915,20 @@ def corrected_readout_budget(
     """What the corrected confirmation costs. Forward passes only.
 
     There is no fitting term because there is no fitting: the scale-250 matrices
-    are read from existing snapshots. The only per-prompt work is one forward
-    pass plus five ``[d_model, d_model]`` products per scored layer.
+    are read from existing snapshots. Each prompt costs **two** forward passes —
+    one for target-token discovery through the model's ordinary output path, and
+    one for the readout, which then does five ``[d_model, d_model]`` products per
+    scored layer on the captured residual.
+
+    The estimate covers the scored work only. Loading the model and rebuilding
+    the corpus ordering are additional, and the notebook says so where it
+    matters.
     """
     confirmation = int(CORRECTED_GATE.n_prompts if n_confirmation is None else n_confirmation)
     prompts = confirmation + int(n_development)
     n_scored = len(list(scoring_layers))
     matrix_bytes = int(d_model) * int(d_model) * 4
+    forwards = 2 * prompts
     payload = {
         "protocol": CORRECTION_PROTOCOL_VERSION,
         "workload": "forward-pass only; no fitting, no backward passes",
@@ -1929,12 +1936,18 @@ def corrected_readout_budget(
         "n_development_prompts": int(n_development),
         "n_prompts_total": prompts,
         "scored_layers": list(int(layer) for layer in scoring_layers),
-        "forward_passes": prompts,
+        "forward_passes": forwards,
+        "forward_passes_target_discovery": prompts,
+        "forward_passes_readout": prompts,
         "backward_passes": 0,
         "fitting_performed": False,
         "readout_products_per_prompt": 5 * n_scored,
-        "l4_minutes_low": round(prompts * float(seconds_per_prompt_low) / 60.0, 1),
-        "l4_minutes_high": round(prompts * float(seconds_per_prompt_high) / 60.0, 1),
+        "excludes": (
+            "model load and the corpus reconstruction that rebuilds the fit "
+            "ordering and the previously opened sets"
+        ),
+        "l4_minutes_low": round(forwards * float(seconds_per_prompt_low) / 60.0, 1),
+        "l4_minutes_high": round(forwards * float(seconds_per_prompt_high) / 60.0, 1),
         "storage_bytes": {
             "universe_matrices_resident": len(list(universe_layers)) * matrix_bytes,
             "per_prompt_units": prompts * 48 * 1024,
@@ -1964,12 +1977,15 @@ def format_corrected_readout_budget(budget: Mapping) -> str:
             f"({budget['n_confirmation_prompts']} confirmation + "
             f"{budget['n_development_prompts']} development)",
             f"  scored layers      {budget['scored_layers']}",
-            f"  forward passes     {budget['forward_passes']}",
+            f"  forward passes     {budget['forward_passes']} "
+            f"({budget['forward_passes_target_discovery']} target discovery + "
+            f"{budget['forward_passes_readout']} readout)",
             f"  backward passes    {budget['backward_passes']}  "
             f"(fitting_performed={budget['fitting_performed']})",
             f"  readout products   {budget['readout_products_per_prompt']} per prompt",
             f"  L4 wall time       {budget['l4_minutes_low']:.0f}-"
-            f"{budget['l4_minutes_high']:.0f} min",
+            f"{budget['l4_minutes_high']:.0f} min for the scored work",
+            f"  excludes           {budget['excludes']}",
             f"  Drive              {storage['total'] / 2**20:.0f} MiB",
             f"  checkpoint         {budget['checkpoint_granularity']}",
             "",

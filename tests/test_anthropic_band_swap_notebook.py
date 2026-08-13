@@ -307,7 +307,9 @@ def test_the_corrected_control_is_wired_in_and_gates_the_causal_stage():
     # the budget is printed in section 5, which runs before section 6 can load
     # a model, and stage 2G will not start without an explicit confirmation
     assert "format_corrected_readout_budget" in source
-    assert "corrected_readout_budget(d_model=EXPECT_D_MODEL)" in source
+    assert "corrected_readout_budget(" in source
+    # Both arms are counted, not just the confirmation one.
+    assert "n_development=EXTENSION_CONFIRMATION_GATE_N_PROMPTS" in source
     index_budget = source.index("format_corrected_readout_budget(CORRECTED_BUDGET)")
     assert index_budget < source.index("load_gemma4(")
     assert "stage 2G needs CONFIRM_MODEL_LOAD and CONFIRM_CORRECTED_READOUT_BUDGET" in (
