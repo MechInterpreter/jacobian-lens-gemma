@@ -207,6 +207,28 @@ def test_corrected_lens_discovery_uses_the_live_keyword_only_contract():
     assert "report=_corrected" in source
     assert "artifact.lens_checksum" in source
     assert "artifact.checksum" not in source
+
+
+def test_every_unit_store_stage_in_the_notebook_is_legal_and_clean_resume_hydrates():
+    from jlens.mmpilot.store import STAGES
+
+    source = _code_source(_payload())
+    tree = ast.parse(source)
+    literal_stages = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        if node.func.attr not in {"has", "load", "load_all", "save"} or not node.args:
+            continue
+        if not isinstance(node.func.value, ast.Name) or node.func.value.id != "STORE":
+            continue
+        if isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
+            literal_stages.append(node.args[0].value)
+    assert set(literal_stages) <= set(STAGES)
+    assert 'STORE.save("clean"' not in source
+    assert '_stage = "clean"' not in source
+    assert "FULL_VOCAB_UNIT_STORE_STAGE" in source
+    assert "] = _stored" in source
     assert (
         "AUDIO_RECORD = assert_audio_protocol(\n"
         "        _bundle.audio_interface,\n"

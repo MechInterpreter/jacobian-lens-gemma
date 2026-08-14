@@ -144,6 +144,11 @@ FULL_VOCAB_RUN_PREFIX = "mmfv"
 #: one of these and vice versa.
 FULL_VOCAB_UNIT_FAMILY = "full_vocabulary_unrestricted_next_token"
 
+#: Clean baselines and edited trials share the store's causal unit family.
+#: Their keys already carry ``kind=clean`` versus ``kind=trial`` and therefore
+#: cannot collide.  ``UnitStore`` deliberately has no ad-hoc ``clean`` stage.
+FULL_VOCAB_UNIT_STORE_STAGE = "intervention"
+
 #: The hard resource cap for this study. Exceeding it stops the run *before* a
 #: model loads, with the driving factor named.
 PASS_CAP = 5_000

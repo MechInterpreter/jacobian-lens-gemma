@@ -1010,6 +1010,7 @@ FV_RECORDS = []
 if GPU_STAGE:
     from jlens.mmpilot.capability import score_candidate_sequences
     from jlens.mmpilot.coordinate_swap import coordinate_swap_band
+    from jlens.mmpilot.full_vocab_study import FULL_VOCAB_UNIT_STORE_STAGE
     from jlens.mmpilot.full_vocabulary import (
         restricted_candidate_top1, score_unrestricted_next_token,
         unrestricted_trial_record,
@@ -1046,8 +1047,12 @@ if GPU_STAGE:
         return _inputs_cache[key]
 
     for _trial in TRIAL_PLAN:
-        _stage = "clean" if _trial["kind"] == "clean" else "intervention"
-        if STORE.has(_stage, _trial["key"]):
+        _stored = STORE.load(FULL_VOCAB_UNIT_STORE_STAGE, _trial["key"])
+        if _stored is not None:
+            if _trial["kind"] == "clean":
+                CLEAN_UNITS[
+                    (_trial["group_id"], _trial["modality"], _trial["readout"])
+                ] = _stored
             _reused += 1
             continue
         _source, _target = _trial["source"], _trial["target"]
@@ -1087,7 +1092,7 @@ if GPU_STAGE:
                             "vocab_size": EXPECT_VOCAB},
             )
             CLEAN_UNITS[(_trial["group_id"], _trial["modality"], _trial["readout"])] = _record
-            STORE.save("clean", _trial["key"], _record)
+            STORE.save(FULL_VOCAB_UNIT_STORE_STAGE, _trial["key"], _record)
             _computed += 1
         else:
             _layers = tuple(_trial["band"])
@@ -1165,7 +1170,7 @@ if GPU_STAGE:
                             "vocab_size": EXPECT_VOCAB},
             )
             _record["band_key"] = _trial["band_key"]
-            STORE.save("intervention", _trial["key"], _record)
+            STORE.save(FULL_VOCAB_UNIT_STORE_STAGE, _trial["key"], _record)
             _computed += 1
         if _computed % 25 == 0 or _computed == 1:
             print(f"trials {_computed:,} computed  {_reused:,} reused")
@@ -1173,7 +1178,7 @@ if GPU_STAGE:
     print("scoring complete", {"computed": _computed, "reused": _reused})
     print("prompt reconstructions proven", len(RECONSTRUCTION_PROOFS))
     FV_RECORDS = [
-        row for row in STORE.load_all("intervention").values()
+        row for row in STORE.load_all(FULL_VOCAB_UNIT_STORE_STAGE).values()
         if row.get("status") == "complete"
     ]
 else:

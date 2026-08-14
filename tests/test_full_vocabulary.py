@@ -45,6 +45,7 @@ from jlens.mmpilot.full_vocab_study import (
     FULL_VOCAB_REASONING_ALPHA1_GO,
     FULL_VOCAB_REASONING_ALPHA2_ONLY,
     FULL_VOCAB_REASONING_NO_GO,
+    FULL_VOCAB_UNIT_STORE_STAGE,
     PASS_CAP,
     REQUIRED_PINS,
     VERDICT_NAMES,
@@ -80,7 +81,7 @@ from jlens.mmpilot.full_vocabulary import (
     tie_aware_ranks,
     unrestricted_trial_record,
 )
-from jlens.mmpilot.store import payload_checksum
+from jlens.mmpilot.store import STAGES, payload_checksum
 from jlens.mmpilot.validated_band_followup import (
     EXCLUDED_FAILED_LAYER,
     FOLLOWUP_REPORT_NAME,
@@ -715,6 +716,11 @@ def test_family_a_pins_are_set():
     assert REQUIRED_PINS["BAND_FOLLOWUP_REPORT_CHECKSUM"]["value"].startswith("sha256:")
     assert REQUIRED_PINS["BAND_FOLLOWUP_FINGERPRINT"]["value"].startswith("sha256:")
     assert require_pin("BAND_FOLLOWUP_REPORT_CHECKSUM").endswith("cdcc1ce263cb")
+
+
+def test_full_vocab_units_use_a_legal_existing_store_stage():
+    assert FULL_VOCAB_UNIT_STORE_STAGE == "intervention"
+    assert FULL_VOCAB_UNIT_STORE_STAGE in STAGES
 
 
 def test_followup_reader_distinguishes_configuration_and_run_fingerprints(tmp_path):
