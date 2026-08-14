@@ -147,6 +147,11 @@ continuation; and requires both directions and every input modality against
 paired controls. It never rewrites, reinterprets or reuses the completed
 word-endpoint population.
 
+For the pinned Gemma tokenizer, these are the **bare** digit rows. A leading
+space followed by a digit encodes as two tokens, so the endpoint resolver uses
+`leading_space=False` and separately verifies that each resulting row decodes
+exactly as `2` or `4`.
+
 ## Which completed experiment measured which
 
 | study | endpoint | survives |

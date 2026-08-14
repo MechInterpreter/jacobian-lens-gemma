@@ -27,10 +27,12 @@ from jlens.mmpilot.digit_reasoning_confirmation import (
 
 
 class DigitBackend:
-    tokens = {" 2": 20, "2": 20, " 4": 40, "4": 40}
+    # Matches the pinned Gemma tokenizer behavior observed in Colab: a leading
+    # space is its own token, while the bare digit is one vocabulary row.
+    tokens = {" 2": [236743, 20], "2": [20], " 4": [236743, 40], "4": [40]}
 
     def encode_token(self, text):
-        return [self.tokens[text]]
+        return list(self.tokens[text])
 
     def decode_token(self, token_id):
         return {20: "2", 40: "4"}[int(token_id)]
@@ -56,6 +58,7 @@ def test_digit_endpoint_is_exact_and_frozen():
     endpoint = resolve_digit_endpoints(DigitBackend())
     assert endpoint["token_ids"] == {"2": 20, "4": 40}
     assert endpoint["concept_to_answer"] == DIGIT_ANSWERS
+    assert endpoint["tokenization_surface"] == "bare_digit_without_leading_space"
     assert endpoint["word_tokens_two_four_are_not_endpoints"] is True
 
 

@@ -144,11 +144,18 @@ class DigitConfirmationThresholds:
 def resolve_digit_endpoints(backend) -> dict:
     """Resolve the exact digit rows and refuse a lexicalization mismatch.
 
-    The leading-space continuation convention is the same one used by the
-    unrestricted scorer.  Both answers must be one token, distinct, and decode
-    to text whose normalized content is the expected digit.
+    Gemma's tokenizer represents a leading space and a digit as two tokens
+    (for example ``" 2"``), while the model's observed next-token output is the
+    single *bare digit* row.  Therefore this endpoint deliberately resolves
+    ``"2"`` and ``"4"`` with ``leading_space=False``.  Both answers must be
+    one token, distinct, and decode to the expected digit.
     """
-    table = answer_token_table(backend, ("2", "4"), required=("2", "4"))
+    table = answer_token_table(
+        backend,
+        ("2", "4"),
+        required=("2", "4"),
+        leading_space=False,
+    )
     decode = getattr(backend, "decode_token", None)
     if not callable(decode):
         raise DigitConfirmationRefused("the backend cannot decode endpoint tokens")
@@ -162,7 +169,8 @@ def resolve_digit_endpoints(backend) -> dict:
                 f"{surface!r}; refusing another lexicalization mismatch"
             )
     payload = {
-        "endpoint_rule": "exact_single_digit_vocabulary_row.v1",
+        "endpoint_rule": "exact_bare_single_digit_vocabulary_row.v1",
+        "tokenization_surface": "bare_digit_without_leading_space",
         "concept_to_answer": dict(DIGIT_ANSWERS),
         "token_ids": dict(table["token_ids"]),
         "decoded": decoded,
