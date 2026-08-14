@@ -1,6 +1,6 @@
 # Notebooks
 
-Eleven notebooks at this level are the **active research workflow**. Everything
+Twelve notebooks at this level are the **active research workflow**. Everything
 else has been moved into `archive/`, where it is preserved rather than
 preserved-and-confusing: an archived notebook produced a completed result, and
 re-running it today would re-run an *older protocol*.
@@ -38,8 +38,9 @@ published, and none of them fits a lens except the first two.
 | 10 | `multimodal_jspace_anthropic_band33_40_swap_colab.ipynb` | **New. The prospective causal follow-up over the validated band L33–L40.** Notebook 9's corrected lens validation returned `BAND_CORRECTED_CONTROL_NO_GO` for the planned L32–L40 study: L32 failed the frozen coverage/nondegeneracy clause (tied-at-max 0.51171875 against a ceiling of 0.50) and L33–L40 passed. This notebook runs the identical two-coordinate band clamp over the band that *was* validated, with the four predeclared suffix starts 33/35/38/40. It reads the completed corrected run, proves it byte-for-byte unchanged, re-checksums the eight published artifacts, and fits nothing. | `band3340_real_*` run |
 
 | 11 | `multimodal_jspace_full_vocabulary_causal_validation_colab.ipynb` | **New. The endpoint correction, and the final bounded rerun.** Stage 0 (CPU) audits every active endpoint, writes the claim ledger, and writes versioned amendments relabelling the completed restricted-candidate results. Stage 1 (GPU) reuses notebook 10's *exact* population and the canonical three-modality run's own inputs, and rescores them on the unrestricted next-token endpoint: original prompt, nothing appended, complete vocabulary, success only at unique global rank 1. Stage 2 (CPU) judges from the saved units alone. | `mmfv_real_*` run, `mmfv_audit_*` amendments |
+| 12 | `multimodal_jspace_digit_reasoning_confirmation_colab.ipynb` | **Final prospective confirmation.** Notebook 11 revealed that Gemma naturally emits digit rows `2`/`4` while its frozen endpoint monitored word rows `two`/`four`. This separately versioned study freezes the exact digit rows before opening a fresh image-disjoint population, makes alpha=2 the prospective primary, runs the L33-L40 two-coordinate exchange across text/image/spoken-caption inputs, verifies the unrestricted argmax with one-token greedy generation, and requires both directions, every modality, a direct-answer positive control, and three paired controls. Every forward pass is an atomic resume unit; nothing is fitted. | `mmdigitconfirm_real_*` run and `digit_reasoning_confirmation_report.json` |
 
-Notebooks 1–5 and 7–11 are all **switched off** in the committed file. Opening
+Notebooks 1–5 and 7–12 are all **switched off** in the committed file. Opening
 one starts nothing, downloads nothing and spends nothing. Notebooks 9, 10 and 11 have
 off states that are complete MOCK runs on CPU.
 
