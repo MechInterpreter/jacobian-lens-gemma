@@ -75,6 +75,9 @@ class FakeTokenizer:
     def __call__(self, text, add_special_tokens=False, return_tensors=None):
         return {"input_ids": self._encode(text)}
 
+    def decode(self, token_ids, skip_special_tokens=False):
+        return f"token-{int(token_ids[0])}"
+
 
 class FakeProcessor:
     """A processor with the real Gemma processor's *shape*: a ``__call__``
@@ -240,6 +243,24 @@ def test_refusing_the_model_load_propagates(fake_hooks, monkeypatch_module):
         R.build_real_backend(
             "google/gemma-4-E4B-it", revision="r", allow_model_load=False, device="cpu"
         )
+
+
+def test_processor_only_backend_never_calls_the_model_loader(
+    fake_hooks, monkeypatch_module
+):
+    calls, _load, _verify, factory = fake_hooks
+
+    def forbidden_loader():
+        raise AssertionError("the processor-only path reached the model loader")
+
+    monkeypatch_module.setattr(R, "_loader", forbidden_loader)
+    monkeypatch_module.setattr(R, "_processor_factory", lambda: factory)
+    result = R.build_processor_backend(
+        "google/gemma-4-E4B-it", revision="pinned-revision", token="fake-token"
+    )
+    assert result.processor_revision == "pinned-revision"
+    assert result.backend.encode_candidate(" cat")
+    assert calls["processor"]["revision"] == "pinned-revision"
 
 
 # ----------------------------------------- one unit of every downstream stage

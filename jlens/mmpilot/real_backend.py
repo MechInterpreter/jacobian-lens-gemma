@@ -83,6 +83,50 @@ class RealBackendBundle:
     audio_blocked_reason: str = ""
 
 
+@dataclass
+class ProcessorOnlyBundle:
+    """A processor and tokenization-only backend, with no model weights."""
+
+    backend: Any
+    processor: Any
+    processor_revision: str
+
+
+class TokenizerOnlyBackend:
+    """The token methods required by endpoint preflight, and nothing else."""
+
+    def __init__(self, processor: Any) -> None:
+        self.processor = processor
+        self.tokenizer = getattr(processor, "tokenizer", processor)
+
+    def encode_candidate(self, text: str) -> list[int]:
+        return list(
+            self.tokenizer(
+                text, add_special_tokens=False, return_tensors=None
+            )["input_ids"]
+        )
+
+    def decode_token(self, token_id: int) -> str:
+        return str(
+            self.tokenizer.decode([int(token_id)], skip_special_tokens=False)
+        )
+
+
+def build_processor_backend(
+    repo_id: str,
+    *,
+    revision: str,
+    token: str | None = None,
+) -> ProcessorOnlyBundle:
+    """Load only the pinned processor/tokenizer; never call the model loader."""
+    processor = _processor_factory()(repo_id, revision=revision, token=token)
+    return ProcessorOnlyBundle(
+        backend=TokenizerOnlyBackend(processor),
+        processor=processor,
+        processor_revision=str(revision),
+    )
+
+
 def build_real_backend(
     repo_id: str,
     *,
@@ -277,8 +321,11 @@ __all__ = [
     "EXPECT_N_LAYERS",
     "EXPECT_VOCAB",
     "LensManifestError",
+    "ProcessorOnlyBundle",
     "RealBackendBundle",
+    "TokenizerOnlyBackend",
     "ValidatedLens",
+    "build_processor_backend",
     "build_real_backend",
     "load_validated_lens",
 ]

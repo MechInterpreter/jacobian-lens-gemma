@@ -158,6 +158,13 @@ def test_the_budget_is_printed_before_any_model_load():
     assert budget_cell < load_cell
 
 
+def test_token_preflight_uses_a_processor_only_api_not_the_model_loader():
+    source = _code_source(_payload())
+    assert "build_processor_backend" in source
+    assert "PROCESSOR_BUNDLE = build_processor_backend(" in source
+    assert "allow_model_load=False" not in source
+
+
 def test_the_budget_cell_refuses_over_the_cap():
     source = _code_source(_payload())
     assert 'if not BUDGET["within_cap"]:' in source

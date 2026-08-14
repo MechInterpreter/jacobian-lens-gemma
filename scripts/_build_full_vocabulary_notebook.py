@@ -615,14 +615,13 @@ PROCESSOR_BUNDLE = None
 
 if GPU_STAGE:
     import getpass
-    from jlens.mmpilot.real_backend import build_real_backend
+    from jlens.mmpilot.real_backend import build_processor_backend
 
     if not os.environ.get("HF_TOKEN"):
         os.environ["HF_TOKEN"] = getpass.getpass("HF_TOKEN (input hidden): ").strip()
-    # allow_model_load=False: the processor and tokenizer only. No weights yet.
-    PROCESSOR_BUNDLE = build_real_backend(
+    # This API has no model-loading entry point: processor and tokenizer only.
+    PROCESSOR_BUNDLE = build_processor_backend(
         MODEL_REPO_ID, revision=MODEL_REVISION, token=os.environ["HF_TOKEN"],
-        device="cpu", allow_model_load=False, resolve_audio=False,
     )
     _tokenizer_backend = PROCESSOR_BUNDLE.backend
 
