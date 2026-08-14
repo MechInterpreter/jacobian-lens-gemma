@@ -313,11 +313,19 @@ def read_band_followup_report(
         problems.append(
             f"mode is {report.get('mode')!r}; a MOCK report reruns nothing"
         )
-    digest = str((report.get("fingerprint") or {}).get("followup_fingerprint_digest"))
-    if digest != str(fingerprint_pin):
+    fingerprint = dict(report.get("fingerprint") or {})
+    digest = str(fingerprint.pop("followup_fingerprint_digest", None))
+    recomputed_fingerprint = payload_checksum(fingerprint)
+    if digest != recomputed_fingerprint:
         problems.append(
-            f"followup_fingerprint_digest is {digest!r}, not the pinned "
-            f"{fingerprint_pin!r}"
+            f"the embedded follow-up configuration hashes to "
+            f"{recomputed_fingerprint!r} but records {digest!r}"
+        )
+    run_digest = str((report.get("resume") or {}).get("fingerprint_digest"))
+    if run_digest != str(fingerprint_pin):
+        problems.append(
+            f"resume.fingerprint_digest is {run_digest!r}, not the pinned "
+            f"run fingerprint {fingerprint_pin!r}"
         )
     if problems:
         raise FullVocabRefused(

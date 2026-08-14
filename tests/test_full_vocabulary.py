@@ -717,6 +717,37 @@ def test_family_a_pins_are_set():
     assert require_pin("BAND_FOLLOWUP_REPORT_CHECKSUM").endswith("cdcc1ce263cb")
 
 
+def test_followup_reader_distinguishes_configuration_and_run_fingerprints(tmp_path):
+    """The report embeds both digests, and they are intentionally different."""
+    run_pin = "sha256:" + "b" * 64
+    report = mock_band_followup_report(fingerprint_pin=run_pin)
+    assert report["fingerprint"]["followup_fingerprint_digest"] != run_pin
+    run_dir = tmp_path / "completed"
+    run_dir.mkdir()
+    (run_dir / FOLLOWUP_REPORT_NAME).write_text(json.dumps(report), encoding="utf-8")
+
+    _, loaded = read_band_followup_report(
+        run_dir,
+        expected_report_checksum=report["report_checksum"],
+        expected_fingerprint=run_pin,
+    )
+    assert loaded["resume"]["fingerprint_digest"] == run_pin
+
+    tampered = dict(report)
+    tampered["resume"] = {"fingerprint_digest": "sha256:" + "c" * 64}
+    tampered = {
+        **{key: value for key, value in tampered.items() if key != "report_checksum"},
+    }
+    tampered["report_checksum"] = payload_checksum(tampered)
+    (run_dir / FOLLOWUP_REPORT_NAME).write_text(json.dumps(tampered), encoding="utf-8")
+    with pytest.raises(FullVocabRefused, match="resume.fingerprint_digest"):
+        read_band_followup_report(
+            run_dir,
+            expected_report_checksum=tampered["report_checksum"],
+            expected_fingerprint=run_pin,
+        )
+
+
 # --------------------------------------------------------------------------
 # 17/18. L32 excluded; hook integrity exact
 # --------------------------------------------------------------------------

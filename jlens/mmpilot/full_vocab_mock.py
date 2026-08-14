@@ -448,12 +448,17 @@ def mock_band_followup_report(
     recorded checksum that is not the pinned one.
     """
     reuse = mock_population_reuse(n_images=n_images)
+    fingerprint_body = {"mock_followup_configuration": True}
     body = {
         "schema": FOLLOWUP_REPORT_SCHEMA,
         "mode": "real",
         "study_name": FOLLOWUP_STUDY_NAME,
         "run_dir": "band3340_real_2a72bda9b4ba",
-        "fingerprint": {"followup_fingerprint_digest": str(fingerprint_pin)},
+        "fingerprint": {
+            **fingerprint_body,
+            "followup_fingerprint_digest": payload_checksum(fingerprint_body),
+        },
+        "resume": {"fingerprint_digest": str(fingerprint_pin)},
         "population": {"population_digest": "sha256:mock-population"},
         "population_groups": reuse["groups"],
         "capability_selection": {"selected_group_ids": reuse["selected_group_ids"]},
