@@ -17,3 +17,8 @@ slices/
 artifacts/
 checkpoints/
 hf_cache/
+
+# MOCK output of the full-vocabulary notebook's stage 0; the reviewable
+# copies live in reports/endpoint_audit/ and are written by
+# scripts/write_endpoint_audit.py
+reports/endpoint_audit_mock/

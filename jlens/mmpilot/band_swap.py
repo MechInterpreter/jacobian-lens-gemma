@@ -71,13 +71,24 @@ predeclared band grid, and every payload says so.
 Scoring
 =======
 
-The primary endpoint is Anthropic's: the fraction of trials in which the
-**downstream target answer becomes top-1** among the predeclared, externally
-scored candidate set. Rank, log-prob and margin are secondary and never
-promote a trial to a success — a positive margin without top-1 is reported as
+The endpoint here is **restricted-candidate**: the fraction of trials in which
+the downstream target answer outranks the other predeclared, externally scored
+candidates. It is a forced-choice preference over a two-element set, measured by
+teacher-forced conditional sequence likelihood, and it is *not* the endpoint
+Anthropic's systematic evaluation reports. Theirs inspects the complete
+next-token distribution with no answer appended and counts success only when the
+target token is the **global** argmax over the whole vocabulary; that endpoint
+lives in :mod:`jlens.mmpilot.full_vocabulary` and this module never computes it.
+
+Rank, log-prob and margin are secondary and never promote a trial to a success —
+a positive margin without candidate-set top-1 is reported as
 :data:`PARTIAL_MOVEMENT`, which is a movement statistic, not a categorical one.
 Identity replacement is scored as an **intervention-integrity diagnostic** and
 can never, on its own, produce a reasoning GO.
+
+Every field this module computes is therefore
+:data:`~jlens.mmpilot.full_vocabulary.ENDPOINT_RESTRICTED_CANDIDATE`. See
+``docs/endpoint_semantics.md`` for what each endpoint does and does not license.
 """
 
 from __future__ import annotations
@@ -92,6 +103,7 @@ from jlens.mmpilot.coordinate_swap import (
     LayerBand,
     build_layer_band,
 )
+from jlens.mmpilot.full_vocabulary import ENDPOINT_RESTRICTED_CANDIDATE
 from jlens.mmpilot.store import payload_checksum
 
 __all__ = [
@@ -183,8 +195,8 @@ CONDITION_ALPHA: dict[str, float] = {
 #: and reported; never counted as a success.
 PARTIAL_MOVEMENT = "partial_movement_not_top1"
 
-#: The readout whose top-1 is the paper-style causal endpoint, and the readout
-#: that is only ever a diagnostic.
+#: The readout whose candidate-set top-1 is this study's causal endpoint, and
+#: the readout that is only ever a diagnostic. Neither is a global argmax.
 PRIMARY_READOUT = "property"
 DIAGNOSTIC_READOUT = "identity"
 
@@ -594,8 +606,10 @@ class BandSwapThresholds:
 
     Attributes:
         min_images: Independent photographs (or recordings of them) required.
-        min_target_top1_rate: Anthropic's endpoint — the fraction of trials in
-            which the downstream target answer becomes top-1.
+        min_target_top1_rate: The **restricted-candidate** rate — the fraction
+            of trials in which the downstream target answer outranks the other
+            predeclared candidates. Not a global-vocabulary argmax rate, and not
+            Anthropic's endpoint.
         control_top1_margin: How far the primary rate must exceed each matched
             control's rate. Zero means "strictly greater".
         max_identity_flip_rate_answer_arm: The answer arm exchanges the answer
@@ -1078,26 +1092,33 @@ def band_reasoning_verdict(
     paper_comparable_modality: str = "text",
     thresholds: BandSwapThresholds | None = None,
 ) -> dict:
-    """Anthropic's top-1 endpoint, per band, per arm, per condition, per modality.
+    """The restricted-candidate preference endpoint, per band/arm/condition/modality.
 
     Two results are produced and never merged:
 
-    ``paper_comparable``
-        Text-only, Anthropic's own trial definition: the downstream target
-        answer becomes top-1 after the intermediate swap, at alpha=1, beating
-        every intensity-matched control. This is the number that is comparable
-        to the paper.
+    ``restricted_candidate_preference``
+        Text-only: the downstream target answer outranks the other predeclared
+        candidates after the intermediate swap, at alpha=1, beating every
+        intensity-matched control. This is a **forced-choice preference over the
+        supplied candidate set**, not a statement about what the model would
+        emit. It is not comparable to Anthropic's global-argmax trial definition
+        and must not be labelled paper-comparable; the corresponding
+        unrestricted measurement is
+        :func:`jlens.mmpilot.full_vocabulary.score_unrestricted_next_token`.
 
     ``modality_extension``
         The same criterion applied to image and spoken-audio evidence, reported
         separately per modality, plus a tri-modal conjunction that is labelled
-        as **our extension** and is never a precondition for the
-        paper-comparable result.
+        as **our extension** and is never a precondition for the text result.
+
+    ``paper_comparable`` is retained as a **deprecated alias** of
+    ``restricted_candidate_preference`` so completed reports and their readers
+    keep resolving; its payload carries ``is_paper_comparable = False``.
 
     Identity replacement appears only as a diagnostic. A cell in which the
     identity flipped but the downstream answer did not is not a success, and a
-    cell whose margin improved without reaching top-1 is counted as
-    :data:`PARTIAL_MOVEMENT`.
+    cell whose margin improved without reaching candidate-set top-1 is counted
+    as :data:`PARTIAL_MOVEMENT`.
     """
     thresholds = thresholds or BandSwapThresholds()
     index = _index(cells)
@@ -1199,10 +1220,20 @@ def band_reasoning_verdict(
             "fraction of trials in which the target-appropriate downstream "
             "answer is top-1 of the externally scored candidate set"
         ),
+        "endpoint_class": ENDPOINT_RESTRICTED_CANDIDATE,
+        "full_vocabulary_evaluated": False,
         "identity_role": "intervention-integrity diagnostic only",
-        "paper_comparable": {
+        "restricted_candidate_preference": {
             "modality": str(paper_comparable_modality),
-            "criterion": "Anthropic's top-1 trial definition at alpha=1",
+            "endpoint_class": ENDPOINT_RESTRICTED_CANDIDATE,
+            "criterion": (
+                "restricted-candidate preference at alpha=1: the target answer "
+                "outranks the other predeclared candidates by teacher-forced "
+                "conditional sequence likelihood"
+            ),
+            "candidate_universe": "predeclared, externally supplied",
+            "is_paper_comparable": False,
+            "is_the_model_output": False,
             "passing_bands": paper_bands,
             "passed": bool(paper_bands),
         },
@@ -1229,6 +1260,14 @@ def band_reasoning_verdict(
         "threshold_digest": thresholds.digest,
         "margin_only_counts_as": PARTIAL_MOVEMENT,
         "identity_success_alone_is_never_a_reasoning_go": True,
+    }
+    # Deprecated alias. Completed reports and their readers address this result
+    # as ``paper_comparable``; the name is wrong and the payload says so, but
+    # removing the key would break the readers of an immutable report.
+    payload["paper_comparable"] = {
+        **payload["restricted_candidate_preference"],
+        "deprecated_name": True,
+        "superseded_by": "restricted_candidate_preference",
     }
     return {**payload, "verdict_digest": payload_checksum(payload)}
 

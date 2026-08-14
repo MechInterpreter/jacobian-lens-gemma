@@ -1578,7 +1578,18 @@ def followup_verdict(
         "causal_stage_ran": True,
         "capability_sufficient": True,
         "capability_selection": dict(capability_selection or {}),
+        # The endpoint-corrected name first; the deprecated one is carried
+        # unchanged so a completed report stays readable by its own field name.
+        "restricted_candidate_preference": dict(
+            reasoning.get("restricted_candidate_preference")
+            or reasoning.get("paper_comparable")
+            or {}
+        ),
         "paper_comparable": dict(reasoning.get("paper_comparable") or {}),
+        "endpoint_class": reasoning.get("endpoint_class"),
+        "full_vocabulary_evaluated": bool(
+            reasoning.get("full_vocabulary_evaluated", False)
+        ),
         "alpha2_sensitivity": dict(reasoning.get("alpha2_sensitivity") or {}),
         "modality_extension": dict(reasoning.get("modality_extension") or {}),
         "tested_bands": list(reasoning.get("tested_bands") or ()),
@@ -1898,13 +1909,19 @@ def format_followup_verdict(verdict: Mapping, timing: Mapping | None = None) -> 
     ]
     if verdict.get("why"):
         lines.append(f"  why                    {verdict['why']}")
-    paper = dict(verdict.get("paper_comparable") or {})
+    preference = dict(
+        verdict.get("restricted_candidate_preference")
+        or verdict.get("paper_comparable")
+        or {}
+    )
     alpha2 = dict(verdict.get("alpha2_sensitivity") or {})
-    if paper:
+    if preference:
         lines += [
-            f"  alpha=1 primary bands  {paper.get('passing_bands')}",
+            f"  alpha=1 primary bands  {preference.get('passing_bands')}",
             f"  alpha=2 sensitivity    {alpha2.get('passing_bands')}  "
             "(sensitivity evidence, not interchangeable with alpha=1)",
+            "  endpoint               restricted-candidate preference; the full "
+            "vocabulary was NOT evaluated",
         ]
     if timing:
         lines += ["", f"  timing                 {timing['verdict']}"]

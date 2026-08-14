@@ -1,6 +1,6 @@
 # Notebooks
 
-Nine notebooks at this level are the **active research workflow**. Everything
+Eleven notebooks at this level are the **active research workflow**. Everything
 else has been moved into `archive/`, where it is preserved rather than
 preserved-and-confusing: an archived notebook produced a completed result, and
 re-running it today would re-run an *older protocol*.
@@ -37,9 +37,43 @@ published, and none of them fits a lens except the first two.
 
 | 10 | `multimodal_jspace_anthropic_band33_40_swap_colab.ipynb` | **New. The prospective causal follow-up over the validated band L33–L40.** Notebook 9's corrected lens validation returned `BAND_CORRECTED_CONTROL_NO_GO` for the planned L32–L40 study: L32 failed the frozen coverage/nondegeneracy clause (tied-at-max 0.51171875 against a ceiling of 0.50) and L33–L40 passed. This notebook runs the identical two-coordinate band clamp over the band that *was* validated, with the four predeclared suffix starts 33/35/38/40. It reads the completed corrected run, proves it byte-for-byte unchanged, re-checksums the eight published artifacts, and fits nothing. | `band3340_real_*` run |
 
-Notebooks 1–5 and 7–10 are all **switched off** in the committed file. Opening
-one starts nothing, downloads nothing and spends nothing. Notebook 9's and
-notebook 10's off states are complete MOCK runs on CPU.
+| 11 | `multimodal_jspace_full_vocabulary_causal_validation_colab.ipynb` | **New. The endpoint correction, and the final bounded rerun.** Stage 0 (CPU) audits every active endpoint, writes the claim ledger, and writes versioned amendments relabelling the completed restricted-candidate results. Stage 1 (GPU) reuses notebook 10's *exact* population and the canonical three-modality run's own inputs, and rescores them on the unrestricted next-token endpoint: original prompt, nothing appended, complete vocabulary, success only at unique global rank 1. Stage 2 (CPU) judges from the saved units alone. | `mmfv_real_*` run, `mmfv_audit_*` amendments |
+
+Notebooks 1–5 and 7–11 are all **switched off** in the committed file. Opening
+one starts nothing, downloads nothing and spends nothing. Notebooks 9, 10 and 11 have
+off states that are complete MOCK runs on CPU.
+
+### Superseded terminology in notebooks 8, 9 and 10
+
+Those three notebooks describe their scoring as "the top-1 trial definition",
+"Anthropic's top-1 endpoint" and "the paper-comparable result". **That wording is
+superseded.** What they measured is a *restricted-candidate preference*: the
+target answer outscoring the one or five other predeclared candidates by
+teacher-forced conditional sequence likelihood. The complete next-token
+distribution was never inspected, and no vocabulary row outside the supplied
+candidates was consulted, so those numbers are not comparable to Anthropic's
+global-argmax trial definition.
+
+The notebooks are **not rewritten** — a completed notebook is a historical
+record, and retroactively changing what it said is the opposite of a correction.
+Read them alongside:
+
+* [`docs/endpoint_semantics.md`](../docs/endpoint_semantics.md) — what each
+  endpoint is and what it licenses;
+* [`artifacts/endpoint_audit/`](../reports/endpoint_audit/) — the audit and the
+  claim ledger, which trace every headline claim to the function that computed
+  it;
+* notebook 11, which measures the unrestricted endpoint on those same
+  populations.
+
+The completed verdicts themselves — `L33_L40_VALIDATED_BAND_FOLLOWUP_ALPHA2_SENSITIVITY_ONLY`,
+`BAND_CORRECTED_CONTROL_NO_GO`, `THREE_MODALITY_GO` — are unchanged and their
+numbers are identical. They are relabelled by versioned amendments that
+recompute nothing.
+
+Notebooks 1, 2, 5 and the convergence work are **unaffected**: the lens
+validation, the native readout and the convergence audit always measured the
+full vocabulary.
 
 ### Notebook 10 is not notebook 9's confirmation
 

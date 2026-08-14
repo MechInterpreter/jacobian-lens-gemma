@@ -414,6 +414,15 @@ class SwapMockBackend:
             return [self.answer_tokens[stripped]]
         return self._tokenize(stripped)
 
+    def decode_token(self, token_id: int) -> str:
+        """Surface text of one MOCK vocabulary row.
+
+        Named rows decode to the surface the real tokenizer would produce
+        (leading space and all); everything else decodes to a stable synthetic
+        marker, so a MOCK argmax can never be mistaken for real model output.
+        """
+        return TOKEN_TEXT.get(int(token_id), f"<mock-{int(token_id)}>")
+
     def _tokenize(self, text: str) -> list[int]:
         ids = []
         for word in text.split():

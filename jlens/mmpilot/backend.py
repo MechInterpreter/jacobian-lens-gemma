@@ -119,6 +119,9 @@ class PilotBackend(Protocol):
     def encode_candidate(self, text: str) -> list[int]:
         """Token ids for a candidate continuation (no BOS, no specials)."""
 
+    def decode_token(self, token_id: int) -> str:
+        """Surface text of one vocabulary row, for reporting a global argmax."""
+
     def unembedding_weight(self) -> torch.Tensor:
         """``[vocab, d_model]`` ``W_U`` — read-only, for the J-space dictionary."""
 
@@ -264,6 +267,18 @@ class GemmaPilotBackend:
     def encode_candidate(self, text: str) -> list[int]:
         return list(
             self.tokenizer(text, add_special_tokens=False, return_tensors=None)["input_ids"]
+        )
+
+    def decode_token(self, token_id: int) -> str:
+        """One vocabulary row's surface text, through the model's own tokenizer.
+
+        The unrestricted next-token endpoint reports a *global argmax token*, and
+        an integer nobody can read is not a reportable output token. Special
+        tokens are kept: if the model's top output is an end-of-turn marker, that
+        is the finding, not something to filter away.
+        """
+        return self.tokenizer.decode(
+            [int(token_id)], skip_special_tokens=False
         )
 
     def build_inputs(

@@ -188,11 +188,24 @@ accumulator, never a seeded continuation: the extension checkpoint holds a
 different layer grid, and appending five new layers to it would claim 250
 prompts for matrices that saw none.
 
-Scoring is Anthropic's: a trial succeeds when the **downstream target answer
-becomes top-1**. Rank, log-prob and margin are secondary; a positive margin that
-does not reach top-1 is reported as `partial_movement_not_top1`. Identity
-replacement is an intervention-integrity diagnostic and can never produce a
-reasoning GO on its own.
+Scoring in the completed band studies is **restricted-candidate**: a trial
+succeeds when the downstream target answer outranks the other predeclared,
+externally scored candidates. Rank, log-prob and margin are secondary; a
+positive margin that does not reach candidate-set top-1 is reported as
+`partial_movement_not_top1`. Identity replacement is an intervention-integrity
+diagnostic and can never produce a reasoning GO on its own.
+
+> **This is not Anthropic's endpoint, and the earlier wording here said it was.**
+> Theirs runs the original prompt with nothing appended, inspects the complete
+> next-token distribution, and counts success only when the target token is the
+> global argmax over the whole vocabulary. The completed L32–L40 and L33–L40
+> runs measured whether `two` outranked `four`, not whether `two` was the
+> model's next token. Their numbers are unchanged and their verdicts stand as
+> *restricted-candidate preference* results; see
+> [`endpoint_semantics.md`](endpoint_semantics.md) for the distinction and
+> [`artifacts/endpoint_audit/`](../reports/endpoint_audit/) for the claim
+> ledger. The unrestricted endpoint is implemented in
+> `jlens/mmpilot/full_vocabulary.py` and measured by notebook 11.
 
 ### Source/target reversal
 

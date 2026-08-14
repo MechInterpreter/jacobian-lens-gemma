@@ -1,0 +1,59 @@
+{
+  "amendment_checksum": "sha256:179c29dd106789f140639e22ae149253c568f9cda37cef37fe7d4d172cbbf64c",
+  "amendment_version": "mmpilot.endpoint_semantics_amendment.v1",
+  "boundary": "This amendment corrects what the completed numbers are called. It does not re-measure, re-derive, promote, demote or replace any of them, and it turns no historical GO into a new numerical verdict.",
+  "claim_ledger_digest": "sha256:677e31780452a2a43670987e9c2eb68bdddfdd4769a3fffcf7d03da07a093d4e",
+  "corrected_labels": [
+    "CONTROLLED_TARGET_LOGPROB_EFFECT",
+    "FULL_VOCABULARY_NOT_EVALUATED"
+  ],
+  "endpoint_audit_digest": "sha256:a27a836b4486af7fc30ef4fa16c85529dd93331fdb79ea20fed2a2334fe9cc92",
+  "full_vocabulary_evaluated": false,
+  "full_vocabulary_status": "FULL_VOCABULARY_NOT_EVALUATED",
+  "n_terminology_changes": 4,
+  "name": "native_audio_transfer_three_modality_verdict",
+  "original_endpoint_class": "conditional_token_or_sequence_logprob",
+  "original_report_checksum": "sha256:c868999e3d59fba5a44fda9ed5f4815c8f6085432ec902552180f70896665920",
+  "original_report_modified": false,
+  "original_report_path": "runs/mmaudio/mmaudio_native_audio_transfer_20260806T144822/native_audio_transfer_summary.json",
+  "original_run_fingerprint": "sha256:c868999e3d59fba5a44fda9ed5f4815c8f6085432ec902552180f70896665920",
+  "original_run_modified": false,
+  "original_run_name": "mmaudio_native_audio_transfer_20260806T144822",
+  "original_units_modified": false,
+  "original_verdict": "THREE_MODALITY_GO",
+  "original_verdict_is_reproduced_verbatim": true,
+  "schema": "jlens.mmpilot.endpoint_semantics_amendment.v1",
+  "scientific_numbers_unchanged": true,
+  "scientific_recompute": 0,
+  "source_unit_digest": null,
+  "source_units_reachable": false,
+  "study": "native spoken-audio transfer (canonical three-modality run)",
+  "terminology_changes": [
+    {
+      "corrected_wording": "in a six-way forced choice whose options are named in the prompt, the concept's complete-sequence likelihood exceeded the other five",
+      "field_path": "capability verdict: per_concept.accuracy",
+      "original_wording": "the model can read the concept out of this channel",
+      "reason": "the gate is multiple-choice evidence. Open recognition was never measured, and no vocabulary row outside the six was consulted"
+    },
+    {
+      "corrected_wording": "changed the target concept's conditional log-probability in the expected direction [CONTROLLED_TARGET_LOGPROB_EFFECT; FULL_VOCABULARY_NOT_EVALUATED]",
+      "field_path": "causal_transfer_verdict.rationale",
+      "original_wording": "moved the target concept in the expected direction",
+      "reason": "a controlled likelihood effect is a real causal result and is not evidence that any output token changed"
+    },
+    {
+      "corrected_wording": "restricted_candidate_preference_changed",
+      "field_path": "intervention records: prediction_changed",
+      "original_wording": "prediction_changed",
+      "reason": "the flag records which of the six supplied candidates scored highest, before and after; it is not a change of output"
+    },
+    {
+      "corrected_wording": "THREE_MODALITY_GO [CONTROLLED_TARGET_LOGPROB_EFFECT, candidate-conditioned; FULL_VOCABULARY_NOT_EVALUATED]",
+      "field_path": "overall_verdict: THREE_MODALITY_GO",
+      "original_wording": "THREE_MODALITY_GO",
+      "reason": "the verdict string is immutable and is reproduced verbatim; the endpoint labels are added beside it. The existing candidate-conditioned limitation from the prompt-protocol rule still applies and is unchanged by this amendment"
+    }
+  ],
+  "verdict_changed_by_prose": false,
+  "written_utc": "2026-08-13T00:00:00+00:00"
+}

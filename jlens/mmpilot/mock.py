@@ -565,6 +565,26 @@ class MockPilotBackend:
             return [self.answer_tokens[stripped], _ANSWER_SUFFIX]
         return self._tokenize(stripped)
 
+    def encode_token(self, text: str) -> list[int]:
+        """The tokenizer without the deliberate candidate suffix.
+
+        ``encode_candidate`` appends :data:`_ANSWER_SUFFIX` on purpose so
+        complete-sequence scoring is exercised. Asking which single vocabulary
+        row an answer occupies is a different question, and the unrestricted
+        next-token endpoint asks that one.
+        """
+        stripped = text.strip()
+        if stripped in self.answer_tokens:
+            return [self.answer_tokens[stripped]]
+        return self._tokenize(stripped)
+
+    def decode_token(self, token_id: int) -> str:
+        """Surface text of one MOCK vocabulary row."""
+        for concept, ident in sorted(self.answer_tokens.items()):
+            if int(ident) == int(token_id):
+                return f" {concept}"
+        return f"<mock-{int(token_id)}>"
+
     def _tokenize(self, text: str) -> list[int]:
         ids = []
         for word in text.split():

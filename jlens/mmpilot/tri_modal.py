@@ -52,6 +52,10 @@ from jlens.mmpilot.admissibility import (
     concept_admissibility,
     resolve_capability_table,
 )
+from jlens.mmpilot.full_vocabulary import (
+    ENDPOINT_CONDITIONAL_LOGPROB,
+    ENDPOINT_RESTRICTED_CANDIDATE,
+)
 from jlens.mmpilot.report import FAIL, NOT_EVALUATED, PASS, criterion
 
 #: Bound into the run fingerprint. Distinct from the pilot's, the robustness
@@ -1211,6 +1215,19 @@ def causal_transfer_verdict(
         "name": name,
         "verdict": verdict,
         "rationale": rationale,
+        # What was measured, named so no reader has to infer it from the prose.
+        # ``signed_target_effect`` is a change in the target answer's *conditional
+        # log-probability* under teacher forcing. It is a real, controlled causal
+        # effect on a likelihood; it is not the model's output and no
+        # global-vocabulary argmax was computed anywhere in this verdict.
+        "endpoint_class": ENDPOINT_CONDITIONAL_LOGPROB,
+        "secondary_endpoint_class": ENDPOINT_RESTRICTED_CANDIDATE,
+        "full_vocabulary_evaluated": False,
+        "endpoint_qualifier": (
+            "controlled change in the target answer's conditional log-probability, "
+            "with a restricted-candidate preference as the secondary diagnostic; "
+            "unrestricted next-token output was NOT evaluated"
+        ),
         "layer": int(layer),
         "focal_concepts": list(focal_concepts),
         "focal_concepts_executed": (

@@ -301,3 +301,30 @@ it cannot change the rule checksum the completed run's amended artifacts are
 already bound to. See [`prompt_protocol.md`](prompt_protocol.md).
 
 No completed artifact was read, rewritten, or reinterpreted by this addition.
+
+## A third boundary on the same verdict: the endpoint was never unrestricted
+
+The capability rule decides *which measured cells may support a claim*. The
+prompt-protocol rule decides *how the model was asked*. Neither says what was
+**measured**, and that is a third, independent limit on `THREE_MODALITY_GO`.
+
+Every behavioral number in this study — the capability gate and every causal
+cell — came from `score_candidate_sequences` and `prediction_and_margin`: a
+candidate's token sequence appended to the prompt, teacher-forced, and an argmax
+taken over the **six supplied candidates**. The complete next-token distribution
+was never inspected and no vocabulary row outside those six was consulted.
+
+What the study therefore established, exactly:
+
+* `CONTROLLED_TARGET_LOGPROB_EFFECT` — a source-derived J-space direction
+  applied at one layer changed the target concept's conditional log-probability
+  in the intended direction, against matched random, unrelated, zero and
+  raw-residual controls, in both directions for at least one admissible concept.
+  That is a real, controlled causal effect on a likelihood.
+* `FULL_VOCABULARY_NOT_EVALUATED` — whether any *output* token changed was not
+  measured.
+
+The verdict string `THREE_MODALITY_GO` is unchanged and its numbers are
+identical. The endpoint labels are added beside it by a versioned amendment
+(`jlens/mmpilot/endpoint_amend.py`) that recomputes nothing:
+`scientific_recompute = 0`. See [`endpoint_semantics.md`](endpoint_semantics.md).

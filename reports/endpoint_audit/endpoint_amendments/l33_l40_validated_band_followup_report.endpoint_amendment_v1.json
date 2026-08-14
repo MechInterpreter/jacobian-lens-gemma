@@ -1,0 +1,65 @@
+{
+  "amendment_checksum": "sha256:c8e597ba36ce64ece1a91f2afc56214e40740d145768665cf5bf9543cb52875e",
+  "amendment_version": "mmpilot.endpoint_semantics_amendment.v1",
+  "boundary": "This amendment corrects what the completed numbers are called. It does not re-measure, re-derive, promote, demote or replace any of them, and it turns no historical GO into a new numerical verdict.",
+  "claim_ledger_digest": "sha256:677e31780452a2a43670987e9c2eb68bdddfdd4769a3fffcf7d03da07a093d4e",
+  "corrected_labels": [
+    "RESTRICTED_CANDIDATE_PREFERENCE_GO",
+    "FULL_VOCABULARY_NOT_EVALUATED"
+  ],
+  "endpoint_audit_digest": "sha256:a27a836b4486af7fc30ef4fa16c85529dd93331fdb79ea20fed2a2334fe9cc92",
+  "full_vocabulary_evaluated": false,
+  "full_vocabulary_status": "FULL_VOCABULARY_NOT_EVALUATED",
+  "n_terminology_changes": 5,
+  "name": "l33_l40_validated_band_followup_report",
+  "original_endpoint_class": "restricted_candidate_rank",
+  "original_report_checksum": "sha256:f808ac89236c640269698d18c999412e0164533349b69a4d9960cdcc1ce263cb",
+  "original_report_modified": false,
+  "original_report_path": "runs/mmband33/band3340_real_2a72bda9b4ba/l33_l40_validated_band_followup_report.json",
+  "original_run_fingerprint": "sha256:2a72bda9b4bad352d93e387ba7d1dd109b3e7f7d6a14093638e4c3a7ee1c412e",
+  "original_run_modified": false,
+  "original_run_name": "band3340_real_2a72bda9b4ba",
+  "original_units_modified": false,
+  "original_verdict": "L33_L40_VALIDATED_BAND_FOLLOWUP_ALPHA2_SENSITIVITY_ONLY",
+  "original_verdict_is_reproduced_verbatim": true,
+  "schema": "jlens.mmpilot.endpoint_semantics_amendment.v1",
+  "scientific_numbers_unchanged": true,
+  "scientific_recompute": 0,
+  "source_unit_digest": null,
+  "source_units_reachable": false,
+  "study": "L33-L40 validated-band follow-up",
+  "terminology_changes": [
+    {
+      "corrected_wording": "restricted_candidate_preference",
+      "field_path": "reasoning_verdict.paper_comparable",
+      "original_wording": "paper_comparable",
+      "reason": "the field reports an argmax over two supplied candidates. Anthropic's trial definition inspects the complete next-token distribution and counts success only at global rank 1, so the two are not comparable and the name asserted that they were"
+    },
+    {
+      "corrected_wording": "restricted-candidate preference at alpha=1: the target answer outranks the other predeclared candidate by teacher-forced conditional sequence likelihood",
+      "field_path": "reasoning_verdict.paper_comparable.criterion",
+      "original_wording": "Anthropic's top-1 trial definition at alpha=1",
+      "reason": "the criterion never consulted any vocabulary row outside the two supplied answers"
+    },
+    {
+      "corrected_wording": "fraction of trials in which the target-appropriate downstream answer is top-1 of the externally scored candidate set [restricted-candidate endpoint; the full vocabulary was not evaluated]",
+      "field_path": "reasoning_verdict.primary_endpoint",
+      "original_wording": "fraction of trials in which the target-appropriate downstream answer is top-1 of the externally scored candidate set",
+      "reason": "the wording was already accurate but was read as a global top-1 rate; the qualifier is now explicit"
+    },
+    {
+      "corrected_wording": "L33_L40_VALIDATED_BAND_FOLLOWUP_ALPHA2_SENSITIVITY_ONLY [RESTRICTED_CANDIDATE_PREFERENCE_GO at alpha=2 sensitivity only; FULL_VOCABULARY_NOT_EVALUATED]",
+      "field_path": "followup_verdict.verdict",
+      "original_wording": "L33_L40_VALIDATED_BAND_FOLLOWUP_ALPHA2_SENSITIVITY_ONLY",
+      "reason": "the verdict string is immutable and is reproduced verbatim; the endpoint labels are added beside it, not substituted for it"
+    },
+    {
+      "corrected_wording": "restricted_candidate_target_rank (out of 2)",
+      "field_path": "trial records: target_rank",
+      "original_wording": "target_rank",
+      "reason": "`target_rank` was a rank among the two scored candidates, not a rank in the vocabulary"
+    }
+  ],
+  "verdict_changed_by_prose": false,
+  "written_utc": "2026-08-13T00:00:00+00:00"
+}

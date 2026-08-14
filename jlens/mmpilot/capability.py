@@ -15,6 +15,25 @@ recorded next to it.
 
 The same scoring function is reused under intervention in
 :mod:`jlens.mmpilot.causal`, so clean and edited runs are measured the same way.
+
+What this endpoint is, exactly
+==============================
+
+:func:`prediction_and_margin` takes the argmax over **the candidates it was
+handed** — a forced-choice preference among a supplied set, not the model's
+output. The rest of the vocabulary is never consulted, and the candidate tokens
+*are appended to* ``input_ids`` for teacher forcing, so the scored input is
+longer than the prompt. Every number this module produces is therefore
+:data:`~jlens.mmpilot.full_vocabulary.ENDPOINT_RESTRICTED_CANDIDATE` (the
+"prediction") or
+:data:`~jlens.mmpilot.full_vocabulary.ENDPOINT_CONDITIONAL_LOGPROB` (the scores
+and margins). None of it may be described as "the model answered", "the model
+output", "global top-1", or "paper-comparable".
+
+The unrestricted endpoint — original prompt, nothing appended, complete
+next-token distribution, global argmax — is
+:func:`jlens.mmpilot.full_vocabulary.score_unrestricted_next_token`. See
+``docs/endpoint_semantics.md``.
 """
 
 from __future__ import annotations
@@ -24,6 +43,10 @@ from collections.abc import Mapping, Sequence
 import torch
 
 from jlens.mmpilot.backend import BuiltInputs, PilotBackend, text_hash
+from jlens.mmpilot.full_vocabulary import (
+    ENDPOINT_CONDITIONAL_LOGPROB,
+    ENDPOINT_RESTRICTED_CANDIDATE,
+)
 
 #: Identical for every modality. The evidence is what changes, never the ask.
 DEFAULT_QUESTION = (
@@ -175,7 +198,13 @@ def score_candidate_sequences(
 
 
 def prediction_and_margin(scores: Mapping[str, Mapping], target: str) -> dict:
-    """Argmax candidate and the target's margin over the best alternative."""
+    """Argmax over **the supplied candidates**, and the target's margin.
+
+    ``prediction`` is a forced-choice winner within ``scores``. It is not the
+    model's next token and not a global argmax: no vocabulary row outside
+    ``scores`` was looked at. The endpoint label travels with the record so a
+    downstream reader cannot lose track of which question was asked.
+    """
     ranked = sorted(scores.items(), key=lambda kv: (-kv[1]["sum_logprob"], kv[0]))
     prediction = ranked[0][0]
     others = [value["sum_logprob"] for name, value in scores.items() if name != target]
@@ -186,6 +215,9 @@ def prediction_and_margin(scores: Mapping[str, Mapping], target: str) -> dict:
         "target_score": scores[target]["sum_logprob"],
         "target_margin": margin,
         "ranking": [name for name, _ in ranked],
+        "endpoint": ENDPOINT_RESTRICTED_CANDIDATE,
+        "restricted_candidate_universe": [name for name, _ in ranked],
+        "full_vocabulary_evaluated": False,
     }
 
 
@@ -302,6 +334,14 @@ def capability_summary(
     )
     return {
         "threshold": threshold,
+        "endpoint": ENDPOINT_RESTRICTED_CANDIDATE,
+        "score_endpoint": ENDPOINT_CONDITIONAL_LOGPROB,
+        "full_vocabulary_evaluated": False,
+        "capability_claim_scope": (
+            "restricted multiple-choice identification among the predeclared "
+            "candidates named in the prompt; not open recognition and not a "
+            "statement about what the model would emit"
+        ),
         "modalities_evaluated": list(modalities),
         "per_concept": accuracy,
         "retained_concepts": retained,
