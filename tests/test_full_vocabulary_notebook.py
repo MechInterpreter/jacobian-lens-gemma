@@ -10,6 +10,7 @@ touched.
 from __future__ import annotations
 
 import ast
+import inspect
 import json
 import os
 import subprocess
@@ -183,6 +184,29 @@ def test_model_cell_reuses_only_an_identity_checked_loaded_bundle():
     assert '"n_layers": EXPECT_N_LAYERS' in source
     assert '"d_model": EXPECT_D_MODEL' in source
     assert '"vocab_size": EXPECT_VOCAB' in source
+
+
+def test_corrected_lens_discovery_uses_the_live_keyword_only_contract():
+    from jlens.mmpilot.validated_band_followup import (
+        CorrectedArtifact,
+        discover_corrected_band_lenses,
+    )
+
+    # Bind the exact shape used by the real cell against the live API.
+    inspect.signature(discover_corrected_band_lenses).bind(
+        "corrected-run", report={}
+    )
+    assert "lens_checksum" in CorrectedArtifact.__dataclass_fields__
+
+    source = _code_source(_payload())
+    assert (
+        "CORRECTED_ARTIFACTS, ARTIFACT_DISCOVERY = "
+        "discover_corrected_band_lenses("
+        in source
+    )
+    assert "report=_corrected" in source
+    assert "artifact.lens_checksum" in source
+    assert "artifact.checksum" not in source
     assert (
         "AUDIO_RECORD = assert_audio_protocol(\n"
         "        _bundle.audio_interface,\n"

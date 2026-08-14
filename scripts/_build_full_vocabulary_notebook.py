@@ -830,9 +830,13 @@ if GPU_STAGE:
         expected_model_repo_id=MODEL_REPO_ID,
         expected_model_revision=_bundle.model_revision,
     )
-    CORRECTED_ARTIFACTS = discover_corrected_band_lenses(CORRECTED_RUN_DIR, _corrected)
+    CORRECTED_ARTIFACTS, ARTIFACT_DISCOVERY = discover_corrected_band_lenses(
+        CORRECTED_RUN_DIR,
+        report=_corrected,
+    )
     LENS_CHECKSUMS = {
-        int(layer): artifact.checksum for layer, artifact in CORRECTED_ARTIFACTS.items()
+        int(layer): artifact.lens_checksum
+        for layer, artifact in CORRECTED_ARTIFACTS.items()
     }
     print("validated band artifacts   ", sorted(LENS_CHECKSUMS))
 
