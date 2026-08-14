@@ -174,19 +174,22 @@ if RUN_FULL_VOCAB_CAUSAL_GPU and not GPU_STAGE:
 
 # ---- pinned model identity ----------------------------------------------
 MODEL_REPO_ID = "google/gemma-4-E4B-it"
-MODEL_REVISION = "main"
+MODEL_REVISION = "fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd"
 TRANSFORMERS_VERSION_EXPECTED = "5.13.1"
-EXPECT_N_LAYERS, EXPECT_D_MODEL, EXPECT_VOCAB = 35, 2048, 262144
+EXPECT_N_LAYERS, EXPECT_D_MODEL, EXPECT_VOCAB = 42, 2560, 262144
 AUDIO_PROTOCOL_FINGERPRINT = None   # filled from the resolved audio interface
 
 # ---- Drive paths (real mode only; never globbed, never "latest") --------
-DRIVE_ROOT = Path("/content/drive/MyDrive/jacobian-lens")
+DRIVE_ROOT = Path("/content/drive/MyDrive/jacobian-lens-gemma")
 BAND_FOLLOWUP_RUN_DIR = DRIVE_ROOT / "runs" / "mmband33" / "band3340_real_2a72bda9b4ba"
 CANONICAL_AUDIO_RUN_DIR = (
-    DRIVE_ROOT / "runs" / "mmaudio" / "mmaudio_native_audio_transfer_20260806T144822"
+    DRIVE_ROOT / "runs" / "mmaudio_native_audio_transfer_20260806T144822"
 )
 CORRECTED_RUN_DIR = DRIVE_ROOT / "runs" / "mmband" / "bandcorr_real_eb5b00f135e4"
-EXPANDED_MANIFEST_CACHE = DRIVE_ROOT / "cache" / "spokencoco_expanded_manifest.json"
+EXPANDED_MANIFEST_CACHE = (
+    DRIVE_ROOT / "runs" / "mml32_l32_followup_20260808T182717"
+    / "expanded_manifest.json"
+)
 FULL_VOCAB_RUN_ROOT = DRIVE_ROOT / "runs" / "mmfv"
 AUDIT_RUN_ROOT = DRIVE_ROOT / "runs" / "mmfv_audit"
 
@@ -327,10 +330,12 @@ they go to a local scratch directory; nothing is written into any completed run.
 )
 code(
     r'''
+import tempfile
+
 AUDIT_DIR = (
     AUDIT_RUN_ROOT / f"audit_{AUDIT['audit_digest'].split(':')[1][:12]}"
     if RUN_ENDPOINT_AUDIT_CPU
-    else Path("reports") / "endpoint_audit_mock"
+    else Path(tempfile.mkdtemp(prefix="jlens_endpoint_audit_mock_"))
 )
 for _protected in PROTECTED_RUN_DIRS:
     if _protected == AUDIT_DIR or _protected in AUDIT_DIR.parents:

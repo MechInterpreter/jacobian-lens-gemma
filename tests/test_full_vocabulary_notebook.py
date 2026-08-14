@@ -71,6 +71,16 @@ def test_notebook_matches_its_builder_byte_for_byte():
     assert rebuilt == NOTEBOOK.read_text(encoding="utf-8")
 
 
+def test_real_run_defaults_match_the_pinned_model_and_drive_layout():
+    """A green MOCK must not conceal unusable real-run defaults."""
+    source = _source(_payload())
+    assert 'MODEL_REVISION = "fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd"' in source
+    assert "EXPECT_N_LAYERS, EXPECT_D_MODEL, EXPECT_VOCAB = 42, 2560, 262144" in source
+    assert 'DRIVE_ROOT = Path("/content/drive/MyDrive/jacobian-lens-gemma")' in source
+    assert 'DRIVE_ROOT / "runs" / "mmaudio_native_audio_transfer_20260806T144822"' in source
+    assert 'DRIVE_ROOT / "runs" / "mml32_l32_followup_20260808T182717"' in source
+
+
 def test_the_builder_writes_only_its_own_target():
     source = BUILDER.read_text(encoding="utf-8")
     assert (
