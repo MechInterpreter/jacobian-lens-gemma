@@ -207,6 +207,70 @@ print("final report (CPU)          ", RUN_FINAL_REPORT_CPU)
 
 markdown(
     """
+## 1b. Mount Drive and verify real-mode inputs
+
+Every real stage mounts Drive itself. The mount is idempotent, so reopening a
+notebook or reconnecting to a runtime does not require a manual setup cell.
+Family A's immutable source report, corrected lens run and expanded manifest
+are checked before any model can load or any forward pass can be spent.
+"""
+)
+code(
+    r'''
+if REAL_MODE and IN_COLAB:
+    from google.colab import drive
+
+    drive.mount("/content/drive", force_remount=False)
+
+if REAL_MODE:
+    _my_drive = Path("/content/drive/MyDrive")
+    if not _my_drive.is_dir():
+        raise RuntimeError(
+            "Google Drive is not mounted at /content/drive/MyDrive. The notebook "
+            "attempted its own mount; reconnect Drive access and rerun this cell."
+        )
+
+    _required_real_inputs = {}
+    if RUN_ENDPOINT_AUDIT_CPU:
+        _required_real_inputs.update({
+            "completed L33-L40 follow-up run": BAND_FOLLOWUP_RUN_DIR,
+            "canonical three-modality run": CANONICAL_AUDIO_RUN_DIR,
+        })
+    if GPU_STAGE:
+        _required_real_inputs.update({
+            "completed L33-L40 follow-up report": (
+                BAND_FOLLOWUP_RUN_DIR
+                / "l33_l40_validated_band_followup_report.json"
+            ),
+            "corrected L33-L40 lens run": CORRECTED_RUN_DIR,
+            "expanded SpokenCOCO manifest": EXPANDED_MANIFEST_CACHE,
+        })
+
+    _missing_real_inputs = {
+        name: path
+        for name, path in _required_real_inputs.items()
+        if not path.exists()
+    }
+    if _missing_real_inputs:
+        raise RuntimeError(
+            "Required real-mode inputs are missing after Drive mounted:\n"
+            + "\n".join(
+                f"  {name}: {path}"
+                for name, path in _missing_real_inputs.items()
+            )
+            + "\nRefusing before model load or scientific spending."
+        )
+
+    print("Drive mounted               ", _my_drive)
+    for _name, _path in _required_real_inputs.items():
+        print(f"  verified {_name}: {_path}")
+else:
+    print("MOCK mode: Drive is neither mounted nor read")
+'''
+)
+
+markdown(
+    """
 ## 2. The frozen design
 
 Family A's design is the completed follow-up's, unchanged in every respect

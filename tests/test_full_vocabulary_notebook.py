@@ -116,6 +116,23 @@ def test_the_three_stage_switches_and_two_confirmations_exist():
     ) in source
 
 
+def test_real_mode_mounts_drive_before_reading_completed_artifacts():
+    cells = ["".join(cell["source"]) for cell in _code(_payload())]
+    mount_cell = next(
+        index for index, text in enumerate(cells) if 'drive.mount("/content/drive"' in text
+    )
+    provenance_cell = next(
+        index
+        for index, text in enumerate(cells)
+        if "read_band_followup_report(BAND_FOLLOWUP_RUN_DIR)" in text
+    )
+    assert mount_cell < provenance_cell
+    assert "if REAL_MODE and IN_COLAB:" in cells[mount_cell]
+    assert "if GPU_STAGE:" in cells[mount_cell]
+    assert "l33_l40_validated_band_followup_report.json" in cells[mount_cell]
+    assert "Refusing before model load or scientific spending" in cells[mount_cell]
+
+
 def test_the_cpu_stages_never_reference_a_model_loader_outside_the_gpu_gate():
     payload = _payload()
     for cell in _code(payload):
