@@ -165,6 +165,33 @@ def test_token_preflight_uses_a_processor_only_api_not_the_model_loader():
     assert "allow_model_load=False" not in source
 
 
+def test_real_audio_protocol_call_passes_the_frozen_expected_fingerprint():
+    source = _code_source(_payload())
+    assert (
+        'AUDIO_PROTOCOL_FINGERPRINT = (\n'
+        '    "sha256:9ad8bcc9420a7983f6e3b75d5d7080c0e2fcf0a94a76431917fcde73ba777920"'
+        in source
+    )
+
+
+def test_model_cell_reuses_only_an_identity_checked_loaded_bundle():
+    source = _code_source(_payload())
+    assert '_existing_bundle = globals().get("_bundle")' in source
+    assert 'if _existing_bundle is None:' in source
+    assert 'model bundle                reused from this runtime' in source
+    assert '_existing_bundle.model_revision != MODEL_REVISION' in source
+    assert '"n_layers": EXPECT_N_LAYERS' in source
+    assert '"d_model": EXPECT_D_MODEL' in source
+    assert '"vocab_size": EXPECT_VOCAB' in source
+    assert (
+        "AUDIO_RECORD = assert_audio_protocol(\n"
+        "        _bundle.audio_interface,\n"
+        "        expected_fingerprint=AUDIO_PROTOCOL_FINGERPRINT,\n"
+        "    )"
+        in source
+    )
+
+
 def test_the_budget_cell_refuses_over_the_cap():
     source = _code_source(_payload())
     assert 'if not BUDGET["within_cap"]:' in source

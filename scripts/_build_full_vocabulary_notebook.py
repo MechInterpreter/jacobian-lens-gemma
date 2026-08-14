@@ -177,7 +177,9 @@ MODEL_REPO_ID = "google/gemma-4-E4B-it"
 MODEL_REVISION = "fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd"
 TRANSFORMERS_VERSION_EXPECTED = "5.13.1"
 EXPECT_N_LAYERS, EXPECT_D_MODEL, EXPECT_VOCAB = 42, 2560, 262144
-AUDIO_PROTOCOL_FINGERPRINT = None   # filled from the resolved audio interface
+AUDIO_PROTOCOL_FINGERPRINT = (
+    "sha256:9ad8bcc9420a7983f6e3b75d5d7080c0e2fcf0a94a76431917fcde73ba777920"
+)
 
 # ---- Drive paths (real mode only; never globbed, never "latest") --------
 DRIVE_ROOT = Path("/content/drive/MyDrive/jacobian-lens-gemma")
@@ -784,18 +786,42 @@ if GPU_STAGE:
         discover_corrected_band_lenses, read_corrected_validation_report,
     )
 
-    _bundle = build_real_backend(
-        MODEL_REPO_ID, revision=MODEL_REVISION, token=os.environ["HF_TOKEN"],
-        device="cuda", allow_model_load=True, resolve_audio=True,
-        expect_n_layers=EXPECT_N_LAYERS, expect_d_model=EXPECT_D_MODEL,
-        expect_vocab_size=EXPECT_VOCAB,
-    )
+    _existing_bundle = globals().get("_bundle")
+    if _existing_bundle is None:
+        _bundle = build_real_backend(
+            MODEL_REPO_ID, revision=MODEL_REVISION, token=os.environ["HF_TOKEN"],
+            device="cuda", allow_model_load=True, resolve_audio=True,
+            expect_n_layers=EXPECT_N_LAYERS, expect_d_model=EXPECT_D_MODEL,
+            expect_vocab_size=EXPECT_VOCAB,
+        )
+        print("model bundle                loaded")
+    else:
+        _architecture = dict(_existing_bundle.architecture)
+        _expected = {
+            "n_layers": EXPECT_N_LAYERS,
+            "d_model": EXPECT_D_MODEL,
+            "vocab_size": EXPECT_VOCAB,
+        }
+        _observed = {key: _architecture.get(key) for key in _expected}
+        if (
+            _existing_bundle.model_revision != MODEL_REVISION
+            or _observed != _expected
+        ):
+            raise RuntimeError(
+                "an already-loaded model bundle has different identity or "
+                f"architecture: revision={_existing_bundle.model_revision!r}, "
+                f"architecture={_observed!r}; refusing to reuse it"
+            )
+        _bundle = _existing_bundle
+        print("model bundle                reused from this runtime")
     if _bundle.audio_interface is None:
         raise RuntimeError(
             "native spoken audio did not resolve: " + _bundle.audio_blocked_reason
         )
-    AUDIO_RECORD = assert_audio_protocol(_bundle.audio_interface)
-    AUDIO_PROTOCOL_FINGERPRINT = AUDIO_RECORD["protocol_fingerprint"]
+    AUDIO_RECORD = assert_audio_protocol(
+        _bundle.audio_interface,
+        expected_fingerprint=AUDIO_PROTOCOL_FINGERPRINT,
+    )
     BACKEND = _bundle.backend
 
     # --- the same validated L33-L40 artifacts the completed follow-up used
