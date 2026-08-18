@@ -74,10 +74,10 @@ def test_digit_endpoint_refuses_another_lexical_mismatch():
 
 def test_budget_counts_every_forward_and_no_backward():
     budget = confirmation_pass_budget(n_images_per_direction=8)
-    assert budget["clean_unrestricted_passes"] == 144
+    assert budget["clean_unrestricted_passes"] == 384
     assert budget["intervention_unrestricted_passes"] == 336
-    assert budget["one_token_greedy_verification_passes"] == 288
-    assert budget["total_forward_passes"] == 768
+    assert budget["one_token_greedy_verification_passes"] == 528
+    assert budget["total_forward_passes"] == 1248
     assert budget["backward_passes"] == 0
     assert budget["maximum_completed_work_lost_on_disconnect"] == 0
 

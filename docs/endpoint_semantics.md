@@ -145,14 +145,16 @@ null for the amplified exchange: its direct-answer positive control also
 failed, so it did not establish that the exact exchange was absent.
 
 `multimodal_jspace_digit_reasoning_confirmation_colab.ipynb` now implements a
-separately fingerprinted v2 study. It freezes the exact single-token digit rows
-before opening a new image-disjoint population that excludes the completed
-alpha=2 run; uses alpha=1 as the primary and only nonzero strength; checks the
-complete vocabulary and a one-token greedy continuation; requires the direct
-answer arm and the hidden-animal arm to beat matched alpha=1 controls in both
-directions and every modality; and makes the recorded exact-coordinate update
-a verdict gate. It never rewrites, reinterprets or reuses either completed
-population.
+separately fingerprinted v3 study. V2 stopped before intervention because one
+capability cell recruited 7 of its required 8 examples from 24 candidates. V3
+therefore expands only the predeclared fresh candidate pool to 64 per concept,
+keeps the eight-example causal cells and every causal setting unchanged, and
+excludes the completed v2 population. It uses alpha=1 as the primary and only
+nonzero strength; checks the complete vocabulary and a one-token greedy
+continuation; requires the direct-answer arm and hidden-animal arm to beat
+matched alpha=1 controls in both directions and every modality; and makes the
+recorded exact-coordinate update a verdict gate. It never rewrites,
+reinterprets or reuses any completed population.
 
 For the pinned Gemma tokenizer, these are the **bare** digit rows. A leading
 space followed by a digit encodes as two tokens, so the endpoint resolver uses

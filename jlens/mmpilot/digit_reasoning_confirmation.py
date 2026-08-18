@@ -9,13 +9,14 @@ defines a new, independent confirmation whose endpoint is frozen to the model's
 task-appropriate digit vocabulary rows *before* its fresh population is opened.
 
 The completed v1 study made ``alpha=2`` primary and found that this extrapolation
-overwhelmed the task.  It remains immutable.  This v2 protocol tests the
-canonical paper-style exchange at ``alpha=1`` over the independently validated
-contiguous band L33--L40 on a new population.  Every random, unrelated and
-direct-answer control uses the same alpha.  Success is never inferred from a
-candidate list: the target digit must be the unique argmax of the complete
-next-token distribution, and a one-token greedy continuation must agree with
-that argmax.
+overwhelmed the task.  The completed v2 alpha-one run stopped at its capability
+gate when one cell recruited 7 of the required 8 examples.  Both remain
+immutable.  This v3 protocol preserves the canonical ``alpha=1`` exchange and
+every causal setting, but prospectively expands the fresh capability-candidate
+pool to 64 per concept.  Every random, unrelated and direct-answer control uses
+the same alpha.  Success is never inferred from a candidate list: the target
+digit must be the unique argmax of the complete next-token distribution, and a
+one-token greedy continuation must agree with that argmax.
 """
 
 from __future__ import annotations
@@ -58,15 +59,19 @@ __all__ = [
 ]
 
 
-DIGIT_CONFIRMATION_STUDY_NAME = "PAPER_STYLE_ALPHA1_EXACT_SWAP_CONFIRMATION"
+DIGIT_CONFIRMATION_STUDY_NAME = (
+    "PAPER_STYLE_ALPHA1_EXACT_SWAP_RECRUITMENT64_CONFIRMATION"
+)
 DIGIT_CONFIRMATION_PROTOCOL_VERSION = (
-    "mmpilot.paper_style_alpha1_exact_swap_confirmation.v2"
+    "mmpilot.paper_style_alpha1_exact_swap_recruitment64_confirmation.v3"
 )
 DIGIT_CONFIRMATION_REPORT_SCHEMA = (
-    "jlens.mmpilot.paper_style_alpha1_exact_swap_confirmation_report.v2"
+    "jlens.mmpilot.paper_style_alpha1_exact_swap_recruitment64_report.v3"
 )
-DIGIT_CONFIRMATION_REPORT_NAME = "alpha1_exact_swap_confirmation_report.json"
-DIGIT_CONFIRMATION_RUN_PREFIX = "mmalpha1confirm"
+DIGIT_CONFIRMATION_REPORT_NAME = (
+    "alpha1_exact_swap_recruitment64_confirmation_report.json"
+)
+DIGIT_CONFIRMATION_RUN_PREFIX = "mmalpha1confirm64"
 
 CONFIRMATION_BAND: tuple[int, ...] = tuple(range(33, 41))
 CONFIRMATION_MODALITIES: tuple[str, ...] = ("text", "image", "spoken_audio")
@@ -250,7 +255,7 @@ def confirmation_trial_key(
 def confirmation_pass_budget(
     *,
     n_images_per_direction: int,
-    capability_candidate_images_per_direction: int = 24,
+    capability_candidate_images_per_direction: int = 64,
 ) -> dict:
     """Exact forward-pass budget, including one-token greedy verification."""
     cells = len(CONFIRMATION_DIRECTIONS) * len(CONFIRMATION_MODALITIES)
@@ -793,6 +798,7 @@ def confirmation_report(
         "resume": dict(resume),
         "completed_word_token_run_unchanged": True,
         "completed_alpha2_digit_run_unchanged": True,
+        "completed_alpha1_capability_no_go_run_unchanged": True,
         "is_independent_confirmation": True,
         "is_post_hoc_reanalysis": False,
     }

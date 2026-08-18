@@ -110,11 +110,20 @@ def test_population_excludes_every_completed_causal_family_and_is_never_reused()
         "band3340_real_2a72bda9b4ba",
         "mmfv_real_bfb07903e961",
         "mmdigitconfirm_real_68c182bfc025",
+        "mmalpha1confirm_real_6212d73dc72a",
     ):
         assert run in source
     assert "fresh population overlaps a completed causal population" in source
     assert "one synchronized group per photograph" in source
     assert 'list((_report.get("population") or {}).get("groups", []))' in source
+
+
+def test_v3_expands_recruitment_only_and_uses_a_fresh_namespace():
+    source = _source()
+    assert "CANDIDATE_IMAGES_PER_CONCEPT = 64" in source
+    assert "ANALYSIS_IMAGES_PER_CELL = 8" in source
+    assert 'SELECTION_SEED = "alpha1-exact-swap-recruitment64-20260817-v3"' in source
+    assert 'DIGIT_RUN_ROOT = RUNS_ROOT / "mmalpha1confirm64"' in source
 
 
 def test_exclusion_avoids_expensive_intervention_scan_unless_needed():

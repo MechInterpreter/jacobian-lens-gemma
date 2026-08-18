@@ -27,8 +27,11 @@ markdown(
 # Exact-swap confirmation — unrestricted digit output (Gemma 4 E4B)
 
 The completed α=2 digit study remains immutable: it established that doubling
-the exchange is destructive in Gemma 4. This separately fingerprinted v2 study
-freezes a new population and asks the canonical paper-comparable question:
+the exchange is destructive in Gemma 4. The completed α=1 v2 run also remains
+immutable: it stopped before intervention because bird spoken audio recruited
+7 of the required 8 examples from its 24-candidate pool. This separately
+fingerprinted v3 study expands only the fresh recruitment pool and asks the
+same canonical paper-comparable question:
 
 > Does a two-coordinate J-lens exchange of the represented animal identity make
 > the target animal's leg-count digit the unique top token in Gemma's complete
@@ -47,7 +50,8 @@ primary score is checked against a one-token deterministic greedy continuation.
 * zero, norm-matched α=1 random and α=1 unrelated-coordinate controls;
 * a direct digit-coordinate exchange is a required positive control;
 * a norm-matched random α=1 direct-answer control is also required;
-* at least eight distinct fresh photographs per direction×modality cell;
+* 64 fresh candidates per concept, while retaining the same requirement of at
+  least eight distinct photographs per direction×modality cell;
 * every scored or generated forward pass is saved atomically and resumes by
   checksum-valid unit key. A disconnect loses no completed trial.
 
@@ -135,9 +139,9 @@ AUDIO_PROTOCOL_FINGERPRINT = (
 PAIR_CONCEPTS = ("bird", "cat")
 CONTROL_CONCEPTS = ("zebra", "giraffe")
 POPULATION_CONCEPTS = (*PAIR_CONCEPTS, *CONTROL_CONCEPTS)
-CANDIDATE_IMAGES_PER_CONCEPT = 24
+CANDIDATE_IMAGES_PER_CONCEPT = 64
 ANALYSIS_IMAGES_PER_CELL = 8
-SELECTION_SEED = "alpha1-exact-swap-independent-20260817-v2"
+SELECTION_SEED = "alpha1-exact-swap-recruitment64-20260817-v3"
 RANDOM_CONTROL_SEED_INTERMEDIATE = 2026081701
 RANDOM_CONTROL_SEED_ANSWER = 2026081702
 
@@ -223,8 +227,13 @@ COMPLETED_CAUSAL_RUNS = {
         "digit_reasoning_confirmation_report.json",
         "sha256:8c6188ffe36d006d942395e7bbe3e708180a65041c5db599b6cc23f2bfcff043",
     ),
+    "alpha1_capability_no_go": (
+        RUNS_ROOT / "mmalpha1confirm" / "mmalpha1confirm_real_6212d73dc72a",
+        "alpha1_exact_swap_confirmation_report.json",
+        "sha256:fd0a129ea57f514cdfd2eb7e2b1180bcf8c64d702633779410eed0ca163af40f",
+    ),
 }
-DIGIT_RUN_ROOT = RUNS_ROOT / "mmalpha1confirm"
+DIGIT_RUN_ROOT = RUNS_ROOT / "mmalpha1confirm64"
 
 if REAL_MODE and IN_COLAB:
     from google.colab import drive
