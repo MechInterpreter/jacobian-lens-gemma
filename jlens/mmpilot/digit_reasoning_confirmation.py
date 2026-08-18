@@ -1,6 +1,6 @@
 # Gemma 4 adaptation — new in this fork (github.com/anthropics/jacobian-lens is upstream).
 # SPDX-License-Identifier: Apache-2.0
-"""Prospective full-vocabulary confirmation of the animal reasoning swap.
+"""Prospective full-vocabulary confirmation of the exact animal-coordinate swap.
 
 This protocol exists because the first unrestricted rerun predeclared the word
 tokens ``two`` and ``four`` while Gemma's clean greedy answers used the digit
@@ -8,13 +8,14 @@ tokens ``2`` and ``4``.  That completed run remains immutable.  This module
 defines a new, independent confirmation whose endpoint is frozen to the model's
 task-appropriate digit vocabulary rows *before* its fresh population is opened.
 
-The primary intervention is the paper-style two-coordinate exchange at
-``alpha=2`` over the independently validated contiguous band L33--L40.  Alpha
-one is a prespecified secondary sensitivity.  Success is never inferred from a
+The completed v1 study made ``alpha=2`` primary and found that this extrapolation
+overwhelmed the task.  It remains immutable.  This v2 protocol tests the
+canonical paper-style exchange at ``alpha=1`` over the independently validated
+contiguous band L33--L40 on a new population.  Every random, unrelated and
+direct-answer control uses the same alpha.  Success is never inferred from a
 candidate list: the target digit must be the unique argmax of the complete
 next-token distribution, and a one-token greedy continuation must agree with
-that argmax.  Zero, norm-matched random and unrelated-coordinate controls are
-paired by photograph, modality and direction.
+that argmax.
 """
 
 from __future__ import annotations
@@ -36,8 +37,8 @@ from jlens.mmpilot.store import payload_checksum, safe_key
 
 __all__ = [
     "CONFIRMATION_BAND",
-    "CONFIRMATION_CONDITIONS",
     "CONFIRMATION_ARM_CONDITIONS",
+    "CONFIRMATION_CONDITIONS",
     "DIGIT_ANSWERS",
     "DIGIT_CONFIRMATION_PROTOCOL_VERSION",
     "DIGIT_CONFIRMATION_REPORT_NAME",
@@ -57,15 +58,15 @@ __all__ = [
 ]
 
 
-DIGIT_CONFIRMATION_STUDY_NAME = "PAPER_STYLE_DIGIT_REASONING_CONFIRMATION"
+DIGIT_CONFIRMATION_STUDY_NAME = "PAPER_STYLE_ALPHA1_EXACT_SWAP_CONFIRMATION"
 DIGIT_CONFIRMATION_PROTOCOL_VERSION = (
-    "mmpilot.paper_style_digit_reasoning_confirmation.v1"
+    "mmpilot.paper_style_alpha1_exact_swap_confirmation.v2"
 )
 DIGIT_CONFIRMATION_REPORT_SCHEMA = (
-    "jlens.mmpilot.paper_style_digit_reasoning_confirmation_report.v1"
+    "jlens.mmpilot.paper_style_alpha1_exact_swap_confirmation_report.v2"
 )
-DIGIT_CONFIRMATION_REPORT_NAME = "digit_reasoning_confirmation_report.json"
-DIGIT_CONFIRMATION_RUN_PREFIX = "mmdigitconfirm"
+DIGIT_CONFIRMATION_REPORT_NAME = "alpha1_exact_swap_confirmation_report.json"
+DIGIT_CONFIRMATION_RUN_PREFIX = "mmalpha1confirm"
 
 CONFIRMATION_BAND: tuple[int, ...] = tuple(range(33, 41))
 CONFIRMATION_MODALITIES: tuple[str, ...] = ("text", "image", "spoken_audio")
@@ -74,25 +75,24 @@ CONFIRMATION_DIRECTIONS: tuple[tuple[str, str], ...] = (
     ("cat", "bird"),
 )
 DIGIT_ANSWERS: dict[str, str] = {"bird": "2", "cat": "4"}
-PRIMARY_ALPHA = 2.0
-SECONDARY_ALPHA = 1.0
+PRIMARY_ALPHA = 1.0
 CONFIRMATION_ARMS: tuple[str, ...] = ("intermediate", "answer")
 CONFIRMATION_CONDITIONS: tuple[str, ...] = (
-    "swap_alpha2",
-    "zero",
-    "random_alpha2",
-    "unrelated_alpha2",
     "swap_alpha1",
+    "zero",
+    "random_alpha1",
+    "unrelated_alpha1",
 )
 CONFIRMATION_ARM_CONDITIONS: dict[str, tuple[str, ...]] = {
     "intermediate": CONFIRMATION_CONDITIONS,
-    "answer": ("swap_alpha2", "zero"),
+    "answer": ("swap_alpha1", "zero", "random_alpha1"),
 }
 CONTROL_CONDITIONS: tuple[str, ...] = (
     "zero",
-    "random_alpha2",
-    "unrelated_alpha2",
+    "random_alpha1",
+    "unrelated_alpha1",
 )
+DIRECT_ANSWER_CONTROLS: tuple[str, ...] = ("zero", "random_alpha1")
 
 
 class DigitConfirmationRefused(RuntimeError):
@@ -208,11 +208,13 @@ def confirmation_design(
             for arm, conditions in CONFIRMATION_ARM_CONDITIONS.items()
         },
         "blocking_controls": list(CONTROL_CONDITIONS),
+        "direct_answer_controls": list(DIRECT_ANSWER_CONTROLS),
         "primary_alpha": PRIMARY_ALPHA,
-        "secondary_alpha": SECONDARY_ALPHA,
         "alpha_roles": {
-            "2.0": "prospective primary, motivated by the completed pilot",
-            "1.0": "secondary sensitivity only",
+            "1.0": (
+                "canonical exact coordinate exchange; no extrapolative alpha "
+                "is part of this protocol"
+            ),
         },
         "positions": "all_original_prompt_positions",
         "answer_appended": False,
@@ -227,7 +229,7 @@ def confirmation_design(
         "thresholds": thresholds.to_dict(),
         "threshold_digest": thresholds.digest,
         "claim_if_all_gates_pass": (
-            "a paper-style J-lens coordinate exchange of the represented animal "
+            "an exact alpha=1 J-lens coordinate exchange of the represented animal "
             "identity causally changes Gemma 4's unrestricted leg-count output "
             "to the target animal's digit across text, image and spoken-caption "
             "inputs on independent held-out examples and against matched controls"
@@ -249,17 +251,12 @@ def confirmation_pass_budget(
     *,
     n_images_per_direction: int,
     capability_candidate_images_per_direction: int = 24,
-    include_alpha1: bool = True,
 ) -> dict:
     """Exact forward-pass budget, including one-token greedy verification."""
     cells = len(CONFIRMATION_DIRECTIONS) * len(CONFIRMATION_MODALITIES)
     selected_clean = cells * int(n_images_per_direction)
     capability_clean = cells * int(capability_candidate_images_per_direction)
-    intermediate_conditions = (
-        len(CONFIRMATION_ARM_CONDITIONS["intermediate"])
-        if include_alpha1
-        else 4
-    )
+    intermediate_conditions = len(CONFIRMATION_ARM_CONDITIONS["intermediate"])
     answer_conditions = len(CONFIRMATION_ARM_CONDITIONS["answer"])
     interventions = (
         cells
@@ -327,11 +324,11 @@ def _success(row: Mapping) -> int:
 
 
 def _paired_rows(
-    rows: Sequence[Mapping], treatment: str, control: str
+    rows: Sequence[Mapping], treatment: str, control: str, *, arm: str
 ) -> list[tuple[int, int, str]]:
     by_key: dict[tuple[str, str, str, str], dict[str, Mapping]] = {}
     for row in rows:
-        if row.get("arm") != "intermediate":
+        if row.get("arm") != arm:
             continue
         key = (
             str(row.get("group_id")),
@@ -438,11 +435,12 @@ def aggregate_confirmation(
                     )
 
     paired = {}
+    answer_paired = {}
     raw_pvalues = {}
     for index, control in enumerate(CONTROL_CONDITIONS):
-        pairs = _paired_rows(rows, "swap_alpha2", control)
+        pairs = _paired_rows(rows, "swap_alpha1", control, arm="intermediate")
         pvalue = _one_sided_paired_pvalue(pairs)
-        raw_pvalues[control] = pvalue
+        raw_pvalues[f"primary:{control}"] = pvalue
         paired[control] = {
             "n_pairs": len(pairs),
             "treatment_wins": sum(t > c for t, c, _ in pairs),
@@ -454,13 +452,104 @@ def aggregate_confirmation(
                 seed=thresholds.bootstrap_seed + index,
             ),
         }
+    for index, control in enumerate(DIRECT_ANSWER_CONTROLS):
+        pairs = _paired_rows(rows, "swap_alpha1", control, arm="answer")
+        pvalue = _one_sided_paired_pvalue(pairs)
+        raw_pvalues[f"answer:{control}"] = pvalue
+        answer_paired[control] = {
+            "n_pairs": len(pairs),
+            "treatment_wins": sum(t > c for t, c, _ in pairs),
+            "control_wins": sum(t < c for t, c, _ in pairs),
+            "ties": sum(t == c for t, c, _ in pairs),
+            **_bootstrap_difference(
+                pairs,
+                samples=thresholds.bootstrap_samples,
+                seed=thresholds.bootstrap_seed + len(CONTROL_CONDITIONS) + index,
+            ),
+        }
     corrected = _holm(raw_pvalues, thresholds.familywise_alpha)
     for name, result in corrected.items():
-        paired[name].update(result)
+        family, control = name.split(":", 1)
+        target = paired if family == "primary" else answer_paired
+        target[control].update(result)
+
+    swap_rows = [
+        row
+        for row in rows
+        if row.get("condition") == "swap_alpha1"
+        and row.get("arm") in CONFIRMATION_ARMS
+    ]
+    swap_diagnostics = []
+    missing_diagnostics = []
+    for row in swap_rows:
+        diagnostic = dict(
+            (row.get("hook_integrity") or {}).get("intervention_diagnostics")
+            or {}
+        )
+        if not diagnostic:
+            missing_diagnostics.append(
+                {
+                    "group_id": str(row.get("group_id")),
+                    "modality": str(row.get("modality")),
+                    "arm": str(row.get("arm")),
+                }
+            )
+            continue
+        swap_diagnostics.append(diagnostic)
+    finite_diagnostics = [
+        row for row in swap_diagnostics if bool(row.get("all_finite"))
+    ]
+    exact_diagnostics = [
+        row
+        for row in swap_diagnostics
+        if bool(row.get("all_layers_are_exact_alpha_one_exchange"))
+    ]
+    coordinate_errors = [
+        float(row.get("max_coordinate_update_error", float("inf")))
+        for row in swap_diagnostics
+    ]
+    update_ratios = [
+        float(layer.get("max_update_to_activation_ratio", float("nan")))
+        for row in swap_diagnostics
+        for layer in dict(row.get("by_layer") or {}).values()
+    ]
+    activation_ratios = [
+        float(value)
+        for row in swap_diagnostics
+        for layer in dict(row.get("by_layer") or {}).values()
+        for value in (
+            layer.get("min_after_to_before_ratio", float("nan")),
+            layer.get("max_after_to_before_ratio", float("nan")),
+        )
+    ]
+    intervention_diagnostics = {
+        "n_swap_records": len(swap_rows),
+        "n_records_with_diagnostics": len(swap_diagnostics),
+        "n_missing_diagnostics": len(missing_diagnostics),
+        "missing_diagnostics": missing_diagnostics,
+        "all_finite": len(finite_diagnostics) == len(swap_rows),
+        "all_layers_are_exact_alpha_one_exchange": (
+            len(exact_diagnostics) == len(swap_rows)
+        ),
+        "max_coordinate_update_error": (
+            max(coordinate_errors) if coordinate_errors else None
+        ),
+        "max_update_to_activation_ratio": (
+            max(update_ratios) if update_ratios else None
+        ),
+        "min_after_to_before_activation_ratio": (
+            min(activation_ratios) if activation_ratios else None
+        ),
+        "max_after_to_before_activation_ratio": (
+            max(activation_ratios) if activation_ratios else None
+        ),
+    }
     payload = {
         "protocol_version": DIGIT_CONFIRMATION_PROTOCOL_VERSION,
         "cells": cells,
         "paired_primary_vs_controls": paired,
+        "paired_direct_answer_vs_controls": answer_paired,
+        "intervention_diagnostics": intervention_diagnostics,
         "n_records": len(rows),
         "threshold_digest": thresholds.digest,
     }
@@ -508,6 +597,24 @@ def confirmation_verdict(
         verdict = DIGIT_CONFIRMATION_NOT_EVALUATED
     else:
         cells = list(aggregation.get("cells") or ())
+        diagnostics = dict(aggregation.get("intervention_diagnostics") or {})
+        max_coordinate_error = diagnostics.get("max_coordinate_update_error")
+        diagnostics_pass = bool(
+            diagnostics.get("n_swap_records")
+            and int(diagnostics.get("n_missing_diagnostics", -1)) == 0
+            and diagnostics.get("all_finite")
+            and diagnostics.get("all_layers_are_exact_alpha_one_exchange")
+            and max_coordinate_error is not None
+            and float(max_coordinate_error) <= 1e-8
+        )
+        clauses.append(
+            {
+                "clause": "alpha1_coordinate_exchange_executed_exactly",
+                "passed": diagnostics_pass,
+                "detail": diagnostics,
+                "maximum_allowed_coordinate_error": 1e-8,
+            }
+        )
         for source, target in CONFIRMATION_DIRECTIONS:
             for modality in CONFIRMATION_MODALITIES:
                 primary = _find_cell(
@@ -516,7 +623,7 @@ def confirmation_verdict(
                     target=target,
                     modality=modality,
                     arm="intermediate",
-                    condition="swap_alpha2",
+                    condition="swap_alpha1",
                 )
                 primary_rate = None if primary is None else primary.get("success_rate")
                 primary_n = 0 if primary is None else int(primary.get("n_distinct_images", 0))
@@ -555,34 +662,43 @@ def confirmation_verdict(
                     target=target,
                     modality=modality,
                     arm="answer",
-                    condition="swap_alpha2",
+                    condition="swap_alpha1",
                 )
                 answer_rate = None if answer is None else answer.get("success_rate")
-                answer_zero = _find_cell(
-                    cells,
-                    source=source,
-                    target=target,
-                    modality=modality,
-                    arm="answer",
-                    condition="zero",
+                answer_control_rates = {}
+                answer_ok = bool(
+                    answer is not None
+                    and int(answer.get("n_distinct_images", 0))
+                    >= thresholds.min_images_per_cell
+                    and float(answer_rate or 0.0)
+                    >= thresholds.min_positive_control_rate_per_cell
                 )
-                answer_zero_rate = (
-                    None if answer_zero is None else answer_zero.get("success_rate")
-                )
+                for control in DIRECT_ANSWER_CONTROLS:
+                    answer_control = _find_cell(
+                        cells,
+                        source=source,
+                        target=target,
+                        modality=modality,
+                        arm="answer",
+                        condition=control,
+                    )
+                    rate = (
+                        None
+                        if answer_control is None
+                        else answer_control.get("success_rate")
+                    )
+                    answer_control_rates[control] = rate
+                    answer_ok = (
+                        answer_ok
+                        and rate is not None
+                        and float(answer_rate) > float(rate)
+                    )
                 clauses.append(
                     {
                         "clause": f"direct_answer_positive_control_{source}_to_{target}_{modality}",
-                        "passed": bool(
-                            answer is not None
-                            and int(answer.get("n_distinct_images", 0))
-                            >= thresholds.min_images_per_cell
-                            and float(answer_rate or 0.0)
-                            >= thresholds.min_positive_control_rate_per_cell
-                            and answer_zero_rate is not None
-                            and float(answer_rate) > float(answer_zero_rate)
-                        ),
+                        "passed": bool(answer_ok),
                         "success_rate": answer_rate,
-                        "zero_control_rate": answer_zero_rate,
+                        "control_rates": answer_control_rates,
                     }
                 )
         for name, result in dict(
@@ -591,6 +707,17 @@ def confirmation_verdict(
             clauses.append(
                 {
                     "clause": f"pooled_paired_primary_beats_{name}",
+                    "passed": bool(result.get("passed"))
+                    and float((result.get("ci95") or [None])[0] or 0.0) > 0.0,
+                    "detail": dict(result),
+                }
+            )
+        for name, result in dict(
+            aggregation.get("paired_direct_answer_vs_controls") or {}
+        ).items():
+            clauses.append(
+                {
+                    "clause": f"pooled_paired_direct_answer_beats_{name}",
                     "passed": bool(result.get("passed"))
                     and float((result.get("ci95") or [None])[0] or 0.0) > 0.0,
                     "detail": dict(result),
@@ -612,8 +739,8 @@ def confirmation_verdict(
             if verdict == STRONG_THREE_MODALITY_GO
             else None
         ),
-        "alpha2_is_primary": True,
-        "alpha1_is_secondary_only": True,
+        "alpha1_is_exact_exchange_and_primary": True,
+        "alpha_greater_than_one_is_not_tested": True,
         "unrestricted_full_vocabulary": True,
         "teacher_forcing_used": False,
         "threshold_digest": thresholds.digest,
@@ -665,6 +792,7 @@ def confirmation_report(
         "budget": dict(budget),
         "resume": dict(resume),
         "completed_word_token_run_unchanged": True,
+        "completed_alpha2_digit_run_unchanged": True,
         "is_independent_confirmation": True,
         "is_post_hoc_reanalysis": False,
     }

@@ -821,6 +821,7 @@ def swap_coordinates(
 
     residual_before = H - c @ Vd.T
     coordinates_after = read_coordinates(patched, Vd, policy=policy)
+    expected_coordinates_after = c + float(alpha) * (swapped - c)
     residual_after = patched - coordinates_after @ Vd.T
 
     record = {
@@ -833,6 +834,10 @@ def swap_coordinates(
         "update_norm": [float(x) for x in update.norm(dim=-1) * abs(float(alpha))],
         "activation_norm_before": [float(x) for x in H.norm(dim=-1)],
         "activation_norm_after": [float(x) for x in patched.norm(dim=-1)],
+        "max_coordinate_update_error": float(
+            (coordinates_after - expected_coordinates_after).abs().max()
+        ),
+        "alpha_one_is_exact_exchange": bool(float(alpha) == 1.0),
         "orthogonal_residual_norm_before": [float(x) for x in residual_before.norm(dim=-1)],
         "orthogonal_residual_norm_after": [float(x) for x in residual_after.norm(dim=-1)],
         "max_orthogonal_residual_drift": float(

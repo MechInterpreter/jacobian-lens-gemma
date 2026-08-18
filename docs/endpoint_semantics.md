@@ -139,13 +139,20 @@ prompt with the digit rows `2` and `4`. The resulting
 rows, but it does not adjudicate whether the task-appropriate digit became the
 model's output.
 
-`multimodal_jspace_digit_reasoning_confirmation_colab.ipynb` answers that
-different question prospectively. It freezes the exact single-token digit rows
-before opening a new image-disjoint population; makes alpha=2 the primary based
-on the completed pilot; checks the complete vocabulary and a one-token greedy
-continuation; and requires both directions and every input modality against
-paired controls. It never rewrites, reinterprets or reuses the completed
-word-endpoint population.
+The first digit confirmation answered that different question with alpha=2 as
+its primary intervention. That completed run remains immutable and is a valid
+null for the amplified exchange: its direct-answer positive control also
+failed, so it did not establish that the exact exchange was absent.
+
+`multimodal_jspace_digit_reasoning_confirmation_colab.ipynb` now implements a
+separately fingerprinted v2 study. It freezes the exact single-token digit rows
+before opening a new image-disjoint population that excludes the completed
+alpha=2 run; uses alpha=1 as the primary and only nonzero strength; checks the
+complete vocabulary and a one-token greedy continuation; requires the direct
+answer arm and the hidden-animal arm to beat matched alpha=1 controls in both
+directions and every modality; and makes the recorded exact-coordinate update
+a verdict gate. It never rewrites, reinterprets or reuses either completed
+population.
 
 For the pinned Gemma tokenizer, these are the **bare** digit rows. A leading
 space followed by a digit encodes as two tokens, so the endpoint resolver uses

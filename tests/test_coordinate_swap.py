@@ -160,6 +160,8 @@ def test_coordinates_are_exchanged_at_alpha_one(V):
     assert record["coordinates_after"][0] == pytest.approx(
         list(reversed(record["coordinates_before"][0])), abs=1e-12
     )
+    assert record["alpha_one_is_exact_exchange"] is True
+    assert record["max_coordinate_update_error"] < 1e-12
 
 
 def test_component_orthogonal_to_span_is_unchanged(V):
@@ -223,6 +225,8 @@ def test_alpha_semantics_interpolate_and_extrapolate(V):
         read_coordinates(double, V), 2.0 * before.flip(0) - before, atol=1e-12
     )
     assert record["alpha_is_extrapolation"] is True
+    assert record["alpha_one_is_exact_exchange"] is False
+    assert record["max_coordinate_update_error"] < 1e-12
 
 
 def test_swap_preserves_dtype_and_batches(V):

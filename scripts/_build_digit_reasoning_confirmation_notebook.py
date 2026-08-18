@@ -24,13 +24,11 @@ def code(value: str) -> None:
 
 markdown(
     r"""
-# Final prospective confirmation — unrestricted digit output (Gemma 4 E4B)
+# Exact-swap confirmation — unrestricted digit output (Gemma 4 E4B)
 
-This is the one clean confirmation licensed by the completed pilot. The pilot
-scored the word rows `two` and `four`, while Gemma naturally emitted the digit
-rows `2` and `4`. Its report remains unchanged. This notebook freezes the
-task-appropriate **digit** rows before opening a fresh population and asks the
-paper-comparable question:
+The completed α=2 digit study remains immutable: it established that doubling
+the exchange is destructive in Gemma 4. This separately fingerprinted v2 study
+freezes a new population and asks the canonical paper-comparable question:
 
 > Does a two-coordinate J-lens exchange of the represented animal identity make
 > the target animal's leg-count digit the unique top token in Gemma's complete
@@ -45,10 +43,10 @@ primary score is checked against a one-token deterministic greedy continuation.
 * `bird → cat` (`2 → 4`) and `cat → bird` (`4 → 2`);
 * text, image and native spoken-caption audio;
 * paper-style two-coordinate exchange at every original prompt position;
-* **α=2 is the prospective primary**, motivated by the completed pilot;
-* α=1 is secondary sensitivity only;
-* zero, norm-matched random and unrelated-coordinate controls;
+* **α=1 is the primary and only nonzero strength**: the exact exchange;
+* zero, norm-matched α=1 random and α=1 unrelated-coordinate controls;
 * a direct digit-coordinate exchange is a required positive control;
+* a norm-matched random α=1 direct-answer control is also required;
 * at least eight distinct fresh photographs per direction×modality cell;
 * every scored or generated forward pass is saved atomically and resumes by
   checksum-valid unit key. A disconnect loses no completed trial.
@@ -61,7 +59,7 @@ primary score is checked against a one-token deterministic greedy continuation.
 | 1 | L4/A100 | Select fresh media, screen clean digit capability, and run the swaps. |
 | 2 | CPU | Judge only from saved units and write the final report. |
 
-No lens is fitted and there are no backward passes.
+No lens is fitted, there are no backward passes, and α>1 is never run.
 """
 )
 
@@ -139,9 +137,9 @@ CONTROL_CONCEPTS = ("zebra", "giraffe")
 POPULATION_CONCEPTS = (*PAIR_CONCEPTS, *CONTROL_CONCEPTS)
 CANDIDATE_IMAGES_PER_CONCEPT = 24
 ANALYSIS_IMAGES_PER_CELL = 8
-SELECTION_SEED = "digit-confirmation-independent-20260813-v1"
-RANDOM_CONTROL_SEED_INTERMEDIATE = 2026081301
-RANDOM_CONTROL_SEED_ANSWER = 2026081302
+SELECTION_SEED = "alpha1-exact-swap-independent-20260817-v2"
+RANDOM_CONTROL_SEED_INTERMEDIATE = 2026081701
+RANDOM_CONTROL_SEED_ANSWER = 2026081702
 
 from jlens.mmpilot.digit_reasoning_confirmation import (
     CONFIRMATION_BAND, CONFIRMATION_CONDITIONS,
@@ -166,7 +164,7 @@ BUDGET = confirmation_pass_budget(
 print("protocol       ", DIGIT_CONFIRMATION_PROTOCOL_VERSION)
 print("band           ", list(CONFIRMATION_BAND))
 print("endpoint       ", DESIGN["concept_to_digit_answer"])
-print("primary alpha  ", DESIGN["primary_alpha"])
+print("exact alpha    ", DESIGN["primary_alpha"])
 print("conditions     ", CONFIRMATION_CONDITIONS)
 print("threshold      ", DESIGN["threshold_digest"])
 print("forward passes ", BUDGET["total_forward_passes"])
@@ -220,8 +218,13 @@ COMPLETED_CAUSAL_RUNS = {
         "full_vocabulary_causal_validation_report.json",
         "sha256:669a821c689b742ae6e5bfdead6207f0bb058f569e794a50289b703b5f586e08",
     ),
+    "alpha2_digit_confirmation": (
+        RUNS_ROOT / "mmdigitconfirm" / "mmdigitconfirm_real_68c182bfc025",
+        "digit_reasoning_confirmation_report.json",
+        "sha256:8c6188ffe36d006d942395e7bbe3e708180a65041c5db599b6cc23f2bfcff043",
+    ),
 }
-DIGIT_RUN_ROOT = RUNS_ROOT / "mmdigitconfirm"
+DIGIT_RUN_ROOT = RUNS_ROOT / "mmalpha1confirm"
 
 if REAL_MODE and IN_COLAB:
     from google.colab import drive
@@ -384,7 +387,11 @@ if GPU_STAGE:
         # intervention units.  Intervention units are a last-resort fallback
         # only; this keeps a clean Colab start from spending hours enumerating
         # Drive files before the model is loaded.
-        for _row in _report.get("population_groups", []):
+        _recorded_population = list(_report.get("population_groups", []))
+        _recorded_population.extend(
+            list((_report.get("population") or {}).get("groups", []))
+        )
+        for _row in _recorded_population:
             if _row.get("image_id"):
                 _images.add(str(_row["image_id"]))
             if _row.get("group_id"):
@@ -424,7 +431,8 @@ if GPU_STAGE:
             "n_images": len(_images),
             "n_groups": len(_groups),
             "identity_source": (
-                "report.population_groups" if _report.get("population_groups")
+                "report.population"
+                if _recorded_population
                 else "+".join(_stages_read)
             ),
         }
@@ -504,6 +512,48 @@ if GPU_STAGE:
                 layer=layer, source=TOKENS[source_name], target=TOKENS[target_name],
             )
             for layer in CONFIRMATION_BAND
+        }
+
+    def intervention_diagnostics(stats):
+        by_layer = {}
+        for layer, layer_stats in sorted(stats.items()):
+            swap = layer_stats["swap"]
+            before = [float(value) for value in swap["activation_norm_before"]]
+            after = [float(value) for value in swap["activation_norm_after"]]
+            update = [float(value) for value in swap["update_norm"]]
+            if any(value <= 0.0 for value in before):
+                raise RuntimeError(f"L{layer}: zero activation norm in intervention")
+            by_layer[str(layer)] = {
+                "max_update_to_activation_ratio": max(
+                    delta / base for delta, base in zip(update, before)
+                ),
+                "max_after_to_before_ratio": max(
+                    new / base for new, base in zip(after, before)
+                ),
+                "min_after_to_before_ratio": min(
+                    new / base for new, base in zip(after, before)
+                ),
+                "max_coordinate_update_error": float(
+                    swap["max_coordinate_update_error"]
+                ),
+                "alpha_one_is_exact_exchange": bool(
+                    swap["alpha_one_is_exact_exchange"]
+                ),
+            }
+        return {
+            "by_layer": by_layer,
+            "all_finite": all(
+                torch.isfinite(torch.tensor(value)).all().item()
+                for row in by_layer.values()
+                for value in row.values()
+                if isinstance(value, (int, float))
+            ),
+            "max_coordinate_update_error": max(
+                row["max_coordinate_update_error"] for row in by_layer.values()
+            ),
+            "all_layers_are_exact_alpha_one_exchange": all(
+                row["alpha_one_is_exact_exchange"] for row in by_layer.values()
+            ),
         }
 
     MEDIA = drive_media_loaders(journal=RetryJournal())
@@ -733,9 +783,7 @@ if GPU_STAGE:
                                     bases = banks["unrelated"]
                                 else:
                                     bases = banks[arm]
-                                alpha = 2.0 if condition.endswith("alpha2") else (
-                                    1.0 if condition.endswith("alpha1") else 0.0
-                                )
+                                alpha = 0.0 if condition == "zero" else 1.0
                                 with coordinate_swap_band(
                                     BACKEND.blocks, bases, alpha=alpha,
                                     prompt_len=inputs.prompt_len,
@@ -767,6 +815,7 @@ if GPU_STAGE:
                                             row["positions"] == list(range(inputs.prompt_len))
                                             for row in stats.values()
                                         ),
+                                        "intervention_diagnostics": intervention_diagnostics(stats),
                                     },
                                     clean=clean,
                                 )
@@ -777,7 +826,7 @@ if GPU_STAGE:
                             # Primary treatment, positive control and one zero
                             # receive an independently stored one-token greedy run.
                             wants_greedy = (
-                                condition == "swap_alpha2"
+                                condition == "swap_alpha1"
                                 or (condition == "zero" and arm == "intermediate")
                             )
                             if wants_greedy:
@@ -791,7 +840,7 @@ if GPU_STAGE:
                                     if condition == "zero":
                                         bases, alpha = banks[arm], 0.0
                                     else:
-                                        bases, alpha = banks[arm], 2.0
+                                        bases, alpha = banks[arm], 1.0
                                     with coordinate_swap_band(
                                         BACKEND.blocks, bases, alpha=alpha,
                                         prompt_len=inputs.prompt_len,
@@ -907,7 +956,7 @@ if RUN_FINAL_REPORT_CPU:
             row["greedy_first_token_equals_global_argmax"] = (
                 generated["generated_token_ids"][0] == row["global_argmax_token_id"]
             )
-        elif row["condition"] == "swap_alpha2":
+        elif row["condition"] == "swap_alpha1":
             row["greedy_first_token_equals_global_argmax"] = False
     AGGREGATION = (
         aggregate_confirmation(list(_scores.values()), thresholds=THRESHOLDS)
@@ -922,11 +971,16 @@ if RUN_FINAL_REPORT_CPU:
         print()
         print("DIRECTION × MODALITY PRIMARY CELLS")
         for row in AGGREGATION["cells"]:
-            if row["arm"] == "intermediate" and row["condition"] == "swap_alpha2":
+            if row["arm"] == "intermediate" and row["condition"] == "swap_alpha1":
                 print(f"  {row['source']}->{row['target']} {row['modality']:<12} "
                       f"{row['successes']}/{row['n']} = {row['success_rate']:.3f}")
         print("PAIRED CONTROLS")
         for name, row in AGGREGATION["paired_primary_vs_controls"].items():
+            print(f"  {name:<18} diff={row['mean_difference']:+.3f} "
+                  f"CI={row['ci95']} Holm-p={row['holm_adjusted_pvalue']:.4g} "
+                  f"pass={row['passed']}")
+        print("PAIRED DIRECT-ANSWER CONTROLS")
+        for name, row in AGGREGATION["paired_direct_answer_vs_controls"].items():
             print(f"  {name:<18} diff={row['mean_difference']:+.3f} "
                   f"CI={row['ci95']} Holm-p={row['holm_adjusted_pvalue']:.4g} "
                   f"pass={row['passed']}")
@@ -960,12 +1014,14 @@ markdown(
 ## 7. Interpretation boundary
 
 Only `DIGIT_REASONING_THREE_MODALITY_CAUSAL_GO` licenses the strong claim printed
-in the design. Every direction and modality must pass, the direct-answer arm
-must validate the endpoint, and the paired treatment must beat all three
-controls after Holm correction with a bootstrap interval above zero.
+in the design. Every direction and modality must pass, the α=1 direct-answer arm
+must validate the endpoint against zero and matched random controls, and the
+paired identity exchange must beat all three α=1 controls after Holm correction
+with a bootstrap interval above zero.
 
 Any other verdict is reported as measured. No alpha, endpoint, layer, sample,
-threshold or concept is changed after this run. Image and audio are input
+threshold or concept is changed after this run. The completed α=2 result remains
+an immutable result about extrapolation and is never pooled here. Image and audio are input
 modalities; Gemma's output is text. SpokenCOCO is spoken linguistic captions,
 not environmental sound.
 """

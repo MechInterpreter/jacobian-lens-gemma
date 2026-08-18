@@ -70,12 +70,18 @@ def test_budget_precedes_model_load_and_no_fitting_is_reachable():
     assert "fit(" not in source
 
 
-def test_endpoint_is_digits_alpha2_primary_and_full_vocabulary():
+def test_endpoint_is_digits_alpha1_exact_swap_and_full_vocabulary():
     source = _source()
+    module_source = (
+        ROOT / "jlens" / "mmpilot" / "digit_reasoning_confirmation.py"
+    ).read_text(encoding="utf-8")
     for phrase in (
         'DIGIT_ANSWERS: dict[str, str] = {"bird": "2", "cat": "4"}',
         '"2", "4"',
-        "PRIMARY_ALPHA = 2.0",
+        "PRIMARY_ALPHA = 1.0",
+        "swap_alpha1",
+        "random_alpha1",
+        "unrelated_alpha1",
         "score_unrestricted_next_token",
         "greedy_generate",
         "candidate_list_supplied\": False",
@@ -89,12 +95,9 @@ def test_endpoint_is_digits_alpha2_primary_and_full_vocabulary():
             or "candidate_list_supplied" in phrase
             or "teacher_forcing_used" in phrase
         ):
-            module_source = (ROOT / "jlens" / "mmpilot" / "digit_reasoning_confirmation.py").read_text(
-                encoding="utf-8"
-            )
             assert phrase in module_source
         else:
-            assert phrase in source
+            assert phrase in source or phrase in module_source
 
 
 def test_population_excludes_every_completed_causal_family_and_is_never_reused():
@@ -106,10 +109,12 @@ def test_population_excludes_every_completed_causal_family_and_is_never_reused()
         "mmpaperconfirm_real_a496d5ad7f18",
         "band3340_real_2a72bda9b4ba",
         "mmfv_real_bfb07903e961",
+        "mmdigitconfirm_real_68c182bfc025",
     ):
         assert run in source
     assert "fresh population overlaps a completed causal population" in source
     assert "one synchronized group per photograph" in source
+    assert 'list((_report.get("population") or {}).get("groups", []))' in source
 
 
 def test_exclusion_avoids_expensive_intervention_scan_unless_needed():
@@ -126,6 +131,16 @@ def test_atomic_resume_has_separate_score_and_greedy_units():
     assert 'STORE.save("intervention", _score_key, record)' in source
     assert 'STORE.save("intervention", _greedy_key' in source
     assert "maximum_completed_work_lost_on_disconnect" in source
+
+
+def test_real_interventions_record_exact_swap_and_norm_diagnostics():
+    source = _source()
+    assert 'alpha = 0.0 if condition == "zero" else 1.0' in source
+    assert '"max_update_to_activation_ratio"' in source
+    assert '"max_coordinate_update_error"' in source
+    assert '"all_layers_are_exact_alpha_one_exchange"' in source
+    assert 'condition.endswith("alpha2")' not in source
+    assert "banks[arm], 2.0" not in source
 
 
 def test_report_only_path_verifies_every_unit_checksum():
