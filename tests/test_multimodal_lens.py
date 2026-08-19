@@ -148,6 +148,29 @@ def test_causal_population_is_fresh_and_label_supported():
     assert all(row["image_id"] != "i8" for row in selected["bird"])
 
 
+def test_causal_population_reads_expanded_manifest_annotations():
+    rows = []
+    for index in range(4):
+        rows.append(
+            {
+                "group_id": f"expanded_g{index}",
+                "image_id": f"expanded_i{index}",
+                "caption": f"A bird flying over water number {index}",
+                "image_path": f"/images/{index}.jpg",
+                "audio_path": f"/audio/{index}.wav",
+                "concept_annotations": ["bird", "water"],
+            }
+        )
+    selected = select_causal_groups(
+        rows,
+        concepts=("bird",),
+        n_per_concept=3,
+        excluded_image_ids=(),
+        seed="expanded-manifest-v3",
+    )
+    assert len(selected["bird"]) == 3
+
+
 def test_exact_swap_trial_is_unrestricted():
     backend = MockPilotBackend(MockWorld(), n_layers=4)
     identity = torch.eye(backend.d_model)

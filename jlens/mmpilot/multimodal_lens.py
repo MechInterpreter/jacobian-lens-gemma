@@ -126,7 +126,16 @@ def evaluation_prompt(modality: str, caption: str) -> str:
 
 def _concept_fields(group: Mapping) -> list[str]:
     values: list[str] = []
-    for key in ("concept", "concepts", "categories", "category_names"):
+    # ExpandedManifest v3 stores audited COCO object labels under
+    # ``concept_annotations``.  The shorter names are retained for normalized
+    # manifests and MOCK fixtures.
+    for key in (
+        "concept",
+        "concepts",
+        "categories",
+        "category_names",
+        "concept_annotations",
+    ):
         value = group.get(key)
         if isinstance(value, str):
             values.append(value)
