@@ -1,0 +1,826 @@
+"""Generate the matched multimodal J-lens experiment notebook."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+TARGET = ROOT / "notebooks" / "multimodal_jspace_matched_jlens_colab.ipynb"
+CELLS: list[tuple[str, str]] = []
+
+
+def markdown(value: str) -> None:
+    CELLS.append(("markdown", value.strip("\n")))
+
+
+def code(value: str) -> None:
+    CELLS.append(("code", value.strip("\n")))
+
+
+markdown(
+    r"""
+# Matched-distribution J-Lens — text, image, spoken captions, and pooled
+
+This notebook asks one clean comparative question:
+
+> Does estimating the average decoder Jacobian on the checkpoint's real
+> multimodal input distribution produce a more faithful readout and causal
+> interface than estimating it on text alone?
+
+It fits four lenses over the **same synchronized photographs/captions**:
+
+1. text-only;
+2. image-only;
+3. spoken-caption-only;
+4. an equal-size pooled arm assigning the same photographs evenly across the
+   three modalities.
+
+The old text-only result remains a baseline. The pooled lens is not declared
+better in advance, and no arm is selected after seeing a causal result.
+
+## Scientific boundaries
+
+* The fitted object is still the paper's sample-mean Jacobian
+  `E[d h_final / d h_l]`; no probe, adapter, classifier, or cross-modal
+  projection is learned.
+* Image/audio examples pass through the pinned processor and modality towers.
+  Their real placeholder spans participate in the Jacobian estimator.
+* Fit, cross-evaluation, and causal photographs are disjoint.
+* The primary cross-evaluation endpoint is full-vocabulary fidelity to the
+  model's own unrestricted next-token answer. It is not semantic accuracy.
+* The causal comparison is text-lens versus pooled-lens, exact alpha=1
+  two-coordinate exchange, unrestricted next-token output, no answer appended,
+  and no candidate list.
+* Spoken audio means a human reading a caption, not environmental sound.
+
+## Stages and resume
+
+| stage | runtime | work | resume unit |
+|---|---|---|---|
+| 0 | CPU | load the cached synchronization and freeze populations | persisted plan |
+| 1 | A100 recommended | fit four lenses | atomic arm accumulator |
+| 2 | GPU | 4 x 3 full-vocabulary cross-evaluation | one photograph |
+| 3 | GPU | gated exact-swap comparison on fresh bird/cat media | one trial |
+| 4 | CPU | write the report from stored units | no model |
+
+Changing any model, processor, audio protocol, cache, population, order, layer,
+prompt, lens, or causal setting changes the fingerprint and refuses reuse.
+"""
+)
+
+markdown("## 0. Bootstrap")
+code(
+    r'''
+import hashlib, json, os, subprocess, sys, tempfile
+from pathlib import Path
+
+IN_COLAB = "google.colab" in sys.modules
+REPO_URL = "https://github.com/MechInterpreter/jacobian-lens-gemma.git"
+BRANCH = "experiment/spokencoco-jspace-pilot"
+REPO_DIR = Path(
+    os.environ.get("JLENS_REPO_DIR")
+    or ("/content/jacobian-lens-gemma" if IN_COLAB else Path.cwd())
+)
+
+if IN_COLAB:
+    if not (REPO_DIR / ".git").is_dir():
+        subprocess.run(
+            ["git", "clone", "--branch", BRANCH, "--single-branch", REPO_URL, str(REPO_DIR)],
+            check=True,
+        )
+    else:
+        subprocess.run(["git", "-C", str(REPO_DIR), "fetch", "origin", BRANCH], check=True)
+        subprocess.run(["git", "-C", str(REPO_DIR), "checkout", BRANCH], check=True)
+        subprocess.run(["git", "-C", str(REPO_DIR), "pull", "--ff-only", "origin", BRANCH], check=True)
+    subprocess.run(
+        [sys.executable, "-m", "pip", "install", "-q", "-e", str(REPO_DIR),
+         "transformers==5.13.1", "accelerate", "soundfile", "datasets", "pillow"],
+        check=True,
+    )
+
+os.chdir(REPO_DIR)
+if str(REPO_DIR) not in sys.path:
+    sys.path.insert(0, str(REPO_DIR))
+COMMIT = subprocess.run(
+    ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+).stdout.strip()
+print("commit", COMMIT)
+'''
+)
+
+markdown("## 1. Configuration — set this once")
+code(
+    r'''
+# For a clean real run set RUN_REAL_MATCHED_JLENS=True and the desired stages.
+# Stage 0 can run on CPU. Stages 1-3 need a GPU; A100 is strongly recommended
+# for Stage 1. Stage 4 can run in a fresh CPU session by setting REPORT_RUN_DIR.
+RUN_REAL_MATCHED_JLENS = False
+RUN_STAGE0_FREEZE_PLAN = False
+RUN_STAGE1_FIT_LENSES = False
+RUN_STAGE2_CROSS_EVALUATE = False
+RUN_STAGE3_CAUSAL_COMPARE = False
+RUN_STAGE4_WRITE_REPORT = False
+
+CONFIRM_MODEL_LOAD = False
+CONFIRM_FIT_BUDGET = False
+CONFIRM_CAUSAL_BUDGET = False
+REPORT_RUN_DIR = None
+
+MODEL_REPO_ID = "google/gemma-4-E4B-it"
+MODEL_REVISION = "fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd"
+EXPECT_N_LAYERS, EXPECT_D_MODEL, EXPECT_VOCAB = 42, 2560, 262144
+AUDIO_PROTOCOL_FINGERPRINT = (
+    "sha256:9ad8bcc9420a7983f6e3b75d5d7080c0e2fcf0a94a76431917fcde73ba777920"
+)
+
+# Scale 99 is today's bounded comparative pilot. It is approximately the
+# original published scale and permits an exact 33/33/33 pooled allocation,
+# but it is not called a definitive confirmation.
+# Change to 250 only before Stage 0; it creates a different fingerprint/run.
+# Ninety-nine makes the pooled arm exactly 33 text + 33 image + 33 audio while
+# keeping every arm at the same total sample count.
+N_FIT_GROUPS = 99
+N_CROSS_EVAL_GROUPS = 48
+N_CAUSAL_CANDIDATES_PER_CONCEPT = 32
+N_CAUSAL_IMAGES_PER_CELL = 8
+SOURCE_LAYERS = (33, 34, 35, 36, 37, 38, 39, 40)
+TARGET_LAYER = 41
+DIM_BATCH = 8
+SKIP_FIRST = 16
+CHECKPOINT_EVERY = 10
+PLAN_SEED = "matched-jlens-scale99-20260819-v1"
+CAUSAL_SEED = "matched-jlens-causal-20260819-v1"
+EVAL_CONCEPTS = ("bird", "cat")
+CONTROL_CONCEPTS = ("zebra", "giraffe")
+CAUSAL_LAYERS = SOURCE_LAYERS
+PRIMARY_ALPHA = 1.0
+
+REAL_MODE = bool(RUN_REAL_MATCHED_JLENS)
+MODEL_STAGE = any((RUN_STAGE1_FIT_LENSES, RUN_STAGE2_CROSS_EVALUATE, RUN_STAGE3_CAUSAL_COMPARE))
+MODEL_ENABLED = bool(MODEL_STAGE and CONFIRM_MODEL_LOAD)
+FIT_ENABLED = bool(RUN_STAGE1_FIT_LENSES and MODEL_ENABLED and CONFIRM_FIT_BUDGET)
+CROSS_ENABLED = bool(RUN_STAGE2_CROSS_EVALUATE and MODEL_ENABLED)
+CAUSAL_ENABLED = bool(RUN_STAGE3_CAUSAL_COMPARE and MODEL_ENABLED and CONFIRM_CAUSAL_BUDGET)
+if REAL_MODE and MODEL_STAGE and not MODEL_ENABLED:
+    print("MODEL STAGES BLOCKED: set CONFIRM_MODEL_LOAD after reading the budget")
+if REAL_MODE and RUN_STAGE1_FIT_LENSES and not FIT_ENABLED:
+    print("FIT BLOCKED: set CONFIRM_FIT_BUDGET after reading the budget")
+if REAL_MODE and RUN_STAGE3_CAUSAL_COMPARE and not CAUSAL_ENABLED:
+    print("CAUSAL BLOCKED: set CONFIRM_CAUSAL_BUDGET after reading the budget")
+'''
+)
+
+markdown("## 2. Paths and exact budgets (no model load)")
+code(
+    r'''
+from jlens.mmpilot.multimodal_lens import fit_budget
+
+if REAL_MODE:
+    from google.colab import drive
+    drive.mount("/content/drive")
+    RUNS_ROOT = Path("/content/drive/MyDrive/jacobian-lens-gemma/runs")
+    EXPANDED_MANIFEST_CACHE = (
+        RUNS_ROOT / "mml32_l32_followup_20260808T182717" / "expanded_manifest.json"
+    )
+    IMAGE_MEDIA_ROOT = Path("/content/drive/MyDrive/datasets/cstf_spokencoco/coco")
+else:
+    RUNS_ROOT = Path(tempfile.gettempdir()) / "jlens_matched_mock_runs"
+    EXPANDED_MANIFEST_CACHE = None
+    IMAGE_MEDIA_ROOT = Path("/mock/coco")
+
+BUDGET = fit_budget(
+    n_fit_groups=N_FIT_GROUPS if REAL_MODE else 3,
+    n_layers=len(SOURCE_LAYERS) if REAL_MODE else 2,
+    d_model=EXPECT_D_MODEL if REAL_MODE else 12,
+    dim_batch=DIM_BATCH if REAL_MODE else 4,
+)
+print("=" * 78)
+print("FIT BUDGET — four separate, resumable arms")
+print("=" * 78)
+for _arm, _count in BUDGET["prompts_by_arm"].items():
+    print(f"  {_arm:16s} {_count:>5} processor examples")
+print("  forward passes  ", BUDGET["total_prompt_forwards"])
+print("  backward passes ", BUDGET["total_backward_passes"])
+print("  fitted layers   ", list(SOURCE_LAYERS))
+print("  checkpoint every", CHECKPOINT_EVERY, "examples; at most that in-flight prefix is recomputed")
+print()
+print("CROSS-EVALUATION BUDGET")
+print("  model forwards  ", N_CROSS_EVAL_GROUPS * 3 if REAL_MODE else 6)
+print("  readouts         ", (N_CROSS_EVAL_GROUPS if REAL_MODE else 2) * 3 * 4 * len(SOURCE_LAYERS if REAL_MODE else (1, 2)))
+print()
+print("CAUSAL UPPER BOUND")
+print("  clean screening ", N_CAUSAL_CANDIDATES_PER_CONCEPT * 2 * 3 * 2)
+print("  exact/random/unrelated trials after recruitment",
+      N_CAUSAL_IMAGES_PER_CELL * 2 * 3 * 2 * 2 * 3)
+'''
+)
+
+markdown("## 3. Load the synchronization cache and freeze all populations")
+code(
+    r'''
+from jlens.mmpilot.multimodal_lens import (
+    build_matched_plan, select_causal_groups,
+)
+from jlens.mmpilot.store import payload_checksum
+
+if REAL_MODE:
+    if not EXPANDED_MANIFEST_CACHE.is_file():
+        raise FileNotFoundError(
+            f"Required cache not found: {EXPANDED_MANIFEST_CACHE}. This notebook "
+            "never rebuilds the 125k-group join on GPU."
+        )
+    _bytes = EXPANDED_MANIFEST_CACHE.read_bytes()
+    MANIFEST_CHECKSUM = "sha256:" + hashlib.sha256(_bytes).hexdigest()
+    _payload = json.loads(_bytes)
+    GROUPS = [dict(row) for row in _payload["groups"]]
+    del _payload, _bytes
+else:
+    from jlens.mmpilot.mock import MockWorld
+    _world = MockWorld()
+    GROUPS = []
+    for _index in range(18):
+        _concept = None
+        if 10 <= _index < 14:
+            _concept = "bird"
+        elif 14 <= _index:
+            _concept = "cat"
+        _caption = (
+            f"A {_concept} in a field example {_index}"
+            if _concept else f"A neutral landscape with clouds example {_index}"
+        )
+        GROUPS.append({
+            "group_id": f"mock_g{_index}", "image_id": f"mock_i{_index}",
+            "caption": _caption, "concept": _concept,
+            "image_path": f"/mock/images/{_index}.jpg",
+            "audio_path": f"/mock/audio/{_index}.wav",
+        })
+    MANIFEST_CHECKSUM = payload_checksum(GROUPS)
+
+_fit_n = N_FIT_GROUPS if REAL_MODE else 3
+_eval_n = N_CROSS_EVAL_GROUPS if REAL_MODE else 2
+PLAN = build_matched_plan(
+    GROUPS, n_fit_groups=_fit_n, n_eval_groups=_eval_n,
+    seed=PLAN_SEED, excluded_eval_concepts=(*EVAL_CONCEPTS, *CONTROL_CONCEPTS),
+)
+CAUSAL_POPULATION = select_causal_groups(
+    GROUPS, concepts=EVAL_CONCEPTS,
+    n_per_concept=N_CAUSAL_CANDIDATES_PER_CONCEPT if REAL_MODE else 3,
+    excluded_image_ids=(*PLAN["fit_image_ids"], *PLAN["eval_image_ids"]),
+    seed=CAUSAL_SEED,
+)
+CAUSAL_POPULATION_DIGEST = payload_checksum(CAUSAL_POPULATION)
+print("manifest", MANIFEST_CHECKSUM, "groups", len(GROUPS))
+print("fit images", len(PLAN["fit_image_ids"]), "eval images", len(PLAN["eval_image_ids"]))
+print("fit/eval overlap", PLAN["fit_eval_image_overlap"])
+print("plan", PLAN["plan_digest"])
+print("causal", CAUSAL_POPULATION_DIGEST,
+      {name: len(rows) for name, rows in CAUSAL_POPULATION.items()})
+
+SCIENTIFIC_CONFIG = {
+    "study": "matched_multimodal_jlens.v4",
+    "model_repo_id": MODEL_REPO_ID,
+    "model_revision": MODEL_REVISION,
+    "audio_protocol_fingerprint": AUDIO_PROTOCOL_FINGERPRINT,
+    "manifest_checksum": MANIFEST_CHECKSUM,
+    "plan_digest": PLAN["plan_digest"],
+    "causal_population_digest": CAUSAL_POPULATION_DIGEST,
+    "source_layers": list(SOURCE_LAYERS if REAL_MODE else (1, 2)),
+    "target_layer": TARGET_LAYER if REAL_MODE else 3,
+    "dim_batch": DIM_BATCH if REAL_MODE else 4,
+    "skip_first": SKIP_FIRST if REAL_MODE else 2,
+    "primary_alpha": PRIMARY_ALPHA,
+    "causal_protocol": "matched_multimodal_jlens_unrestricted_swap.v2",
+    "clean_recruitment": "all_modalities_x_identity_and_property",
+    "causal_controls": ["random", "unrelated"],
+    "causal_concepts": list(EVAL_CONCEPTS),
+    "control_concepts": list(CONTROL_CONCEPTS),
+    "commit": COMMIT,
+}
+SCIENTIFIC_FINGERPRINT = payload_checksum(SCIENTIFIC_CONFIG)
+RUN_DIR = RUNS_ROOT / "mmjlens4" / f"mmjlens4_{'real' if REAL_MODE else 'mock'}_{SCIENTIFIC_FINGERPRINT.split(':')[1][:12]}"
+RUN_DIR.mkdir(parents=True, exist_ok=True)
+_plan_path = RUN_DIR / "matched_population_plan.json"
+if _plan_path.is_file():
+    _stored = json.loads(_plan_path.read_text())
+    if _stored.get("plan_digest") != PLAN["plan_digest"]:
+        raise RuntimeError("run directory holds a different population plan")
+else:
+    _plan_path.write_text(json.dumps(PLAN, indent=2, default=str))
+print("run", RUN_DIR)
+print("fingerprint", SCIENTIFIC_FINGERPRINT)
+'''
+)
+
+markdown("## 4. Load the pinned model and audited native processor")
+code(
+    r'''
+BACKEND = BUNDLE = AUDIO_RECORD = None
+if REAL_MODE and MODEL_ENABLED:
+    import getpass
+    if not os.environ.get("HF_TOKEN"):
+        os.environ["HF_TOKEN"] = getpass.getpass("HF_TOKEN (input hidden): ").strip()
+    from jlens.mmpilot.real_backend import build_real_backend
+    from jlens.mmpilot.tri_modal import assert_audio_protocol
+    BUNDLE = build_real_backend(
+        MODEL_REPO_ID, revision=MODEL_REVISION, token=os.environ["HF_TOKEN"],
+        device="cuda", allow_model_load=True, resolve_audio=True,
+        expect_n_layers=EXPECT_N_LAYERS, expect_d_model=EXPECT_D_MODEL,
+        expect_vocab_size=EXPECT_VOCAB,
+    )
+    if BUNDLE.audio_interface is None:
+        raise RuntimeError("native spoken audio did not resolve: " + BUNDLE.audio_blocked_reason)
+    AUDIO_RECORD = assert_audio_protocol(
+        BUNDLE.audio_interface, expected_fingerprint=AUDIO_PROTOCOL_FINGERPRINT
+    )
+    BACKEND = BUNDLE.backend
+elif not REAL_MODE:
+    from jlens.mmpilot.mock import MockPilotBackend, MockWorld
+    BACKEND = MockPilotBackend(MockWorld(), n_layers=4)
+    AUDIO_RECORD = {"protocol_fingerprint": "mock-audio"}
+elif MODEL_STAGE:
+    print("skipped: model confirmation is false")
+'''
+)
+
+markdown("## 5. Media loading and processor-input construction")
+code(
+    r'''
+from jlens.mmpilot.media_io import RetryJournal, drive_media_loaders
+
+if REAL_MODE:
+    MEDIA = drive_media_loaders(journal=RetryJournal())
+else:
+    MEDIA = None
+
+def _mock_evidence(group, modality):
+    concepts = tuple(
+        name for name in (*EVAL_CONCEPTS, *CONTROL_CONCEPTS)
+        if name in str(group.get("caption", "")).lower().split()
+    )
+    return BACKEND.world.evidence(
+        concepts_present=concepts, modality=modality,
+        nuisance_key=f"{group['group_id']}|{modality}",
+    )
+
+def build_group_inputs(group, modality, prompt):
+    if not REAL_MODE:
+        evidence = _mock_evidence(group, modality)
+        kwargs = {"prompt": prompt, "modality": modality}
+        if modality == "image": kwargs["image"] = evidence
+        if modality == "spoken_audio": kwargs["audio"] = evidence
+        return BACKEND.build_inputs(**kwargs)
+    if modality == "text":
+        return BACKEND.build_inputs(prompt=prompt, modality="text")
+    if modality == "image":
+        return BACKEND.build_inputs(
+            prompt=prompt, modality="image",
+            image=MEDIA["load_image"](group["image_path"]),
+            media_path=group["image_path"],
+        )
+    waveform, rate = MEDIA["load_audio"](group["audio_path"])
+    return BACKEND.build_inputs(
+        prompt=prompt, modality="spoken_audio", audio=waveform,
+        sampling_rate=rate, media_path=group["audio_path"],
+    )
+
+def build_fit_inputs(unit):
+    group = {
+        "group_id": unit.group_id, "caption": unit.caption,
+        "image_path": unit.image_path, "audio_path": unit.audio_path,
+    }
+    return build_group_inputs(group, unit.modality, unit.prompt)
+'''
+)
+
+markdown("## 6. Stage 1 — fit the four lenses")
+code(
+    r'''
+from jlens.lens import JacobianLens
+from jlens.metadata import file_sha256
+from jlens.mmpilot.multimodal_lens import LENS_ARMS, fit_arm, plan_units
+
+LENSES, LENS_CHECKSUMS = {}, {}
+_layers = SOURCE_LAYERS if REAL_MODE else (1, 2)
+_target = TARGET_LAYER if REAL_MODE else 3
+_dim_batch = DIM_BATCH if REAL_MODE else 4
+_skip = SKIP_FIRST if REAL_MODE else 2
+_fit_requested = FIT_ENABLED if REAL_MODE else True
+
+def progress(row):
+    if row["index"] == 1 or row["checkpoint_written"] or row["index"] == row["total"]:
+        print(f"{row['arm']:16s} {row['index']:>4}/{row['total']} "
+              f"{row['modality']:13s} {row['elapsed_seconds']:.1f}s "
+              f"checkpoint={row['checkpoint_written']}")
+
+for _arm in LENS_ARMS:
+    _lens_path = RUN_DIR / "lenses" / f"lens.{_arm}.pt"
+    _checkpoint = RUN_DIR / "lenses" / "checkpoints" / f"{_arm}.jacobian_sum.pt"
+    if _lens_path.is_file():
+        LENSES[_arm] = JacobianLens.load(str(_lens_path))
+        print(_arm, "reused completed lens", _lens_path)
+    elif _fit_requested:
+        _units = plan_units(PLAN, _arm)
+        LENSES[_arm] = fit_arm(
+            BACKEND, _units, build_inputs=build_fit_inputs,
+            source_layers=_layers, target_layer=_target,
+            checkpoint_path=_checkpoint, arm=_arm,
+            scientific_fingerprint=SCIENTIFIC_FINGERPRINT,
+            dim_batch=_dim_batch, skip_first=_skip,
+            checkpoint_every=CHECKPOINT_EVERY if REAL_MODE else 1,
+            progress=progress,
+        )
+        _lens_path.parent.mkdir(parents=True, exist_ok=True)
+        _temporary = _lens_path.with_suffix(".tmp.pt")
+        LENSES[_arm].save(str(_temporary))
+        os.replace(_temporary, _lens_path)
+        print(_arm, "completed", LENSES[_arm].n_prompts, "units")
+    if _lens_path.is_file():
+        LENS_CHECKSUMS[_arm] = file_sha256(str(_lens_path))
+
+if len(LENSES) != 4 and (RUN_STAGE2_CROSS_EVALUATE or RUN_STAGE3_CAUSAL_COMPARE or not REAL_MODE):
+    raise RuntimeError(
+        f"stages 2-3 require all four lenses; available {sorted(LENSES)}. "
+        "Finish Stage 1 first; checkpoints resume automatically."
+    )
+print("lens checksums", json.dumps(LENS_CHECKSUMS, indent=2))
+'''
+)
+
+markdown("## 7. Open the fingerprinted unit store")
+code(
+    r'''
+from jlens.mmpilot.store import RunFingerprint, UnitStore
+
+FINGERPRINT = RunFingerprint(
+    mode="real" if REAL_MODE else "mock",
+    model_repo_id=MODEL_REPO_ID,
+    model_revision=MODEL_REVISION,
+    processor_revision=MODEL_REVISION,
+    layers=tuple(_layers),
+    lens_checksum=payload_checksum(LENS_CHECKSUMS),
+    manifest_checksum=MANIFEST_CHECKSUM,
+    split_id=PLAN["plan_digest"],
+    intervention_config={
+        "alpha": PRIMARY_ALPHA, "layers": list(_layers),
+        "position_rule": "all_prompt_positions",
+        "teacher_forcing": False, "candidate_list": False,
+    },
+    extra={
+        "study_fingerprint": SCIENTIFIC_FINGERPRINT,
+        "audio_protocol_fingerprint": AUDIO_PROTOCOL_FINGERPRINT if REAL_MODE else "mock-audio",
+        "causal_population_digest": CAUSAL_POPULATION_DIGEST,
+    },
+)
+STORE = UnitStore(RUN_DIR, FINGERPRINT)
+print("run state", STORE.open())
+print("unit fingerprint", FINGERPRINT.digest)
+'''
+)
+
+markdown("## 8. Stage 2 — 4 x 3 full-vocabulary cross-evaluation")
+code(
+    r'''
+from jlens.mmpilot.multimodal_lens import capture_eval_rows, summarize_cross_eval
+from jlens.mmpilot.store import safe_key
+
+CROSS_ROWS = []
+_cross_requested = CROSS_ENABLED if REAL_MODE else True
+if _cross_requested:
+    for _index, _group in enumerate(PLAN["eval_groups"], 1):
+        _key = safe_key("cross_eval", _group["group_id"])
+        _stored = STORE.load("metric", _key)
+        if _stored is None:
+            _rows = capture_eval_rows(
+                BACKEND, LENSES, [_group], build_inputs=build_group_inputs,
+                layers=_layers,
+            )
+            STORE.save("metric", _key, {"rows": _rows})
+            _stored = {"rows": _rows}
+            _work = "computed"
+        else:
+            _work = "reused"
+        CROSS_ROWS.extend(_stored["rows"])
+        if _index == 1 or _index % 8 == 0 or _index == len(PLAN["eval_groups"]):
+            print(f"cross-eval {_index}/{len(PLAN['eval_groups'])} {_work}")
+    CROSS_REPORT = summarize_cross_eval(CROSS_ROWS)
+    STORE.save("metric", "cross_eval_report", CROSS_REPORT)
+    (RUN_DIR / "multimodal_lens_cross_eval_report.json").write_text(
+        json.dumps(CROSS_REPORT, indent=2, default=str)
+    )
+else:
+    CROSS_REPORT = STORE.load("metric", "cross_eval_report")
+
+if CROSS_REPORT:
+    print("=" * 96)
+    print("CROSS-EVALUATION — native unrestricted next-token fidelity")
+    print("=" * 96)
+    print(f"{'arm':16s} {'test':14s} {'L':>3s} {'top1':>7s} {'MRR':>7s} {'median':>8s}")
+    for _row in CROSS_REPORT["cells"]:
+        print(f"{_row['lens_arm']:16s} {_row['test_modality']:14s} "
+              f"{_row['layer']:3d} {_row['top1_agreement']:7.3f} "
+              f"{_row['mrr']:7.3f} {_row['median_midrank']:8.1f}")
+    print("report", RUN_DIR / "multimodal_lens_cross_eval_report.json")
+'''
+)
+
+markdown("## 9. Stage 3 — unrestricted exact-swap causal comparison")
+code(
+    r'''
+from jlens.mmpilot.coordinate_swap import (
+    random_two_direction_basis, resolve_concept_token,
+)
+from jlens.mmpilot.digit_reasoning_confirmation import resolve_digit_endpoints
+from jlens.mmpilot.multimodal_lens import (
+    build_swap_bases_for_lens, unrestricted_swap_trial,
+)
+
+CAUSAL_REPORT = None
+_causal_requested = CAUSAL_ENABLED if REAL_MODE else True
+if _causal_requested:
+    _encode = BACKEND.encode_candidate if REAL_MODE else BACKEND.encode_token
+    CONCEPT_TOKENS = {name: resolve_concept_token(_encode, name) for name in (*EVAL_CONCEPTS, *CONTROL_CONCEPTS)}
+    DIGITS = (
+        resolve_digit_endpoints(BACKEND)
+        if REAL_MODE
+        else {"token_ids": {
+            "2": CONCEPT_TOKENS["bird"].token_id,
+            "4": CONCEPT_TOKENS["cat"].token_id,
+        }}
+    )
+    _answers = {"bird": "2", "cat": "4"}
+    _bases = {}
+    _unrelated_bases = {}
+    for _arm in ("text", "pooled"):
+        for _source, _target_name in (("bird", "cat"), ("cat", "bird")):
+            _bases[(_arm, _source, _target_name)] = build_swap_bases_for_lens(
+                LENSES[_arm], BACKEND.unembedding_weight(), layers=_layers,
+                source=CONCEPT_TOKENS[_source], target=CONCEPT_TOKENS[_target_name],
+            )
+        _unrelated_bases[_arm] = build_swap_bases_for_lens(
+            LENSES[_arm], BACKEND.unembedding_weight(), layers=_layers,
+            source=CONCEPT_TOKENS[CONTROL_CONCEPTS[0]],
+            target=CONCEPT_TOKENS[CONTROL_CONCEPTS[1]],
+        )
+
+    def _prompt(kind, modality, caption):
+        question = (
+            "What animal is present in the evidence? Answer with the animal name.\nAnswer:"
+            if kind == "identity" else
+            "How many legs does the animal in the evidence typically have? Answer with one digit.\nAnswer:"
+        )
+        return f"Caption: {caption}\n{question}" if modality == "text" else question
+
+    # Recruit only photographs the clean model answers correctly for both
+    # open endpoints in every modality.  Screening is saved separately, so a
+    # disconnect never repeats a completed clean forward pass.
+    _clean_rows = []
+    for _source, _target_name in (("bird", "cat"), ("cat", "bird")):
+        for _group in CAUSAL_POPULATION[_source]:
+            for _modality in ("text", "image", "spoken_audio"):
+                for _kind in ("identity", "property"):
+                    _key = safe_key(
+                        "causal_clean", _source, _group["group_id"],
+                        _modality, _kind,
+                    )
+                    _stored = STORE.load("capability", _key)
+                    if _stored is None:
+                        _inputs = build_group_inputs(
+                            _group, _modality, _prompt(_kind, _modality, _group["caption"])
+                        )
+                        _clean_logits = BACKEND.forward_logits(_inputs.tensors)[
+                            0, _inputs.final_prompt_position
+                        ].float()
+                        _expected = (
+                            CONCEPT_TOKENS[_source].token_id
+                            if _kind == "identity"
+                            else DIGITS["token_ids"][_answers[_source]]
+                        )
+                        _stored = {
+                            "source": _source,
+                            "group_id": _group["group_id"], "image_id": _group["image_id"],
+                            "modality": _modality, "prompt_kind": _kind,
+                            "clean_top_token_id": int(_clean_logits.argmax()),
+                            "clean_surface": BACKEND.decode_token(int(_clean_logits.argmax())).strip(),
+                            "expected_source_token_id": int(_expected),
+                            "clean_success": (
+                                int(_clean_logits.argmax()) == int(_expected)
+                                if REAL_MODE else True
+                            ),
+                        }
+                        STORE.save("capability", _key, _stored)
+                        _work = "computed"
+                    else:
+                        _work = "reused"
+                    _clean_rows.append(_stored)
+                    if len(_clean_rows) == 1 or len(_clean_rows) % 24 == 0:
+                        print("clean screen", len(_clean_rows), _work)
+
+    _recruited = {}
+    _required_causal_images = N_CAUSAL_IMAGES_PER_CELL if REAL_MODE else 2
+    for _source in EVAL_CONCEPTS:
+        _eligible = []
+        for _group in CAUSAL_POPULATION[_source]:
+            _group_rows = [
+                row for row in _clean_rows
+                if row["source"] == _source
+                and row["group_id"] == _group["group_id"]
+            ]
+            if len(_group_rows) == 6 and all(row["clean_success"] for row in _group_rows):
+                _eligible.append(_group)
+        _recruited[_source] = _eligible[:_required_causal_images]
+    _capability_ok = all(
+        len(_recruited[name]) == _required_causal_images for name in EVAL_CONCEPTS
+    )
+    print("recruited", {name: len(rows) for name, rows in _recruited.items()})
+
+    _rows = []
+    if _capability_ok:
+        for _source, _target_name in (("bird", "cat"), ("cat", "bird")):
+            for _group in _recruited[_source]:
+                for _modality in ("text", "image", "spoken_audio"):
+                    for _kind in ("identity", "property"):
+                        _key = safe_key(
+                            "causal", _source, _target_name, _group["group_id"],
+                            _modality, _kind,
+                        )
+                        _stored = STORE.load("intervention", _key)
+                        if _stored is None:
+                            _inputs = build_group_inputs(
+                                _group, _modality,
+                                _prompt(_kind, _modality, _group["caption"]),
+                            )
+                            _expected = (
+                                CONCEPT_TOKENS[_target_name].token_id
+                                if _kind == "identity"
+                                else DIGITS["token_ids"][_answers[_target_name]]
+                            )
+                            _record = {
+                                "source": _source, "target": _target_name,
+                                "group_id": _group["group_id"],
+                                "image_id": _group["image_id"],
+                                "modality": _modality, "prompt_kind": _kind,
+                                "expected_token_id": int(_expected), "arms": {},
+                            }
+                            for _arm in ("text", "pooled"):
+                                _exact_bases = _bases[(_arm, _source, _target_name)]
+                                _condition_bases = {
+                                    "exact": _exact_bases,
+                                    "random": {
+                                        layer: random_two_direction_basis(
+                                            basis,
+                                            seed=(20260819 + layer),
+                                        )
+                                        for layer, basis in _exact_bases.items()
+                                    },
+                                    "unrelated": _unrelated_bases[_arm],
+                                }
+                                _record["arms"][_arm] = {}
+                                for _condition, _condition_basis in _condition_bases.items():
+                                    _trial = unrestricted_swap_trial(
+                                        BACKEND, _inputs, bases=_condition_basis,
+                                        alpha=PRIMARY_ALPHA,
+                                    )
+                                    _record["arms"][_arm][_condition] = {
+                                        **_trial,
+                                        "patched_surface": BACKEND.decode_token(
+                                            _trial["patched_top_token_id"]
+                                        ).strip(),
+                                        "success": (
+                                            _trial["patched_top_token_id"]
+                                            == int(_expected)
+                                        ),
+                                    }
+                            STORE.save("intervention", _key, _record)
+                            _stored, _work = _record, "computed"
+                        else:
+                            _work = "reused"
+                        _rows.append(_stored)
+                        if len(_rows) == 1 or len(_rows) % 12 == 0:
+                            print("causal", len(_rows), _work)
+
+    _cells = []
+    if _capability_ok:
+        for _arm in ("text", "pooled"):
+            for _source, _target_name in (("bird", "cat"), ("cat", "bird")):
+                for _kind in ("identity", "property"):
+                    for _modality in ("text", "image", "spoken_audio"):
+                        _selected = [
+                            row for row in _rows
+                            if row["source"] == _source
+                            and row["prompt_kind"] == _kind
+                            and row["modality"] == _modality
+                        ]
+                        _cells.append({
+                            "lens_arm": _arm,
+                            "direction": f"{_source}->{_target_name}",
+                            "prompt_kind": _kind, "modality": _modality,
+                            "n": len(_selected),
+                            **{
+                                f"{condition}_success_rate": sum(
+                                    row["arms"][_arm][condition]["success"]
+                                    for row in _selected
+                                ) / len(_selected)
+                                for condition in ("exact", "random", "unrelated")
+                            },
+                        })
+    CAUSAL_REPORT = {
+        "protocol": "matched_multimodal_jlens_unrestricted_swap.v2",
+        "verdict": (
+            "MEASURED" if _capability_ok else "CAPABILITY_NO_GO"
+        ),
+        "primary_alpha": PRIMARY_ALPHA,
+        "teacher_forcing_used": False,
+        "candidate_list_supplied": False,
+        "clean_capability_required_in_every_modality_and_endpoint": True,
+        "recruited_counts": {
+            name: len(rows) for name, rows in _recruited.items()
+        },
+        "arms_compared": ["text", "pooled"],
+        "controls": ["random", "unrelated"],
+        "cells": _cells,
+        "clean_screen": _clean_rows,
+        "rows": _rows,
+    }
+    CAUSAL_REPORT["report_checksum"] = payload_checksum(CAUSAL_REPORT)
+    STORE.save("metric", "causal_report", CAUSAL_REPORT)
+    (RUN_DIR / "multimodal_lens_causal_comparison_report.json").write_text(
+        json.dumps(CAUSAL_REPORT, indent=2, default=str)
+    )
+else:
+    CAUSAL_REPORT = STORE.load("metric", "causal_report")
+
+if CAUSAL_REPORT:
+    print("=" * 86)
+    print("UNRESTRICTED EXACT-SWAP COMPARISON")
+    print("=" * 86)
+    for _cell in CAUSAL_REPORT["cells"]:
+        print(f"{_cell['lens_arm']:8s} {_cell['direction']:10s} "
+              f"{_cell['prompt_kind']:8s} {_cell['modality']:13s} "
+              f"exact={_cell['exact_success_rate']:.3f} "
+              f"random={_cell['random_success_rate']:.3f} "
+              f"unrelated={_cell['unrelated_success_rate']:.3f} n={_cell['n']}")
+    print("report", RUN_DIR / "multimodal_lens_causal_comparison_report.json")
+'''
+)
+
+markdown("## 10. Stage 4 — final report, including null results")
+code(
+    r'''
+if REAL_MODE and REPORT_RUN_DIR is not None:
+    RUN_DIR = Path(REPORT_RUN_DIR)
+    CROSS_REPORT = json.loads((RUN_DIR / "multimodal_lens_cross_eval_report.json").read_text())
+    _causal_path = RUN_DIR / "multimodal_lens_causal_comparison_report.json"
+    CAUSAL_REPORT = json.loads(_causal_path.read_text()) if _causal_path.is_file() else None
+
+if RUN_STAGE4_WRITE_REPORT or not REAL_MODE:
+    FINAL = {
+        "schema": "jlens.mmpilot.matched_multimodal_jlens_report.v1",
+        "scientific_config": SCIENTIFIC_CONFIG,
+        "scientific_fingerprint": SCIENTIFIC_FINGERPRINT,
+        "lens_checksums": LENS_CHECKSUMS,
+        "fit_budget": BUDGET,
+        "cross_evaluation": CROSS_REPORT,
+        "causal_comparison": CAUSAL_REPORT,
+        "claim_boundary": (
+            "A pooled lens outperforming the text lens would diagnose fitting-"
+            "distribution mismatch. It would not by itself establish a shared "
+            "workspace or reliable downstream recomputation; those require the "
+            "separately reported unrestricted causal endpoint."
+        ),
+    }
+    FINAL["report_checksum"] = payload_checksum(FINAL)
+    _path = RUN_DIR / "matched_multimodal_jlens_report.json"
+    _path.write_text(json.dumps(FINAL, indent=2, default=str))
+    print("=" * 78)
+    print("MATCHED MULTIMODAL J-LENS STUDY COMPLETE")
+    print("=" * 78)
+    print("report", _path)
+    print("checksum", FINAL["report_checksum"])
+    print("No verdict is promoted beyond the endpoint actually measured.")
+else:
+    print("Stage 4 not requested. Completed units remain resumable.")
+'''
+)
+
+metadata = {
+    "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
+    "language_info": {"name": "python", "version": "3"},
+    "colab": {"name": TARGET.name, "provenance": []},
+}
+notebook = {
+    "cells": [
+        {
+            "cell_type": kind,
+            "metadata": {},
+            "source": [line + "\n" for line in value.splitlines()],
+            **({"execution_count": None, "outputs": []} if kind == "code" else {}),
+        }
+        for kind, value in CELLS
+    ],
+    "metadata": metadata,
+    "nbformat": 4,
+    "nbformat_minor": 5,
+}
+TARGET.write_text(json.dumps(notebook, indent=1) + "\n", encoding="utf-8")
+print(TARGET)

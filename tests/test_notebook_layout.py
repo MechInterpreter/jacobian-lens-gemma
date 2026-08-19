@@ -31,6 +31,8 @@ ACTIVE = {
     "multimodal_jspace_anthropic_band33_40_swap_colab.ipynb",
     "multimodal_jspace_full_vocabulary_causal_validation_colab.ipynb",
     "multimodal_jspace_digit_reasoning_confirmation_colab.ipynb",
+    "multimodal_jspace_matched_jlens_colab.ipynb",
+    "mats_research_evidence_analysis.ipynb",
 }
 
 #: The archive categories, and what each is for.
