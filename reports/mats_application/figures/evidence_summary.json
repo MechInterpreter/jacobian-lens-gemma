@@ -1,0 +1,200 @@
+{
+  "alpha1_primary_cells": [
+    {
+      "argmax_tokens": [
+        "2",
+        "4"
+      ],
+      "arm": "intermediate",
+      "condition": "swap_alpha1",
+      "modality": "text",
+      "n": 8,
+      "n_distinct_images": 8,
+      "source": "bird",
+      "success_rate": 0.125,
+      "successes": 1,
+      "target": "cat"
+    },
+    {
+      "argmax_tokens": [
+        "4"
+      ],
+      "arm": "answer",
+      "condition": "swap_alpha1",
+      "modality": "text",
+      "n": 8,
+      "n_distinct_images": 8,
+      "source": "bird",
+      "success_rate": 1.0,
+      "successes": 8,
+      "target": "cat"
+    },
+    {
+      "argmax_tokens": [
+        "2"
+      ],
+      "arm": "intermediate",
+      "condition": "swap_alpha1",
+      "modality": "image",
+      "n": 8,
+      "n_distinct_images": 8,
+      "source": "bird",
+      "success_rate": 0.0,
+      "successes": 0,
+      "target": "cat"
+    },
+    {
+      "argmax_tokens": [
+        "4"
+      ],
+      "arm": "answer",
+      "condition": "swap_alpha1",
+      "modality": "image",
+      "n": 8,
+      "n_distinct_images": 8,
+      "source": "bird",
+      "success_rate": 1.0,
+      "successes": 8,
+      "target": "cat"
+    },
+    {
+      "argmax_tokens": [
+        "2",
+        "4"
+      ],
+      "arm": "intermediate",
+      "condition": "swap_alpha1",
+      "modality": "spoken_audio",
+      "n": 8,
+      "n_distinct_images": 8,
+      "source": "bird",
+      "success_rate": 0.125,
+      "successes": 1,
+      "target": "cat"
+    },
+    {
+      "argmax_tokens": [
+        "4"
+      ],
+      "arm": "answer",
+      "condition": "swap_alpha1",
+      "modality": "spoken_audio",
+      "n": 8,
+      "n_distinct_images": 8,
+      "source": "bird",
+      "success_rate": 1.0,
+      "successes": 8,
+      "target": "cat"
+    },
+    {
+      "argmax_tokens": [
+        "4"
+      ],
+      "arm": "intermediate",
+      "condition": "swap_alpha1",
+      "modality": "text",
+      "n": 8,
+      "n_distinct_images": 8,
+      "source": "cat",
+      "success_rate": 0.0,
+      "successes": 0,
+      "target": "bird"
+    },
+    {
+      "argmax_tokens": [
+        "4"
+      ],
+      "arm": "answer",
+      "condition": "swap_alpha1",
+      "modality": "text",
+      "n": 8,
+      "n_distinct_images": 8,
+      "source": "cat",
+      "success_rate": 0.0,
+      "successes": 0,
+      "target": "bird"
+    },
+    {
+      "argmax_tokens": [
+        "4"
+      ],
+      "arm": "intermediate",
+      "condition": "swap_alpha1",
+      "modality": "image",
+      "n": 8,
+      "n_distinct_images": 8,
+      "source": "cat",
+      "success_rate": 0.0,
+      "successes": 0,
+      "target": "bird"
+    },
+    {
+      "argmax_tokens": [
+        "4"
+      ],
+      "arm": "answer",
+      "condition": "swap_alpha1",
+      "modality": "image",
+      "n": 8,
+      "n_distinct_images": 8,
+      "source": "cat",
+      "success_rate": 0.0,
+      "successes": 0,
+      "target": "bird"
+    },
+    {
+      "argmax_tokens": [
+        "4"
+      ],
+      "arm": "intermediate",
+      "condition": "swap_alpha1",
+      "modality": "spoken_audio",
+      "n": 8,
+      "n_distinct_images": 8,
+      "source": "cat",
+      "success_rate": 0.0,
+      "successes": 0,
+      "target": "bird"
+    },
+    {
+      "argmax_tokens": [
+        "4"
+      ],
+      "arm": "answer",
+      "condition": "swap_alpha1",
+      "modality": "spoken_audio",
+      "n": 8,
+      "n_distinct_images": 8,
+      "source": "cat",
+      "success_rate": 0.0,
+      "successes": 0,
+      "target": "bird"
+    }
+  ],
+  "evidence_root": "C:\\Users\\walde\\research\\jacobian-lens-gemma\\tmp\\research_evidence_20260819",
+  "figures": {
+    "alpha1": "C:\\Users\\walde\\research\\jacobian-lens-gemma\\reports\\mats_application\\figures\\figure_4_alpha1_unrestricted_outcomes.png",
+    "capability": "C:\\Users\\walde\\research\\jacobian-lens-gemma\\reports\\mats_application\\figures\\figure_2_trimodal_capability.png",
+    "endpoint_timeline": "C:\\Users\\walde\\research\\jacobian-lens-gemma\\reports\\mats_application\\figures\\figure_3_endpoint_pivot_timeline.png",
+    "l32": "C:\\Users\\walde\\research\\jacobian-lens-gemma\\reports\\mats_application\\figures\\figure_5_l32_ambiguity.png",
+    "lens_validation": "C:\\Users\\walde\\research\\jacobian-lens-gemma\\reports\\mats_application\\figures\\figure_1_corrected_lens_validation.png"
+  },
+  "verified_results": {
+    "adjacent_j_and_r_lens": "BOTH_LENS_ARMS_NO_GO",
+    "alpha1_exact_swap": "DIGIT_REASONING_CONFIRMATION_NO_GO",
+    "audio_capability": "AUDIO_CAPABILITY_GO",
+    "corrected_band": "BAND_CORRECTED_CONTROL_NO_GO",
+    "corrected_band_passing_layers": [
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      40
+    ],
+    "l32_independent_classification": "AMBIGUOUS",
+    "representational_transfer": "SUPPORTED"
+  }
+}
