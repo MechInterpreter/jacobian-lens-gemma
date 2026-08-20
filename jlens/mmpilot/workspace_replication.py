@@ -30,7 +30,8 @@ from jlens.hooks import ActivationRecorder
 from jlens.mmpilot.coordinate_swap import coordinate_swap_band, read_coordinates
 from jlens.mmpilot.store import payload_checksum
 
-PROTOCOL_VERSION = "mmpilot.paper_first_workspace_replication.v2"
+PROTOCOL_VERSION = "mmpilot.paper_first_workspace_replication.v3"
+TEXT_INPUT_PROTOCOL_VERSION = "mmpilot.raw_text_completion.v1"
 TEXT_OUTPUT_ENDPOINT_VERSION = "mmpilot.unrestricted_greedy_complete_answer.v1"
 TEXT_MAX_NEW_TOKENS = 2
 LOADING_VERSION = "mmpilot.clean_source_loading.v1"
@@ -145,7 +146,56 @@ def anthropic_text_tasks() -> tuple[TextReplicationTask, ...]:
 def text_task_digest(tasks: Sequence[TextReplicationTask] | None = None) -> str:
     selected = anthropic_text_tasks() if tasks is None else tuple(tasks)
     return payload_checksum(
-        {"version": PROTOCOL_VERSION, "tasks": [task.to_dict() for task in selected]}
+        {
+            "version": PROTOCOL_VERSION,
+            "input_protocol": TEXT_INPUT_PROTOCOL_VERSION,
+            "tasks": [task.to_dict() for task in selected],
+        }
+    )
+
+
+def build_raw_text_completion_inputs(backend, prompt: str):
+    """Encode a literal text fragment without the instruction chat template.
+
+    The paper's task is next-token completion of a sentence fragment. Passing
+    that fragment as a Gemma user turn asks a different question: the IT model
+    begins a conversational restatement (for example, ``"The capital"``)
+    instead of continuing with ``"Paris"``. This explicit route calls the
+    pinned processor directly and records that no chat template was involved.
+    It is text-only by construction; multimodal inputs continue to use the
+    backend's audited chat/media routes.
+    """
+
+    from jlens.mmpilot.backend import BuiltInputs, text_hash
+
+    processor = getattr(backend, "processor", None)
+    device = getattr(backend, "device", None)
+    if processor is None or device is None:
+        raise WorkspaceReplicationRefused(
+            "raw text completion requires the real backend's processor and device"
+        )
+    encoded = processor(text=str(prompt), return_tensors="pt")
+    tensors = {
+        key: (value.to(device) if torch.is_tensor(value) else value)
+        for key, value in dict(encoded).items()
+    }
+    tensors.setdefault("use_cache", False)
+    input_ids = tensors.get("input_ids")
+    if not torch.is_tensor(input_ids) or input_ids.ndim != 2:
+        raise WorkspaceReplicationRefused(
+            "the raw completion processor did not produce rank-two input_ids"
+        )
+    return BuiltInputs(
+        tensors=tensors,
+        prompt_len=int(input_ids.shape[1]),
+        modality="text",
+        prompt_hash=text_hash(str(prompt)),
+        route={
+            "route": "raw_text_completion_processor_call",
+            "chat_template_used": False,
+            "input_protocol": TEXT_INPUT_PROTOCOL_VERSION,
+        },
+        modality_token_range=None,
     )
 
 
@@ -800,12 +850,14 @@ __all__ = [
     "LOADING_VERSION",
     "LOCALIZATION_VERSION",
     "PROTOCOL_VERSION",
+    "TEXT_INPUT_PROTOCOL_VERSION",
     "TEXT_MAX_NEW_TOKENS",
     "TEXT_OUTPUT_ENDPOINT_VERSION",
     "TextReplicationTask",
     "WorkspaceReplicationRefused",
     "anthropic_text_tasks",
     "assert_fresh_population",
+    "build_raw_text_completion_inputs",
     "capture_source_loading",
     "freeze_confirmation_design",
     "freeze_loading_localization",

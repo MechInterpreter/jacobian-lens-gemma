@@ -37,6 +37,7 @@ def test_notebook_enforces_the_paper_first_order() -> None:
     source = _source()
     for required in (
         "anthropic_text_tasks",
+        "build_raw_text_completion_inputs",
         "text_replication_verdict",
         "unrestricted_greedy_completion",
         "unrestricted_greedy_swap_trial",
@@ -58,6 +59,7 @@ def test_notebook_enforces_the_paper_first_order() -> None:
     ):
         assert required in source
     assert "answer_token_table(BACKEND" not in source
+    assert 'BACKEND.build_inputs(prompt=task.prompt, modality="text")' not in source
 
 
 def test_all_result_switches_default_false() -> None:

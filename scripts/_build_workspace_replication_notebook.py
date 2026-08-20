@@ -31,6 +31,9 @@ The order is mandatory:
 1. **Text replication.** Reproduce the paper's text-only implicit two-hop task
    (`spider → ant`, expected downstream answer `8 → 6`) and its France/China
    flexible-function family with the validated text lens and exact `alpha=1`.
+   The literal fragments are encoded through a raw text-completion route;
+   putting them in Gemma's user-turn chat template would instead ask the model
+   to respond conversationally and is a different experiment.
    Gemma tokenizes the paper's digit outputs as whitespace + digit, so success
    is the complete answer from unrestricted two-token greedy generation—not a
    one-token prefix, candidate score, or teacher-forced likelihood.
@@ -250,12 +253,14 @@ code(
     r'''
 from jlens.mmpilot.store import RunFingerprint, UnitStore, payload_checksum
 from jlens.mmpilot.workspace_replication import (
-    PROTOCOL_VERSION, TEXT_MAX_NEW_TOKENS, TEXT_OUTPUT_ENDPOINT_VERSION,
+    PROTOCOL_VERSION, TEXT_INPUT_PROTOCOL_VERSION, TEXT_MAX_NEW_TOKENS,
+    TEXT_OUTPUT_ENDPOINT_VERSION,
     text_task_digest,
 )
 
 SCIENTIFIC_CONFIG = {
     "protocol": PROTOCOL_VERSION,
+    "text_input_protocol": TEXT_INPUT_PROTOCOL_VERSION,
     "output_endpoint": TEXT_OUTPUT_ENDPOINT_VERSION,
     "max_new_tokens": TEXT_MAX_NEW_TOKENS,
     "model_repo_id": MODEL_REPO_ID, "model_revision": MODEL_REVISION,
@@ -359,7 +364,8 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
     )
     from jlens.mmpilot.store import safe_key
     from jlens.mmpilot.workspace_replication import (
-        TEXT_MAX_NEW_TOKENS, capture_source_loading, text_replication_verdict,
+        TEXT_MAX_NEW_TOKENS, build_raw_text_completion_inputs,
+        capture_source_loading, text_replication_verdict,
         unrestricted_greedy_completion, unrestricted_greedy_swap_trial,
     )
     text_rows = []
@@ -367,7 +373,9 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
         key = safe_key("text-paper", task.task_id)
         stored = STORE.load("intervention", key)
         if stored is None:
-            inputs = BACKEND.build_inputs(prompt=task.prompt, modality="text")
+            inputs = build_raw_text_completion_inputs(BACKEND, task.prompt)
+            if inputs.route.get("chat_template_used") is not False:
+                raise RuntimeError("Stage 1 requires the raw completion route")
             clean = unrestricted_greedy_completion(
                 BACKEND, inputs, answer=task.clean_answer,
                 max_new_tokens=TEXT_MAX_NEW_TOKENS,

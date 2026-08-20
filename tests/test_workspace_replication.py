@@ -8,11 +8,13 @@ from torch import nn
 
 from jlens.mmpilot.coordinate_swap import ConceptToken, build_swap_basis_from_vectors
 from jlens.mmpilot.workspace_replication import (
+    TEXT_INPUT_PROTOCOL_VERSION,
     TEXT_MAX_NEW_TOKENS,
     WorkspaceReplicationRefused,
     _cosine,
     anthropic_text_tasks,
     assert_fresh_population,
+    build_raw_text_completion_inputs,
     capture_source_loading,
     freeze_confirmation_design,
     freeze_loading_localization,
@@ -83,6 +85,39 @@ def test_cosine_normalizes_activation_and_lens_vector_to_cpu() -> None:
         assert operand.to_calls == [
             ((), {"device": "cpu", "dtype": torch.float64})
         ]
+
+
+class _RawProcessor:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def __call__(self, **kwargs):
+        self.calls.append(dict(kwargs))
+        return {
+            "input_ids": torch.tensor([[7, 8, 9]], dtype=torch.long),
+            "attention_mask": torch.ones((1, 3), dtype=torch.long),
+        }
+
+    def apply_chat_template(self, *args, **kwargs):
+        raise AssertionError("the raw completion route must not use a chat template")
+
+
+def test_raw_text_completion_bypasses_the_chat_template() -> None:
+    processor = _RawProcessor()
+    backend = SimpleNamespace(processor=processor, device=torch.device("cpu"))
+    inputs = build_raw_text_completion_inputs(
+        backend, "The capital of France is"
+    )
+    assert processor.calls == [
+        {"text": "The capital of France is", "return_tensors": "pt"}
+    ]
+    assert inputs.prompt_len == 3
+    assert inputs.final_prompt_position == 2
+    assert inputs.route == {
+        "route": "raw_text_completion_processor_call",
+        "chat_template_used": False,
+        "input_protocol": TEXT_INPUT_PROTOCOL_VERSION,
+    }
 
 
 class _GenerationBackend:
