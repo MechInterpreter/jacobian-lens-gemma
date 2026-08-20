@@ -824,6 +824,28 @@ def swap_coordinates(
     expected_coordinates_after = c + float(alpha) * (swapped - c)
     residual_after = patched - coordinates_after @ Vd.T
 
+    # The model consumes the update in the block output's original dtype, not
+    # in float64.  Audit that actual value as well as the ideal solve above.
+    # This is especially important for bf16 models: an exact exchange before
+    # the cast is not evidence that the value written back to the residual
+    # stream still realizes the intended coordinates.
+    patched_model_dtype = patched.to(device=original_device, dtype=original_dtype)
+    patched_after_cast = patched_model_dtype.detach().to(
+        device=H.device, dtype=dtype
+    )
+    coordinates_after_cast = read_coordinates(
+        patched_after_cast, Vd, policy=policy
+    )
+    residual_after_cast = patched_after_cast - coordinates_after_cast @ Vd.T
+    expected_scale = expected_coordinates_after.abs().amax(dim=-1).clamp_min(1.0)
+    post_cast_coordinate_error = (
+        coordinates_after_cast - expected_coordinates_after
+    ).abs().amax(dim=-1)
+    residual_scale = residual_before.norm(dim=-1).clamp_min(1.0)
+    post_cast_residual_drift = (
+        residual_after_cast - residual_before
+    ).norm(dim=-1)
+
     record = {
         "method_version": METHOD_VERSION,
         "alpha": float(alpha),
@@ -843,10 +865,23 @@ def swap_coordinates(
         "max_orthogonal_residual_drift": float(
             (residual_after - residual_before).norm(dim=-1).max()
         ),
+        "model_dtype": str(original_dtype),
+        "max_post_cast_coordinate_update_error": float(
+            post_cast_coordinate_error.max()
+        ),
+        "max_post_cast_relative_coordinate_update_error": float(
+            (post_cast_coordinate_error / expected_scale).max()
+        ),
+        "max_post_cast_orthogonal_residual_drift": float(
+            post_cast_residual_drift.max()
+        ),
+        "max_post_cast_relative_orthogonal_residual_drift": float(
+            (post_cast_residual_drift / residual_scale).max()
+        ),
         "V_checksum": tensor_checksum(Vd.cpu()),
         "solve_policy": SOLVE_POLICY,
     }
-    out = patched.to(device=original_device, dtype=original_dtype)
+    out = patched_model_dtype
     return (out[0] if single else out), record
 
 
@@ -1025,6 +1060,7 @@ def coordinate_swap_layer(
         "seq_len": None,
         "n_candidate_positions_skipped": None,
         "swap": None,
+        "swap_history": [],
     }
 
     def hook(module: nn.Module, inputs, output):
@@ -1068,6 +1104,7 @@ def coordinate_swap_layer(
                 if key not in ("coordinates_before", "coordinates_after")
             }
         stats["swap"] = record
+        stats["swap_history"].append(record)
         if is_tensor:
             return new_hidden
         return (new_hidden, *tuple(output)[1:])

@@ -9,6 +9,7 @@ from torch import nn
 from jlens.mmpilot.coordinate_swap import ConceptToken, build_swap_basis_from_vectors
 from jlens.mmpilot.workspace_replication import (
     TEXT_COMPLETION_INSTRUCTION,
+    TEXT_DIAGNOSTIC_CONDITIONS,
     TEXT_INPUT_PROTOCOL_VERSION,
     TEXT_MAX_NEW_TOKENS,
     WorkspaceReplicationRefused,
@@ -23,11 +24,15 @@ from jlens.mmpilot.workspace_replication import (
     holm_adjust,
     paired_binary_superiority,
     select_pair_from_loading,
+    semantic_answer_concept,
     summarize_loading,
     text_capability_verdict,
+    text_diagnostic_bands,
     text_replication_verdict,
+    text_swap_diagnostic_report,
     text_task_digest,
     unrestricted_greedy_completion,
+    unrestricted_greedy_direct_answer_trial,
     unrestricted_greedy_swap_trial,
 )
 
@@ -65,6 +70,18 @@ def test_text_tasks_are_frozen_and_include_the_paper_two_hop_case() -> None:
     assert tasks[0].implicit_intermediate is True
     assert len({task.task_id for task in tasks}) == len(tasks) == 7
     assert text_task_digest() == text_task_digest(tasks)
+
+
+def test_text_diagnostic_design_is_singletons_plus_suffixes_only() -> None:
+    bands = text_diagnostic_bands(range(33, 41))
+    assert len(bands) == 15
+    assert len(set(bands)) == len(bands)
+    assert {(layer,) for layer in range(33, 41)} <= set(bands)
+    assert tuple(range(33, 41)) in bands
+    assert tuple(range(39, 41)) in bands
+    assert (33, 34) not in bands
+    assert semantic_answer_concept("6") == "six"
+    assert semantic_answer_concept("Beijing") == "Beijing"
 
 
 class _DeviceRecordingTensor:
@@ -218,6 +235,20 @@ def test_complete_answer_endpoint_handles_gemma_style_two_token_digit() -> None:
     assert result["candidate_list_supplied"] is False
 
 
+def test_full_vocabulary_trace_uses_only_self_generated_prefixes() -> None:
+    result = unrestricted_greedy_completion(
+        _GenerationBackend(),
+        _generation_inputs(),
+        answer="8",
+        diagnostic_token_ids={"swapped_answer_head": 2},
+    )
+    assert result["full_vocabulary_diagnostic_is_teacher_forced"] is False
+    trace = result["full_vocabulary_diagnostic_trace"]
+    assert [row["selected_token_id"] for row in trace] == [1, 2]
+    assert trace[0]["tokens"]["swapped_answer_head"]["rank"] > 1
+    assert trace[1]["tokens"]["swapped_answer_head"]["is_global_top1"] is True
+
+
 def test_complete_answer_swap_keeps_hooks_active_for_both_decode_steps() -> None:
     source = ConceptToken("spider", 10, " spider", " {}")
     target = ConceptToken("ant", 11, " ant", " {}")
@@ -238,6 +269,37 @@ def test_complete_answer_swap_keeps_hooks_active_for_both_decode_steps() -> None
     assert result["answer_match"] is True
     assert result["hook_forward_passes_by_layer"] == {"0": 2}
     assert result["all_prompt_positions_patched"] is True
+    diagnostics = result["intervention_diagnostics"]
+    assert diagnostics["all_hooks_fired"] is True
+    assert diagnostics["all_finite"] is True
+    assert diagnostics["post_cast_audit_passed"] is True
+    assert diagnostics["post_cast_residual_audit_passed"] is True
+
+
+def test_norm_matched_direct_answer_control_uses_same_hook_budget() -> None:
+    source = ConceptToken("spider", 10, " spider", " {}")
+    target = ConceptToken("ant", 11, " ant", " {}")
+    basis = build_swap_basis_from_vectors(
+        torch.tensor([1.0, 0.0, 0.0]),
+        torch.tensor([0.0, 1.0, 0.0]),
+        layer=0,
+        source=source,
+        target=target,
+    )
+    result = unrestricted_greedy_direct_answer_trial(
+        _GenerationBackend(),
+        _generation_inputs(),
+        bases={0: basis},
+        answer_vectors={0: torch.tensor([0.0, 0.0, 2.0])},
+        answer="8",
+        diagnostic_token_ids={"swapped_answer_head": 2},
+    )
+    assert result["hook_forward_passes_by_layer"] == {"0": 2}
+    assert result["all_prompt_positions_patched"] is True
+    diagnostic = result["intervention_diagnostics"]
+    assert diagnostic["all_hooks_fired"] is True
+    assert diagnostic["all_finite"] is True
+    assert diagnostic["by_layer"]["0"]["max_relative_norm_match_error"] < 1e-6
 
 
 def test_capture_loading_is_observation_only_and_marks_evidence_positions() -> None:
@@ -370,6 +432,108 @@ def test_text_capability_gate_precedes_and_licenses_causal_spending() -> None:
     failed = text_capability_verdict(rows)
     assert failed["verdict"] == "TEXT_PAPER_CAPABILITY_NO_GO"
     assert failed["causal_spending_licensed"] is False
+
+
+def _diagnostic_fixture(*, random_success: bool = False):
+    layers = tuple(range(33, 41))
+    clean_rows = []
+    records = []
+    audit = {
+        "all_hooks_fired": True,
+        "all_finite": True,
+        "all_layers_are_exact_alpha_one_exchange_before_cast": True,
+        "post_cast_audit_passed": True,
+    }
+    for task in anthropic_text_tasks():
+        clean_rows.append(
+            {
+                "task_id": task.task_id,
+                "clean": {
+                    "full_vocabulary_diagnostic_trace": [
+                        {
+                            "tokens": {
+                                "swapped_answer_head": {"logprob": -8.0}
+                            }
+                        }
+                    ]
+                },
+            }
+        )
+        for band in text_diagnostic_bands(layers):
+            for condition in TEXT_DIAGNOSTIC_CONDITIONS:
+                success = condition in {
+                    "exact_alpha1",
+                    "direct_answer_norm_matched",
+                }
+                if condition == "random_alpha1" and random_success:
+                    success = True
+                result = {
+                    "answer_match": success,
+                    "full_vocabulary_diagnostic_trace": [
+                        {
+                            "tokens": {
+                                "swapped_answer_head": {"logprob": -2.0}
+                            }
+                        }
+                    ],
+                }
+                if condition == "direct_answer_norm_matched":
+                    result["intervention_diagnostics"] = {
+                        "all_hooks_fired": True,
+                        "all_finite": True,
+                        "by_layer": {
+                            str(layer): {"max_relative_norm_match_error": 0.0}
+                            for layer in band
+                        },
+                    }
+                else:
+                    result["intervention_diagnostics"] = audit
+                records.append(
+                    {
+                        "task_id": task.task_id,
+                        "band": list(band),
+                        "condition": condition,
+                        "result": result,
+                    }
+                )
+    return layers, clean_rows, records
+
+
+def test_text_diagnostic_selects_only_an_audited_specific_development_band() -> None:
+    layers, clean_rows, records = _diagnostic_fixture()
+    report = text_swap_diagnostic_report(
+        records, clean_rows=clean_rows, layers=layers
+    )
+    assert report["verdict"] == "TEXT_DIAGNOSTIC_ALPHA1_CANDIDATE_FOUND"
+    assert report["selected_band_for_fresh_confirmation"] == [40]
+    assert report["fresh_confirmation_required"] is True
+    assert report["multimodal_stage_licensed"] is False
+    assert all(row["coordinate_audits_pass"] for row in report["bands"])
+    assert all(row["matched_controls_pass"] for row in report["bands"])
+
+
+def test_text_diagnostic_refuses_a_candidate_reproduced_by_random_control() -> None:
+    layers, clean_rows, records = _diagnostic_fixture(random_success=True)
+    report = text_swap_diagnostic_report(
+        records, clean_rows=clean_rows, layers=layers
+    )
+    assert report["verdict"] == "TEXT_DIAGNOSTIC_NO_ALPHA1_CANDIDATE"
+    assert report["selected_band_for_fresh_confirmation"] is None
+
+
+def test_text_diagnostic_refuses_a_control_without_hook_integrity() -> None:
+    layers, clean_rows, records = _diagnostic_fixture()
+    broken = next(
+        row
+        for row in records
+        if row["condition"] == "unrelated_alpha1"
+    )
+    broken["result"].pop("intervention_diagnostics")
+    report = text_swap_diagnostic_report(
+        records, clean_rows=clean_rows, layers=layers
+    )
+    assert report["verdict"] == "TEXT_DIAGNOSTIC_AUDIT_FAILED"
+    assert report["selected_band_for_fresh_confirmation"] is None
 
 
 def test_confirmation_design_is_frozen_only_after_both_gates() -> None:

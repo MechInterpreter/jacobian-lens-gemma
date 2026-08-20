@@ -13,6 +13,7 @@ that means something other than what it would be reported as.
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 import pytest
@@ -236,6 +237,30 @@ def test_swap_preserves_dtype_and_batches(V):
         assert patched.dtype == dtype and patched.shape == h.shape
         assert record["n_positions"] == 5
         assert len(record["coordinates_before"]) == 5
+        assert record["model_dtype"] == str(dtype)
+        assert math.isfinite(record["max_post_cast_coordinate_update_error"])
+        assert math.isfinite(
+            record["max_post_cast_relative_coordinate_update_error"]
+        )
+
+
+def test_hook_retains_one_post_cast_audit_per_forward(backend, bases):
+    inputs, _, _ = _identity_setup(backend)
+    layer = PRIMARY_BAND[-1]
+    with coordinate_swap_layer(
+        backend.blocks, bases[layer], alpha=1.0, prompt_len=inputs.prompt_len
+    ) as stats:
+        backend.forward_logits(inputs.tensors)
+        backend.forward_logits(inputs.tensors)
+    assert stats["n_forward_passes"] == 2
+    assert len(stats["swap_history"]) == 2
+    assert all(
+        row["alpha_one_is_exact_exchange"] for row in stats["swap_history"]
+    )
+    assert all(
+        math.isfinite(row["max_post_cast_relative_coordinate_update_error"])
+        for row in stats["swap_history"]
+    )
 
 
 def test_alpha_must_be_finite(V):

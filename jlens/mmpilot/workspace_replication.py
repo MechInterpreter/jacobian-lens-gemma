@@ -23,15 +23,25 @@ import math
 import re
 import statistics
 from collections.abc import Mapping, Sequence
+from contextlib import ExitStack, contextmanager
 from dataclasses import asdict, dataclass
 
 import torch
+from torch import nn
 
 from jlens.hooks import ActivationRecorder
-from jlens.mmpilot.coordinate_swap import coordinate_swap_band, read_coordinates
+from jlens.mmpilot.coordinate_swap import (
+    PRIMARY_POSITION_RULE,
+    SwapBasis,
+    coordinate_swap_band,
+    read_coordinates,
+    resolve_positions,
+    swap_coordinates,
+    tensor_checksum,
+)
 from jlens.mmpilot.store import payload_checksum
 
-PROTOCOL_VERSION = "mmpilot.paper_first_workspace_replication.v5"
+PROTOCOL_VERSION = "mmpilot.paper_first_workspace_replication.v6"
 TEXT_INPUT_PROTOCOL_VERSION = "mmpilot.assistant_prefill_completion.v1"
 TEXT_OUTPUT_ENDPOINT_VERSION = "mmpilot.unrestricted_greedy_semantic_head_answer.v2"
 TEXT_MAX_NEW_TOKENS = 2
@@ -61,6 +71,15 @@ _NEGATION_MARKERS = frozenset({"not", "no", "non", "never", "except", "outside"}
 LOADING_VERSION = "mmpilot.clean_source_loading.v1"
 LOCALIZATION_VERSION = "mmpilot.loading_only_localization.v1"
 CONFIRMATION_VERSION = "mmpilot.fresh_multimodal_confirmation.v1"
+TEXT_DIAGNOSTIC_VERSION = "mmpilot.paper_first_text_swap_diagnostic.v1"
+TEXT_DIAGNOSTIC_CONDITIONS = (
+    "exact_alpha1",
+    "zero",
+    "random_alpha1",
+    "unrelated_alpha1",
+    "direct_answer_norm_matched",
+)
+TEXT_POST_CAST_MAX_RELATIVE_ERROR = 0.02
 
 
 class WorkspaceReplicationRefused(RuntimeError):
@@ -179,6 +198,44 @@ def text_task_digest(tasks: Sequence[TextReplicationTask] | None = None) -> str:
     )
 
 
+def semantic_answer_concept(answer: str) -> str:
+    """The single-token semantic head used only for causal diagnostics.
+
+    Free generation remains the primary endpoint.  This helper merely maps a
+    digit to its English number word so Gemma's whitespace-plus-digit
+    tokenization cannot prevent a full-vocabulary, non-teacher-forced trace or
+    a direct-answer positive control.  Every non-digit answer is unchanged.
+    """
+
+    normalized = str(answer).strip()
+    return _NUMBER_WORDS.get(normalized, normalized)
+
+
+def text_diagnostic_bands(layers: Sequence[int]) -> tuple[tuple[int, ...], ...]:
+    """Predeclare every singleton and every suffix band, without duplicates.
+
+    The completed L33--L40 run tested only the full eight-layer band.  These
+    development-only conditions distinguish a localized effect from repeated
+    exchange/cancellation.  Any selected condition still requires a fresh
+    confirmation before it can support a claim.
+    """
+
+    ordered = tuple(sorted(set(map(int, layers))))
+    if not ordered:
+        raise WorkspaceReplicationRefused("text diagnostics need at least one layer")
+    if ordered != tuple(range(ordered[0], ordered[-1] + 1)):
+        raise WorkspaceReplicationRefused(
+            f"text diagnostic layers must be contiguous, got {list(ordered)}"
+        )
+    candidates = [(layer,) for layer in ordered]
+    candidates.extend(tuple(ordered[index:]) for index in range(len(ordered) - 1))
+    unique: list[tuple[int, ...]] = []
+    for band in candidates:
+        if band not in unique:
+            unique.append(band)
+    return tuple(unique)
+
+
 def build_assistant_prefill_completion_inputs(backend, prompt: str):
     """Adapt a literal completion task to Gemma's instruction interface.
 
@@ -283,6 +340,7 @@ def unrestricted_greedy_completion(
     *,
     answer: str,
     max_new_tokens: int = TEXT_MAX_NEW_TOKENS,
+    diagnostic_token_ids: Mapping[str, int] | None = None,
 ) -> dict:
     """Generate a complete answer without candidates or teacher forcing.
 
@@ -315,8 +373,13 @@ def unrestricted_greedy_completion(
             "generation must begin at the untouched prompt boundary"
         )
 
+    diagnostic_ids = {
+        str(name): int(token_id)
+        for name, token_id in dict(diagnostic_token_ids or {}).items()
+    }
     generated: list[int] = []
-    for _ in range(budget):
+    diagnostic_trace: list[dict] = []
+    for step_index in range(budget):
         step_tensors = (
             tensors
             if not generated
@@ -328,7 +391,32 @@ def unrestricted_greedy_completion(
             raise WorkspaceReplicationRefused(
                 "non-finite logits during unrestricted generation"
             )
-        generated.append(int(step.argmax()))
+        top_id = int(step.argmax())
+        log_normalizer = torch.logsumexp(step, dim=-1)
+        token_rows = {}
+        for name, token_id in diagnostic_ids.items():
+            if not 0 <= token_id < int(step.shape[0]):
+                raise WorkspaceReplicationRefused(
+                    f"diagnostic token {name!r} id {token_id} is outside a "
+                    f"vocabulary of size {int(step.shape[0])}"
+                )
+            token_logit = step[token_id]
+            token_rows[name] = {
+                "token_id": token_id,
+                "logit": float(token_logit),
+                "logprob": float(token_logit - log_normalizer),
+                "rank": int((step > token_logit).sum()) + 1,
+                "is_global_top1": token_id == top_id,
+                "margin_to_global_top1": float(token_logit - step[top_id]),
+            }
+        diagnostic_trace.append(
+            {
+                "step": int(step_index),
+                "selected_token_id": top_id,
+                "tokens": token_rows,
+            }
+        )
+        generated.append(top_id)
 
     text = "".join(decoder(token_id) for token_id in generated)
     return {
@@ -347,6 +435,8 @@ def unrestricted_greedy_completion(
         "normalized_answer": normalize_generated_text(str(answer)),
         "answer_match_rule": TEXT_ANSWER_MATCH_RULE,
         "answer_match": bool(completion_answer_matches(text, str(answer))),
+        "full_vocabulary_diagnostic_is_teacher_forced": False,
+        "full_vocabulary_diagnostic_trace": diagnostic_trace,
     }
 
 
@@ -360,6 +450,7 @@ def unrestricted_greedy_swap_trial(
     answer: str,
     max_new_tokens: int = TEXT_MAX_NEW_TOKENS,
     position_rule: str = "all_prompt_positions",
+    diagnostic_token_ids: Mapping[str, int] | None = None,
 ) -> dict:
     """Run the paper's swap and freely generate the complete answer.
 
@@ -382,6 +473,7 @@ def unrestricted_greedy_swap_trial(
             inputs,
             answer=str(answer),
             max_new_tokens=int(max_new_tokens),
+            diagnostic_token_ids=diagnostic_token_ids,
         )
 
     positions = {
@@ -405,6 +497,342 @@ def unrestricted_greedy_swap_trial(
             str(layer): int(stats[layer].get("n_forward_passes") or 0)
             for layer in sorted(stats)
         },
+        "intervention_diagnostics": summarize_swap_diagnostics(stats),
+    }
+
+
+def _finite_numbers(value) -> bool:
+    if isinstance(value, Mapping):
+        return all(_finite_numbers(item) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return all(_finite_numbers(item) for item in value)
+    if isinstance(value, (int, float)):
+        return math.isfinite(float(value))
+    return True
+
+
+def summarize_swap_diagnostics(stats: Mapping[int, Mapping]) -> dict:
+    """Compact the real hook audit without persisting activation-sized arrays."""
+
+    by_layer = {}
+    for layer in sorted(map(int, stats)):
+        row = dict(stats[layer])
+        history = list(row.get("swap_history") or ())
+        if not history and row.get("swap"):
+            history = [dict(row["swap"])]
+        update_ratios = []
+        activation_ratios = []
+        for record in history:
+            updates = list(record.get("update_norm") or ())
+            before = list(record.get("activation_norm_before") or ())
+            after = list(record.get("activation_norm_after") or ())
+            update_ratios.extend(
+                float(update) / max(float(norm), 1e-12)
+                for update, norm in zip(updates, before, strict=True)
+            )
+            activation_ratios.extend(
+                float(end) / max(float(start), 1e-12)
+                for start, end in zip(before, after, strict=True)
+            )
+        basis = dict(row.get("basis") or {})
+        basis_diagnostics = dict(basis.get("diagnostics") or {})
+        by_layer[str(layer)] = {
+            "n_forward_passes": int(row.get("n_forward_passes") or 0),
+            "n_swap_records": len(history),
+            "n_positions": int(row.get("n_positions") or 0),
+            "condition_number": basis_diagnostics.get("condition_number"),
+            "numerical_rank": basis_diagnostics.get("numerical_rank"),
+            "all_finite": bool(history) and all(_finite_numbers(record) for record in history),
+            "all_alpha_one_exact_before_cast": bool(history)
+            and all(bool(record.get("alpha_one_is_exact_exchange")) for record in history),
+            "max_ideal_coordinate_error": max(
+                (float(record["max_coordinate_update_error"]) for record in history),
+                default=None,
+            ),
+            "max_post_cast_coordinate_error": max(
+                (
+                    float(record["max_post_cast_coordinate_update_error"])
+                    for record in history
+                ),
+                default=None,
+            ),
+            "max_post_cast_relative_coordinate_error": max(
+                (
+                    float(record["max_post_cast_relative_coordinate_update_error"])
+                    for record in history
+                ),
+                default=None,
+            ),
+            "max_post_cast_relative_residual_drift": max(
+                (
+                    float(record["max_post_cast_relative_orthogonal_residual_drift"])
+                    for record in history
+                ),
+                default=None,
+            ),
+            "max_update_to_activation_ratio": max(update_ratios, default=None),
+            "min_after_to_before_activation_ratio": min(
+                activation_ratios, default=None
+            ),
+            "max_after_to_before_activation_ratio": max(
+                activation_ratios, default=None
+            ),
+        }
+    layers = list(by_layer.values())
+    relative_errors = [
+        float(row["max_post_cast_relative_coordinate_error"])
+        for row in layers
+        if row["max_post_cast_relative_coordinate_error"] is not None
+    ]
+    residual_drifts = [
+        float(row["max_post_cast_relative_residual_drift"])
+        for row in layers
+        if row["max_post_cast_relative_residual_drift"] is not None
+    ]
+    payload = {
+        "version": TEXT_DIAGNOSTIC_VERSION,
+        "by_layer": by_layer,
+        "all_hooks_fired": bool(layers)
+        and all(
+            row["n_forward_passes"] == TEXT_MAX_NEW_TOKENS
+            and row["n_swap_records"] == TEXT_MAX_NEW_TOKENS
+            for row in layers
+        ),
+        "all_finite": bool(layers) and all(row["all_finite"] for row in layers),
+        "all_layers_are_exact_alpha_one_exchange_before_cast": bool(layers)
+        and all(row["all_alpha_one_exact_before_cast"] for row in layers),
+        "max_post_cast_relative_coordinate_error": max(
+            relative_errors, default=None
+        ),
+        "max_post_cast_relative_residual_drift": max(
+            residual_drifts, default=None
+        ),
+        "post_cast_error_threshold": TEXT_POST_CAST_MAX_RELATIVE_ERROR,
+        "post_cast_coordinate_audit_passed": bool(relative_errors)
+        and max(relative_errors) <= TEXT_POST_CAST_MAX_RELATIVE_ERROR,
+        "post_cast_residual_audit_passed": bool(residual_drifts)
+        and max(residual_drifts) <= TEXT_POST_CAST_MAX_RELATIVE_ERROR,
+        "post_cast_audit_passed": bool(relative_errors)
+        and bool(residual_drifts)
+        and max(relative_errors) <= TEXT_POST_CAST_MAX_RELATIVE_ERROR
+        and max(residual_drifts) <= TEXT_POST_CAST_MAX_RELATIVE_ERROR,
+    }
+    return {**payload, "diagnostic_checksum": payload_checksum(payload)}
+
+
+@contextmanager
+def _norm_matched_direct_answer_band(
+    blocks: Sequence[nn.Module],
+    bases: Mapping[int, SwapBasis],
+    answer_vectors: Mapping[int, torch.Tensor],
+    *,
+    prompt_len: int,
+    position_rule: str = PRIMARY_POSITION_RULE,
+    evidence_span: Sequence[int] | None = None,
+):
+    """Add the answer direction with each position's exact-swap update norm.
+
+    This is a positive control, not a coordinate swap.  Its update has the
+    same post-cast L2 norm as the exact exchange would have had at that layer
+    and position, so a failure cannot be dismissed as comparing interventions
+    of unrelated intensity.
+    """
+
+    if set(map(int, bases)) != set(map(int, answer_vectors)):
+        raise WorkspaceReplicationRefused(
+            "direct-answer vectors must cover exactly the coordinate-swap band"
+        )
+    stats: dict[int, dict] = {}
+    with ExitStack() as stack:
+        for layer in sorted(map(int, bases)):
+            basis = bases[layer]
+            trainable = [
+                name
+                for name, parameter in blocks[layer].named_parameters()
+                if parameter.requires_grad
+            ]
+            if trainable:
+                raise WorkspaceReplicationRefused(
+                    f"direct-answer control found trainable parameters at layer "
+                    f"{layer}: {trainable}"
+                )
+            answer = answer_vectors[layer].detach().to(torch.float64).flatten()
+            if answer.numel() != basis.d_model or not bool(torch.isfinite(answer).all()):
+                raise WorkspaceReplicationRefused(
+                    f"invalid direct-answer vector at layer {layer}"
+                )
+            norm = float(answer.norm())
+            if norm == 0.0:
+                raise WorkspaceReplicationRefused(
+                    f"zero direct-answer vector at layer {layer}"
+                )
+            unit_answer = answer / norm
+            row = {
+                "layer": layer,
+                "n_forward_passes": 0,
+                "positions": None,
+                "history": [],
+                "answer_vector_norm": norm,
+                "answer_vector_checksum": tensor_checksum(answer),
+            }
+            stats[layer] = row
+
+            def make_hook(
+                layer_index: int,
+                layer_basis: SwapBasis,
+                layer_unit_answer: torch.Tensor,
+                layer_row: dict,
+            ):
+                def hook(module, inputs, output):
+                    is_tensor = torch.is_tensor(output)
+                    hidden = output if is_tensor else output[0]
+                    positions = resolve_positions(
+                        position_rule,
+                        prompt_len=int(prompt_len),
+                        seq_len=int(hidden.shape[1]),
+                        evidence_span=evidence_span,
+                    )
+                    selected = hidden[0, positions]
+                    exact_after_cast, _ = swap_coordinates(
+                        selected, layer_basis.V, alpha=1.0
+                    )
+                    matched_norm = (
+                        exact_after_cast.detach().float() - selected.detach().float()
+                    ).norm(dim=-1)
+                    direction = layer_unit_answer.to(
+                        device=hidden.device, dtype=torch.float32
+                    )
+                    proposed = selected.detach().float() + matched_norm[:, None] * direction
+                    patched = proposed.to(hidden.dtype)
+                    actual_norm = (
+                        patched.detach().float() - selected.detach().float()
+                    ).norm(dim=-1)
+                    relative_match_error = (
+                        (actual_norm - matched_norm).abs()
+                        / matched_norm.clamp_min(1.0)
+                    )
+                    new_hidden = hidden.clone()
+                    new_hidden[0, positions] = patched
+                    layer_row["n_forward_passes"] += 1
+                    layer_row["positions"] = list(positions)
+                    layer_row["history"].append(
+                        {
+                            "n_positions": len(positions),
+                            "all_finite": bool(
+                                torch.isfinite(patched).all()
+                                and torch.isfinite(relative_match_error).all()
+                            ),
+                            "max_relative_norm_match_error": float(
+                                relative_match_error.max()
+                            ),
+                            "max_update_to_activation_ratio": float(
+                                (
+                                    actual_norm
+                                    / selected.detach().float().norm(dim=-1).clamp_min(1.0)
+                                ).max()
+                            ),
+                        }
+                    )
+                    if is_tensor:
+                        return new_hidden
+                    return (new_hidden, *tuple(output)[1:])
+
+                return hook
+
+            handle = blocks[layer].register_forward_hook(
+                make_hook(layer, basis, unit_answer, row)
+            )
+            stack.callback(handle.remove)
+        yield stats
+
+
+def summarize_direct_answer_diagnostics(stats: Mapping[int, Mapping]) -> dict:
+    by_layer = {}
+    for layer in sorted(map(int, stats)):
+        row = dict(stats[layer])
+        history = list(row.get("history") or ())
+        by_layer[str(layer)] = {
+            "n_forward_passes": int(row.get("n_forward_passes") or 0),
+            "n_records": len(history),
+            "all_finite": bool(history)
+            and all(bool(record.get("all_finite")) for record in history),
+            "max_relative_norm_match_error": max(
+                (
+                    float(record["max_relative_norm_match_error"])
+                    for record in history
+                ),
+                default=None,
+            ),
+            "max_update_to_activation_ratio": max(
+                (
+                    float(record["max_update_to_activation_ratio"])
+                    for record in history
+                ),
+                default=None,
+            ),
+        }
+    payload = {
+        "version": TEXT_DIAGNOSTIC_VERSION,
+        "control": "direct_answer_norm_matched_to_exact_swap_per_position",
+        "by_layer": by_layer,
+        "all_hooks_fired": bool(by_layer)
+        and all(
+            row["n_forward_passes"] == TEXT_MAX_NEW_TOKENS
+            and row["n_records"] == TEXT_MAX_NEW_TOKENS
+            for row in by_layer.values()
+        ),
+        "all_finite": bool(by_layer)
+        and all(row["all_finite"] for row in by_layer.values()),
+    }
+    return {**payload, "diagnostic_checksum": payload_checksum(payload)}
+
+
+@torch.no_grad()
+def unrestricted_greedy_direct_answer_trial(
+    backend,
+    inputs,
+    *,
+    bases: Mapping[int, SwapBasis],
+    answer_vectors: Mapping[int, torch.Tensor],
+    answer: str,
+    max_new_tokens: int = TEXT_MAX_NEW_TOKENS,
+    position_rule: str = PRIMARY_POSITION_RULE,
+    diagnostic_token_ids: Mapping[str, int] | None = None,
+) -> dict:
+    with _norm_matched_direct_answer_band(
+        backend.blocks,
+        bases,
+        answer_vectors,
+        prompt_len=int(inputs.prompt_len),
+        position_rule=str(position_rule),
+        evidence_span=getattr(inputs, "modality_token_range", None),
+    ) as stats:
+        generated = unrestricted_greedy_completion(
+            backend,
+            inputs,
+            answer=str(answer),
+            max_new_tokens=int(max_new_tokens),
+            diagnostic_token_ids=diagnostic_token_ids,
+        )
+    positions = {
+        str(layer): list(stats[layer].get("positions") or [])
+        for layer in sorted(stats)
+    }
+    expected = list(range(int(inputs.prompt_len)))
+    return {
+        **generated,
+        "condition": "direct_answer_norm_matched",
+        "position_rule": str(position_rule),
+        "layers_patched": sorted(map(int, stats)),
+        "positions_patched": positions,
+        "all_prompt_positions_patched": all(
+            layer_positions == expected for layer_positions in positions.values()
+        ),
+        "hook_forward_passes_by_layer": {
+            str(layer): int(stats[layer].get("n_forward_passes") or 0)
+            for layer in sorted(stats)
+        },
+        "intervention_diagnostics": summarize_direct_answer_diagnostics(stats),
     }
 
 
@@ -825,6 +1253,228 @@ def text_replication_verdict(rows: Sequence[Mapping]) -> dict:
     return {**payload, "report_checksum": payload_checksum(payload)}
 
 
+def _best_diagnostic_logprob(result: Mapping, name: str) -> float | None:
+    values = []
+    for step in result.get("full_vocabulary_diagnostic_trace") or ():
+        token = dict(step.get("tokens") or {}).get(str(name))
+        if token is not None:
+            values.append(float(token["logprob"]))
+    return max(values) if values else None
+
+
+def text_swap_diagnostic_report(
+    records: Sequence[Mapping],
+    *,
+    clean_rows: Sequence[Mapping],
+    layers: Sequence[int],
+) -> dict:
+    """Summarize the predeclared layer/band diagnostic without claiming confirmation."""
+
+    tasks = {task.task_id: task for task in anthropic_text_tasks()}
+    bands = text_diagnostic_bands(layers)
+    expected = {
+        (task_id, tuple(band), condition)
+        for task_id in tasks
+        for band in bands
+        for condition in TEXT_DIAGNOSTIC_CONDITIONS
+    }
+    indexed = {
+        (
+            str(row.get("task_id")),
+            tuple(map(int, row.get("band") or ())),
+            str(row.get("condition")),
+        ): dict(row)
+        for row in records
+    }
+    missing = sorted(
+        {
+            f"{task}|{'-'.join(map(str, band))}|{condition}"
+            for task, band, condition in expected - set(indexed)
+        }
+    )
+    clean_by_task = {str(row["task_id"]): dict(row) for row in clean_rows}
+    band_rows = []
+    for band in bands:
+        exact_successes = 0
+        flexible_successes = 0
+        implicit_success = False
+        direct_successes = 0
+        control_successes = {name: 0 for name in ("zero", "random_alpha1", "unrelated_alpha1")}
+        audit_passes = []
+        task_rows = []
+        for task_id, task in tasks.items():
+            cell = {
+                condition: indexed.get((task_id, tuple(band), condition))
+                for condition in TEXT_DIAGNOSTIC_CONDITIONS
+            }
+            exact_record = cell["exact_alpha1"]
+            exact_result = dict((exact_record or {}).get("result") or {})
+            exact_success = bool(exact_result.get("answer_match"))
+            exact_successes += int(exact_success)
+            if task.implicit_intermediate:
+                implicit_success = exact_success
+            elif exact_success:
+                flexible_successes += 1
+            direct_result = dict(
+                (cell["direct_answer_norm_matched"] or {}).get("result") or {}
+            )
+            direct_successes += int(bool(direct_result.get("answer_match")))
+            control_results = {}
+            control_integrity = {}
+            for control in control_successes:
+                result = dict((cell[control] or {}).get("result") or {})
+                success = bool(result.get("answer_match"))
+                control_successes[control] += int(success)
+                control_results[control] = success
+                control_diagnostics = dict(
+                    result.get("intervention_diagnostics") or {}
+                )
+                control_integrity[control] = bool(
+                    control_diagnostics.get("all_hooks_fired")
+                    and control_diagnostics.get("all_finite")
+                )
+            direct_diagnostics = dict(
+                direct_result.get("intervention_diagnostics") or {}
+            )
+            direct_layer_rows = list(
+                dict(direct_diagnostics.get("by_layer") or {}).values()
+            )
+            direct_integrity = bool(
+                direct_diagnostics.get("all_hooks_fired")
+                and direct_diagnostics.get("all_finite")
+                and direct_layer_rows
+                and max(
+                    float(row.get("max_relative_norm_match_error", math.inf))
+                    for row in direct_layer_rows
+                )
+                <= TEXT_POST_CAST_MAX_RELATIVE_ERROR
+            )
+            diagnostics = dict(exact_result.get("intervention_diagnostics") or {})
+            audit_pass = bool(
+                diagnostics.get("all_hooks_fired")
+                and diagnostics.get("all_finite")
+                and diagnostics.get(
+                    "all_layers_are_exact_alpha_one_exchange_before_cast"
+                )
+                and diagnostics.get("post_cast_audit_passed")
+            )
+            all_condition_integrity = bool(
+                audit_pass
+                and direct_integrity
+                and all(control_integrity.values())
+            )
+            audit_passes.append(all_condition_integrity)
+            clean_result = dict((clean_by_task.get(task_id) or {}).get("clean") or {})
+            clean_logprob = _best_diagnostic_logprob(
+                clean_result, "swapped_answer_head"
+            )
+            exact_logprob = _best_diagnostic_logprob(
+                exact_result, "swapped_answer_head"
+            )
+            task_rows.append(
+                {
+                    "task_id": task_id,
+                    "family": task.family,
+                    "exact_swapped_answer_generated": exact_success,
+                    "direct_answer_swapped_answer_generated": bool(
+                        direct_result.get("answer_match")
+                    ),
+                    "control_swapped_answer_generated": control_results,
+                    "coordinate_audit_passed": audit_pass,
+                    "control_integrity": control_integrity,
+                    "direct_answer_integrity": direct_integrity,
+                    "all_condition_integrity_passed": all_condition_integrity,
+                    "swapped_answer_head_best_logprob_change": (
+                        exact_logprob - clean_logprob
+                        if exact_logprob is not None and clean_logprob is not None
+                        else None
+                    ),
+                }
+            )
+        complete = all(
+            (task_id, tuple(band), condition) in indexed
+            for task_id in tasks
+            for condition in TEXT_DIAGNOSTIC_CONDITIONS
+        )
+        flexible_rate = flexible_successes / 6.0
+        controls_pass = all(count == 0 for count in control_successes.values())
+        audits_pass = bool(audit_passes) and all(audit_passes)
+        positive_control_rate = direct_successes / len(tasks)
+        eligible = bool(
+            complete
+            and audits_pass
+            and controls_pass
+            and implicit_success
+            and flexible_rate >= 0.5
+            and positive_control_rate >= 0.5
+        )
+        band_rows.append(
+            {
+                "band": list(band),
+                "complete": complete,
+                "coordinate_audits_pass": audits_pass,
+                "implicit_two_hop_success": implicit_success,
+                "flexible_function_success_rate": flexible_rate,
+                "exact_successes": exact_successes,
+                "direct_answer_positive_control_rate": positive_control_rate,
+                "control_success_counts": control_successes,
+                "matched_controls_pass": controls_pass,
+                "eligible_for_fresh_confirmation": eligible,
+                "tasks": task_rows,
+            }
+        )
+    candidates = [row for row in band_rows if row["eligible_for_fresh_confirmation"]]
+    candidates.sort(
+        key=lambda row: (
+            -int(row["exact_successes"]),
+            -float(row["direct_answer_positive_control_rate"]),
+            len(row["band"]),
+            -int(row["band"][0]),
+        )
+    )
+    any_audit_failure = any(
+        row["complete"] and not row["coordinate_audits_pass"] for row in band_rows
+    )
+    selected = (
+        candidates[0]["band"]
+        if candidates and not missing and not any_audit_failure
+        else None
+    )
+    verdict = (
+        "TEXT_DIAGNOSTIC_INCOMPLETE"
+        if missing
+        else "TEXT_DIAGNOSTIC_AUDIT_FAILED"
+        if any_audit_failure
+        else "TEXT_DIAGNOSTIC_ALPHA1_CANDIDATE_FOUND"
+        if selected
+        else "TEXT_DIAGNOSTIC_NO_ALPHA1_CANDIDATE"
+    )
+    payload = {
+        "version": TEXT_DIAGNOSTIC_VERSION,
+        "verdict": verdict,
+        "development_only": True,
+        "primary_endpoint": "unrestricted_greedy_complete_answer",
+        "teacher_forcing_used": False,
+        "tested_alpha": 1.0,
+        "tested_layers": list(map(int, layers)),
+        "tested_bands": [list(band) for band in bands],
+        "conditions": list(TEXT_DIAGNOSTIC_CONDITIONS),
+        "post_cast_relative_error_threshold": TEXT_POST_CAST_MAX_RELATIVE_ERROR,
+        "missing_units": missing,
+        "bands": band_rows,
+        "selected_band_for_fresh_confirmation": selected,
+        "selection_rule": (
+            "eligible requires audited exact alpha=1, implicit success, at least "
+            "3/6 flexible-function successes, zero random/unrelated successes, "
+            "and >=50% norm-matched direct-answer success; ties maximize exact "
+            "then direct-answer successes, then prefer the shortest deeper band"
+        ),
+        "fresh_confirmation_required": selected is not None,
+        "multimodal_stage_licensed": False,
+    }
+    return {**payload, "report_checksum": payload_checksum(payload)}
+
+
 def freeze_confirmation_design(
     *,
     text_verdict: Mapping,
@@ -954,6 +1604,9 @@ __all__ = [
     "TEXT_ANSWER_MATCH_RULE",
     "TEXT_MAX_NEW_TOKENS",
     "TEXT_OUTPUT_ENDPOINT_VERSION",
+    "TEXT_DIAGNOSTIC_CONDITIONS",
+    "TEXT_DIAGNOSTIC_VERSION",
+    "TEXT_POST_CAST_MAX_RELATIVE_ERROR",
     "TextReplicationTask",
     "WorkspaceReplicationRefused",
     "anthropic_text_tasks",
@@ -966,10 +1619,16 @@ __all__ = [
     "holm_adjust",
     "paired_binary_superiority",
     "select_pair_from_loading",
+    "semantic_answer_concept",
+    "summarize_direct_answer_diagnostics",
     "summarize_loading",
+    "summarize_swap_diagnostics",
+    "text_diagnostic_bands",
     "text_replication_verdict",
+    "text_swap_diagnostic_report",
     "text_capability_verdict",
     "text_task_digest",
     "unrestricted_greedy_completion",
+    "unrestricted_greedy_direct_answer_trial",
     "unrestricted_greedy_swap_trial",
 ]

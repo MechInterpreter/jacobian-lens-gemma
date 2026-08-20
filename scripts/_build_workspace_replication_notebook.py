@@ -40,6 +40,12 @@ The order is mandatory:
    Gemma tokenizes the paper's digit outputs as whitespace + digit, so success
    is the complete answer from unrestricted two-token greedy generation—not a
    one-token prefix, candidate score, or teacher-forced likelihood.
+1b. **Bounded text diagnostic if the full band is null.** Audit the actual
+   post-cast exchange, then test every L33--L40 singleton and suffix band at
+   exact `alpha=1` against zero, random, unrelated, and norm-matched
+   direct-answer controls. This is development-only localization; any selected
+   band still requires a fresh confirmation and cannot retroactively change the
+   completed full-band null.
 2. **Clean source loading.** On development media, measure whether the source
    concept is actually visible through the matched pooled lens at each layer and
    prompt position. Causal outcomes do not exist yet.
@@ -99,12 +105,14 @@ code(
     r'''
 RUN_REAL_WORKSPACE_REPLICATION = False
 RUN_STAGE1_TEXT_REPLICATION = False
+RUN_STAGE1B_TEXT_DIAGNOSTIC = False
 RUN_STAGE2_MULTIMODAL_LOADING_DEVELOPMENT = False
 RUN_STAGE3_FREEZE_DESIGN = False
 RUN_STAGE4_FRESH_CONFIRMATION = False
 RUN_STAGE5_WRITE_REPORT = False
 
 CONFIRM_MODEL_LOAD = False
+CONFIRM_TEXT_DIAGNOSTIC_BUDGET = False
 CONFIRM_DEVELOPMENT_BUDGET = False
 CONFIRM_CONFIRMATION_BUDGET = False
 
@@ -116,6 +124,7 @@ AUDIO_PROTOCOL_FINGERPRINT = (
 )
 LAYERS = tuple(range(33, 41))
 TEXT_PRIMARY_ALPHA = 1.0
+TEXT_DIAGNOSTIC_RANDOM_SEED = 20260820
 MULTIMODAL_PRIMARY_ALPHA = 1.0
 MULTIMODAL_SENSITIVITY_ALPHA = 0.75
 CANDIDATE_PAIRS = (("bird", "cat"), ("bird", "zebra"), ("bird", "giraffe"))
@@ -133,11 +142,14 @@ PROMPT_PROTOCOL = "mmpilot.implicit_animal_property_open_output.v1"
 REAL_MODE = bool(RUN_REAL_WORKSPACE_REPLICATION)
 MODEL_STAGE = any((
     RUN_STAGE1_TEXT_REPLICATION,
+    RUN_STAGE1B_TEXT_DIAGNOSTIC,
     RUN_STAGE2_MULTIMODAL_LOADING_DEVELOPMENT,
     RUN_STAGE4_FRESH_CONFIRMATION,
 ))
 if MODEL_STAGE and not CONFIRM_MODEL_LOAD:
     print("MODEL STAGES BLOCKED: set CONFIRM_MODEL_LOAD after reading the budget")
+if RUN_STAGE1B_TEXT_DIAGNOSTIC and not CONFIRM_TEXT_DIAGNOSTIC_BUDGET:
+    print("TEXT DIAGNOSTIC BLOCKED: set CONFIRM_TEXT_DIAGNOSTIC_BUDGET")
 if RUN_STAGE2_MULTIMODAL_LOADING_DEVELOPMENT and not CONFIRM_DEVELOPMENT_BUDGET:
     print("DEVELOPMENT BLOCKED: set CONFIRM_DEVELOPMENT_BUDGET")
 if RUN_STAGE4_FRESH_CONFIRMATION and not CONFIRM_CONFIRMATION_BUDGET:
@@ -164,10 +176,32 @@ else:
 TEXT_TASKS = __import__(
     "jlens.mmpilot.workspace_replication", fromlist=["anthropic_text_tasks"]
 ).anthropic_text_tasks()
+TEXT_DIAGNOSTIC_BANDS = __import__(
+    "jlens.mmpilot.workspace_replication", fromlist=["text_diagnostic_bands"]
+).text_diagnostic_bands(LAYERS)
+TEXT_DIAGNOSTIC_CONDITIONS = __import__(
+    "jlens.mmpilot.workspace_replication",
+    fromlist=["TEXT_DIAGNOSTIC_CONDITIONS"],
+).TEXT_DIAGNOSTIC_CONDITIONS
 print("TEXT TASKS", len(TEXT_TASKS))
 print("  unrestricted generation passes", len(TEXT_TASKS) * 2 * 4)
 print("  clean source-loading passes", len(TEXT_TASKS))
 print("  Stage-1 total passes", len(TEXT_TASKS) * 2 * 4 + len(TEXT_TASKS))
+print("TEXT DIAGNOSTIC — development only, no fitting")
+print("  singleton and suffix bands", len(TEXT_DIAGNOSTIC_BANDS),
+      [list(band) for band in TEXT_DIAGNOSTIC_BANDS])
+print("  conditions per task/band", list(TEXT_DIAGNOSTIC_CONDITIONS))
+print("  unrestricted forward passes",
+      len(TEXT_TASKS) * len(TEXT_DIAGNOSTIC_BANDS)
+      * len(TEXT_DIAGNOSTIC_CONDITIONS) * 2)
+print("  derived from same-run Stage 1",
+      len(TEXT_TASKS) * 3 * 2,
+      "(full-band exact/random/unrelated; no repeat forwards)")
+print("  newly computed forward passes",
+      len(TEXT_TASKS) * len(TEXT_DIAGNOSTIC_BANDS)
+      * len(TEXT_DIAGNOSTIC_CONDITIONS) * 2 - len(TEXT_TASKS) * 3 * 2)
+print("  backward passes 0")
+print("  resume one two-token condition; maximum completed work lost 0")
 print("DEVELOPMENT UPPER BOUND")
 print("  clean loading forwards", len(CANDIDATE_PAIRS) * DEVELOPMENT_IMAGES_PER_SOURCE * 3)
 print("  no intervention forwards in Stage 2")
@@ -257,6 +291,7 @@ code(
 from jlens.mmpilot.store import RunFingerprint, UnitStore, payload_checksum
 from jlens.mmpilot.workspace_replication import (
     PROTOCOL_VERSION, TEXT_ANSWER_MATCH_RULE, TEXT_COMPLETION_INSTRUCTION,
+    TEXT_DIAGNOSTIC_VERSION, TEXT_POST_CAST_MAX_RELATIVE_ERROR,
     TEXT_INPUT_PROTOCOL_VERSION, TEXT_MAX_NEW_TOKENS, TEXT_OUTPUT_ENDPOINT_VERSION,
     text_task_digest,
 )
@@ -271,6 +306,18 @@ SCIENTIFIC_CONFIG = {
     "model_repo_id": MODEL_REPO_ID, "model_revision": MODEL_REVISION,
     "audio_protocol_fingerprint": AUDIO_PROTOCOL_FINGERPRINT,
     "layers": list(LAYERS), "text_task_digest": text_task_digest(TEXT_TASKS),
+    "text_diagnostic": {
+        "version": TEXT_DIAGNOSTIC_VERSION,
+        "bands": [list(band) for band in TEXT_DIAGNOSTIC_BANDS],
+        "conditions": list(TEXT_DIAGNOSTIC_CONDITIONS),
+        "alpha": 1.0,
+        "random_seed": TEXT_DIAGNOSTIC_RANDOM_SEED,
+        "post_cast_max_relative_coordinate_error": TEXT_POST_CAST_MAX_RELATIVE_ERROR,
+        "primary_endpoint": "unrestricted_greedy_complete_answer",
+        "teacher_forcing_used": False,
+        "selection_is_development_only": True,
+        "fresh_confirmation_required": True,
+    },
     "candidate_pairs": [list(pair) for pair in CANDIDATE_PAIRS],
     "control_concepts": list(CONTROL_CONCEPTS),
     "primary_alpha": 1.0, "sensitivity_alpha": 0.75,
@@ -338,7 +385,14 @@ if REAL_MODE and MODEL_STAGE and CONFIRM_MODEL_LOAD:
     CORRECTED_ARTIFACTS, _ = discover_corrected_band_lenses(
         CORRECTED_RUN_DIR, report=corrected, layers=LAYERS,
     )
-    names = sorted({task.source for task in TEXT_TASKS} | {task.target for task in TEXT_TASKS} | {"zebra", "giraffe", "Japan", "Brazil"})
+    from jlens.mmpilot.workspace_replication import semantic_answer_concept
+    names = sorted(
+        {task.source for task in TEXT_TASKS}
+        | {task.target for task in TEXT_TASKS}
+        | {semantic_answer_concept(task.clean_answer) for task in TEXT_TASKS}
+        | {semantic_answer_concept(task.swapped_answer) for task in TEXT_TASKS}
+        | {"zebra", "giraffe", "Japan", "Brazil"}
+    )
     from jlens.mmpilot.coordinate_swap import resolve_concept_token
     TEXT_CONCEPT_TOKENS = {name: resolve_concept_token(BACKEND.encode_candidate, name) for name in names}
     unembedding = BACKEND.unembedding_weight()
@@ -371,6 +425,7 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
     from jlens.mmpilot.workspace_replication import (
         TEXT_MAX_NEW_TOKENS, build_assistant_prefill_completion_inputs,
         capture_source_loading, text_capability_verdict,
+        semantic_answer_concept,
         text_replication_verdict,
         unrestricted_greedy_completion, unrestricted_greedy_swap_trial,
     )
@@ -391,6 +446,11 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
             clean = unrestricted_greedy_completion(
                 BACKEND, inputs, answer=task.clean_answer,
                 max_new_tokens=TEXT_MAX_NEW_TOKENS,
+                diagnostic_token_ids={
+                    "swapped_answer_head": TEXT_CONCEPT_TOKENS[
+                        semantic_answer_concept(task.swapped_answer)
+                    ].token_id
+                },
             )
             stored = {
                 "task_id": task.task_id,
@@ -448,16 +508,31 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
                 BACKEND, inputs, bases=bases, alpha=1.0,
                 answer=task.swapped_answer,
                 max_new_tokens=TEXT_MAX_NEW_TOKENS,
+                diagnostic_token_ids={
+                    "swapped_answer_head": TEXT_CONCEPT_TOKENS[
+                        semantic_answer_concept(task.swapped_answer)
+                    ].token_id
+                },
             )
             random = unrestricted_greedy_swap_trial(
                 BACKEND, inputs, bases=random_bases, alpha=1.0,
                 answer=task.swapped_answer,
                 max_new_tokens=TEXT_MAX_NEW_TOKENS,
+                diagnostic_token_ids={
+                    "swapped_answer_head": TEXT_CONCEPT_TOKENS[
+                        semantic_answer_concept(task.swapped_answer)
+                    ].token_id
+                },
             )
             unrelated_result = unrestricted_greedy_swap_trial(
                 BACKEND, inputs, bases=unrelated, alpha=1.0,
                 answer=task.swapped_answer,
                 max_new_tokens=TEXT_MAX_NEW_TOKENS,
+                diagnostic_token_ids={
+                    "swapped_answer_head": TEXT_CONCEPT_TOKENS[
+                        semantic_answer_concept(task.swapped_answer)
+                    ].token_id
+                },
             )
             loading = capture_source_loading(
                 BACKEND, inputs, vectors_by_layer=TEXT_TOKEN_VECTORS,
@@ -500,6 +575,217 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
     print(json.dumps(TEXT_VERDICT, indent=2))
 elif RUN_STAGE1_TEXT_REPLICATION:
     print("skipped: real mode/model confirmation required")
+'''
+)
+
+markdown("## 6b. Bounded text diagnostic — audited single layers and suffix bands")
+code(
+    r'''
+TEXT_DIAGNOSTIC_REPORT = STORE.load("metric", "text_swap_diagnostic_report")
+if (
+    REAL_MODE
+    and RUN_STAGE1B_TEXT_DIAGNOSTIC
+    and CONFIRM_MODEL_LOAD
+    and CONFIRM_TEXT_DIAGNOSTIC_BUDGET
+):
+    from jlens.mmpilot.coordinate_swap import (
+        build_swap_basis_from_vectors, random_two_direction_basis,
+    )
+    from jlens.mmpilot.store import safe_key
+    from jlens.mmpilot.workspace_replication import (
+        build_assistant_prefill_completion_inputs, semantic_answer_concept,
+        text_capability_verdict,
+        text_swap_diagnostic_report, unrestricted_greedy_direct_answer_trial,
+        unrestricted_greedy_swap_trial,
+    )
+
+    # Reconstruct the clean gate from checksum-valid units. The diagnostic
+    # never runs if capability did not pass in this fingerprinted run.
+    diagnostic_clean_rows = []
+    for task in TEXT_TASKS:
+        stored = STORE.load(
+            "capability", safe_key("text-paper-capability", task.task_id)
+        )
+        if stored is None:
+            raise RuntimeError(
+                "Stage 6b needs Stage 1 capability units from this run. "
+                "Enable RUN_STAGE1_TEXT_REPLICATION and rerun from the top."
+            )
+        diagnostic_clean_rows.append(stored)
+    diagnostic_capability = text_capability_verdict(diagnostic_clean_rows)
+    if not diagnostic_capability["causal_spending_licensed"]:
+        raise RuntimeError("text capability did not license the diagnostic")
+
+    diagnostic_records = []
+    computed = reused = derived = 0
+    total = (
+        len(TEXT_TASKS) * len(TEXT_DIAGNOSTIC_BANDS)
+        * len(TEXT_DIAGNOSTIC_CONDITIONS)
+    )
+    for task in TEXT_TASKS:
+        baseline = STORE.load(
+            "intervention", safe_key("text-paper", task.task_id)
+        )
+        if baseline is None:
+            raise RuntimeError(
+                "Stage 6b needs the Stage 1 full-band intervention unit from "
+                "this run. Enable RUN_STAGE1_TEXT_REPLICATION and rerun."
+            )
+        inputs = build_assistant_prefill_completion_inputs(BACKEND, task.prompt)
+        answer_name = semantic_answer_concept(task.swapped_answer)
+        diagnostic_tokens = {
+            "swapped_answer_head": TEXT_CONCEPT_TOKENS[answer_name].token_id
+        }
+        bases_all = {
+            layer: build_swap_basis_from_vectors(
+                TEXT_TOKEN_VECTORS[layer][task.source],
+                TEXT_TOKEN_VECTORS[layer][task.target],
+                layer=layer,
+                source=TEXT_CONCEPT_TOKENS[task.source],
+                target=TEXT_CONCEPT_TOKENS[task.target],
+            )
+            for layer in LAYERS
+        }
+        random_all = {
+            layer: random_two_direction_basis(
+                basis, seed=TEXT_DIAGNOSTIC_RANDOM_SEED + layer
+            )
+            for layer, basis in bases_all.items()
+        }
+        control_names = (
+            ("zebra", "giraffe")
+            if task.family == "implicit_two_hop"
+            else ("Japan", "Brazil")
+        )
+        unrelated_all = {
+            layer: build_swap_basis_from_vectors(
+                TEXT_TOKEN_VECTORS[layer][control_names[0]],
+                TEXT_TOKEN_VECTORS[layer][control_names[1]],
+                layer=layer,
+                source=TEXT_CONCEPT_TOKENS[control_names[0]],
+                target=TEXT_CONCEPT_TOKENS[control_names[1]],
+            )
+            for layer in LAYERS
+        }
+        answer_vectors_all = {
+            layer: TEXT_TOKEN_VECTORS[layer][answer_name] for layer in LAYERS
+        }
+
+        for band in TEXT_DIAGNOSTIC_BANDS:
+            band_name = "L" + "-".join(map(str, band))
+            bases = {layer: bases_all[layer] for layer in band}
+            random_bases = {layer: random_all[layer] for layer in band}
+            unrelated_bases = {layer: unrelated_all[layer] for layer in band}
+            answer_vectors = {layer: answer_vectors_all[layer] for layer in band}
+            for condition in TEXT_DIAGNOSTIC_CONDITIONS:
+                key = safe_key(
+                    "text-diagnostic", task.task_id, band_name, condition
+                )
+                stored = STORE.load("intervention", key)
+                if stored is None:
+                    work = "computed"
+                    baseline_field = {
+                        "exact_alpha1": "exact",
+                        "random_alpha1": "random",
+                        "unrelated_alpha1": "unrelated",
+                    }.get(condition)
+                    if tuple(band) == tuple(LAYERS) and baseline_field is not None:
+                        result = dict(baseline[baseline_field])
+                        derived += 1
+                        work = "derived_from_stage1"
+                    elif condition == "exact_alpha1":
+                        result = unrestricted_greedy_swap_trial(
+                            BACKEND, inputs, bases=bases, alpha=1.0,
+                            answer=task.swapped_answer,
+                            diagnostic_token_ids=diagnostic_tokens,
+                        )
+                    elif condition == "zero":
+                        result = unrestricted_greedy_swap_trial(
+                            BACKEND, inputs, bases=bases, alpha=0.0,
+                            answer=task.swapped_answer,
+                            diagnostic_token_ids=diagnostic_tokens,
+                        )
+                    elif condition == "random_alpha1":
+                        result = unrestricted_greedy_swap_trial(
+                            BACKEND, inputs, bases=random_bases, alpha=1.0,
+                            answer=task.swapped_answer,
+                            diagnostic_token_ids=diagnostic_tokens,
+                        )
+                    elif condition == "unrelated_alpha1":
+                        result = unrestricted_greedy_swap_trial(
+                            BACKEND, inputs, bases=unrelated_bases, alpha=1.0,
+                            answer=task.swapped_answer,
+                            diagnostic_token_ids=diagnostic_tokens,
+                        )
+                    elif condition == "direct_answer_norm_matched":
+                        result = unrestricted_greedy_direct_answer_trial(
+                            BACKEND, inputs, bases=bases,
+                            answer_vectors=answer_vectors,
+                            answer=task.swapped_answer,
+                            diagnostic_token_ids=diagnostic_tokens,
+                        )
+                    else:
+                        raise RuntimeError(f"unknown diagnostic condition {condition}")
+                    stored = {
+                        "version": TEXT_DIAGNOSTIC_VERSION,
+                        "development_only": True,
+                        "task_id": task.task_id,
+                        "task": task.to_dict(),
+                        "band": list(band),
+                        "band_key": band_name,
+                        "condition": condition,
+                        "result": result,
+                    }
+                    STORE.save("intervention", key, stored)
+                    if work == "computed":
+                        computed += 1
+                else:
+                    reused += 1
+                    work = "reused"
+                diagnostic_records.append(stored)
+                done = computed + reused + derived
+                if done == 1 or done % 25 == 0 or done == total:
+                    print(
+                        f"diagnostic {done}/{total} {work} "
+                        f"task={task.task_id} band={band_name} "
+                        f"condition={condition} generated="
+                        f"{stored['result']['answer_match']}"
+                    )
+
+    TEXT_DIAGNOSTIC_REPORT = text_swap_diagnostic_report(
+        diagnostic_records,
+        clean_rows=diagnostic_clean_rows,
+        layers=LAYERS,
+    )
+    STORE.save("metric", "text_swap_diagnostic_report", TEXT_DIAGNOSTIC_REPORT)
+    diagnostic_path = RUN_DIR / "text_swap_diagnostic_report.json"
+    diagnostic_path.write_text(
+        json.dumps(TEXT_DIAGNOSTIC_REPORT, indent=2, default=str)
+    )
+    print()
+    print("=" * 78)
+    print("TEXT SWAP DIAGNOSTIC", TEXT_DIAGNOSTIC_REPORT["verdict"])
+    print("=" * 78)
+    for row in TEXT_DIAGNOSTIC_REPORT["bands"]:
+        print(
+            f"  {row['band']} exact={row['exact_successes']}/7 "
+            f"implicit={row['implicit_two_hop_success']} "
+            f"flexible={row['flexible_function_success_rate']:.3f} "
+            f"direct={row['direct_answer_positive_control_rate']:.3f} "
+            f"controls={row['matched_controls_pass']} "
+            f"audit={row['coordinate_audits_pass']} "
+            f"eligible={row['eligible_for_fresh_confirmation']}"
+        )
+    print("selected", TEXT_DIAGNOSTIC_REPORT["selected_band_for_fresh_confirmation"])
+    print("units", {"computed": computed, "derived": derived, "reused": reused})
+    print("report", diagnostic_path)
+    print("checksum", TEXT_DIAGNOSTIC_REPORT["report_checksum"])
+    print("resume", STORE.status_report())
+elif RUN_STAGE1B_TEXT_DIAGNOSTIC:
+    print(
+        "skipped: Stage 6b requires real mode, model confirmation, and "
+        "CONFIRM_TEXT_DIAGNOSTIC_BUDGET"
+    )
 '''
 )
 
@@ -782,6 +1068,9 @@ code(
     r'''
 if RUN_STAGE5_WRITE_REPORT:
     TEXT_VERDICT = TEXT_VERDICT or STORE.load("metric", "text_replication_verdict")
+    TEXT_DIAGNOSTIC_REPORT = TEXT_DIAGNOSTIC_REPORT or STORE.load(
+        "metric", "text_swap_diagnostic_report"
+    )
     PAIR_SELECTION = PAIR_SELECTION or STORE.load("metric", "loading_pair_selection")
     LOCALIZATION = LOCALIZATION or STORE.load("metric", "loading_localization")
     CONFIRMATION_DESIGN = CONFIRMATION_DESIGN or STORE.load("metric", "confirmation_design")
@@ -791,6 +1080,7 @@ if RUN_STAGE5_WRITE_REPORT:
         "scientific_config": SCIENTIFIC_CONFIG,
         "population_plan": POPULATION_PLAN,
         "text_replication": TEXT_VERDICT,
+        "text_swap_diagnostic": TEXT_DIAGNOSTIC_REPORT,
         "loading_pair_selection": PAIR_SELECTION,
         "loading_localization": LOCALIZATION,
         "frozen_confirmation_design": CONFIRMATION_DESIGN,
