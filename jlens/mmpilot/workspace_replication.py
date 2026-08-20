@@ -27,10 +27,12 @@ from dataclasses import asdict, dataclass
 import torch
 
 from jlens.hooks import ActivationRecorder
-from jlens.mmpilot.coordinate_swap import read_coordinates
+from jlens.mmpilot.coordinate_swap import coordinate_swap_band, read_coordinates
 from jlens.mmpilot.store import payload_checksum
 
-PROTOCOL_VERSION = "mmpilot.paper_first_workspace_replication.v1"
+PROTOCOL_VERSION = "mmpilot.paper_first_workspace_replication.v2"
+TEXT_OUTPUT_ENDPOINT_VERSION = "mmpilot.unrestricted_greedy_complete_answer.v1"
+TEXT_MAX_NEW_TOKENS = 2
 LOADING_VERSION = "mmpilot.clean_source_loading.v1"
 LOCALIZATION_VERSION = "mmpilot.loading_only_localization.v1"
 CONFIRMATION_VERSION = "mmpilot.fresh_multimodal_confirmation.v1"
@@ -145,6 +147,138 @@ def text_task_digest(tasks: Sequence[TextReplicationTask] | None = None) -> str:
     return payload_checksum(
         {"version": PROTOCOL_VERSION, "tasks": [task.to_dict() for task in selected]}
     )
+
+
+@torch.no_grad()
+def unrestricted_greedy_completion(
+    backend,
+    inputs,
+    *,
+    answer: str,
+    max_new_tokens: int = TEXT_MAX_NEW_TOKENS,
+) -> dict:
+    """Generate a complete answer without candidates or teacher forcing.
+
+    Anthropic's tokenizer represents the paper's digit answers as one next
+    token. Gemma 4 represents the same continuation as two tokens (a whitespace
+    token followed by the digit), so a one-row global-argmax endpoint is not
+    defined for this model. This endpoint preserves the literal prompt and
+    answer while greedily generating the complete token sequence. Every token
+    is selected from the full vocabulary; no answer token is appended.
+    """
+
+    from jlens.mmpilot.capability import _extend_tensors
+    from jlens.mmpilot.full_vocabulary import (
+        greedy_matches,
+        normalize_generated_text,
+        token_decoder,
+    )
+
+    budget = int(max_new_tokens)
+    if budget < 1:
+        raise WorkspaceReplicationRefused("max_new_tokens must be positive")
+    decoder = token_decoder(backend)
+    tensors = dict(inputs.tensors)
+    input_ids = tensors.get("input_ids")
+    if not torch.is_tensor(input_ids) or input_ids.ndim != 2:
+        raise WorkspaceReplicationRefused(
+            "unrestricted complete-answer generation requires rank-two input_ids"
+        )
+    if int(input_ids.shape[1]) != int(inputs.prompt_len):
+        raise WorkspaceReplicationRefused(
+            "generation must begin at the untouched prompt boundary"
+        )
+
+    generated: list[int] = []
+    for _ in range(budget):
+        step_tensors = (
+            tensors
+            if not generated
+            else _extend_tensors(tensors, int(inputs.prompt_len), generated)
+        )
+        logits = backend.forward_logits(step_tensors)
+        step = logits[0, -1].float()
+        if not bool(torch.isfinite(step).all()):
+            raise WorkspaceReplicationRefused(
+                "non-finite logits during unrestricted generation"
+            )
+        generated.append(int(step.argmax()))
+
+    text = "".join(decoder(token_id) for token_id in generated)
+    return {
+        "endpoint_version": TEXT_OUTPUT_ENDPOINT_VERSION,
+        "endpoint": "unrestricted_greedy_complete_answer",
+        "teacher_forcing_used": False,
+        "candidate_list_supplied": False,
+        "temperature": 0.0,
+        "do_sample": False,
+        "max_new_tokens": budget,
+        "n_forward_passes": budget,
+        "generated_token_ids": generated,
+        "generated_text": text,
+        "normalized_generated_text": normalize_generated_text(text),
+        "answer": str(answer),
+        "normalized_answer": normalize_generated_text(str(answer)),
+        "answer_match": bool(greedy_matches(text, str(answer))),
+    }
+
+
+@torch.no_grad()
+def unrestricted_greedy_swap_trial(
+    backend,
+    inputs,
+    *,
+    bases: Mapping,
+    alpha: float,
+    answer: str,
+    max_new_tokens: int = TEXT_MAX_NEW_TOKENS,
+    position_rule: str = "all_prompt_positions",
+) -> dict:
+    """Run the paper's swap and freely generate the complete answer.
+
+    Hooks remain active for every greedy decoding step but patch only the
+    pre-existing prompt positions. Thus the generated answer is observed, not
+    supplied, while the intervention is identical on each recomputed forward.
+    """
+
+    with coordinate_swap_band(
+        backend.blocks,
+        bases,
+        alpha=float(alpha),
+        prompt_len=int(inputs.prompt_len),
+        position_rule=str(position_rule),
+        evidence_span=getattr(inputs, "modality_token_range", None),
+        record_coordinates=False,
+    ) as stats:
+        generated = unrestricted_greedy_completion(
+            backend,
+            inputs,
+            answer=str(answer),
+            max_new_tokens=int(max_new_tokens),
+        )
+
+    positions = {
+        str(layer): list(stats[layer].get("positions") or [])
+        for layer in sorted(stats)
+    }
+    expected = list(range(int(inputs.prompt_len)))
+    return {
+        **generated,
+        "alpha": float(alpha),
+        "alpha_role": "exact_exchange" if float(alpha) == 1.0 else "nonexact",
+        "position_rule": str(position_rule),
+        "layers_patched": sorted(int(layer) for layer in stats),
+        "positions_patched": positions,
+        "all_prompt_positions_patched": all(
+            layer_positions == expected for layer_positions in positions.values()
+        )
+        if str(position_rule) == "all_prompt_positions"
+        else None,
+        "hook_forward_passes_by_layer": {
+            str(layer): int(stats[layer].get("n_forward_passes") or 0)
+            for layer in sorted(stats)
+        },
+    }
 
 
 def _cosine(a: torch.Tensor, b: torch.Tensor) -> float:
@@ -479,27 +613,47 @@ def select_pair_from_loading(
 
 
 def text_replication_verdict(rows: Sequence[Mapping]) -> dict:
-    """Gate later stages on a literal text replication, not a multimodal hope."""
+    """Gate later stages on the paper task, not a multimodal hope."""
 
     tasks = {task.task_id: task for task in anthropic_text_tasks()}
     by_task = {str(row["task_id"]): dict(row) for row in rows}
     missing = sorted(set(tasks) - set(by_task))
     clean = not missing and all(bool(by_task[name].get("clean_correct")) for name in tasks)
     implicit = bool(
-        by_task.get("spider_to_ant_legs", {}).get("exact_alpha1_target_top1")
+        by_task.get("spider_to_ant_legs", {}).get(
+            "exact_alpha1_swapped_answer_generated",
+            by_task.get("spider_to_ant_legs", {}).get("exact_alpha1_target_top1"),
+        )
     )
     flexible_rows = [
         by_task[name] for name, task in tasks.items() if task.family == "flexible_function"
     ]
     flexible_rate = (
-        sum(bool(row.get("exact_alpha1_target_top1")) for row in flexible_rows)
+        sum(
+            bool(
+                row.get(
+                    "exact_alpha1_swapped_answer_generated",
+                    row.get("exact_alpha1_target_top1"),
+                )
+            )
+            for row in flexible_rows
+        )
         / len(flexible_rows)
         if flexible_rows
         else 0.0
     )
     controls = not missing and all(
-        not bool(row.get("random_target_top1"))
-        and not bool(row.get("unrelated_target_top1"))
+        not bool(
+            row.get(
+                "random_swapped_answer_generated", row.get("random_target_top1")
+            )
+        )
+        and not bool(
+            row.get(
+                "unrelated_swapped_answer_generated",
+                row.get("unrelated_target_top1"),
+            )
+        )
         for row in by_task.values()
     )
     passed = clean and implicit and flexible_rate >= 0.5 and controls
@@ -507,8 +661,9 @@ def text_replication_verdict(rows: Sequence[Mapping]) -> dict:
         "version": PROTOCOL_VERSION,
         "verdict": "TEXT_PAPER_REPLICATION_GO" if passed else "TEXT_PAPER_REPLICATION_NO_GO",
         "all_clean_answers_correct": clean,
-        "implicit_two_hop_target_top1": implicit,
-        "flexible_function_target_top1_rate": flexible_rate,
+        "output_endpoint": "unrestricted_greedy_complete_answer",
+        "implicit_two_hop_swapped_answer_rate": 1.0 if implicit else 0.0,
+        "flexible_function_swapped_answer_rate": flexible_rate,
         "matched_controls_pass": controls,
         "missing_tasks": missing,
         "multimodal_stage_licensed": passed,
@@ -640,6 +795,8 @@ __all__ = [
     "LOADING_VERSION",
     "LOCALIZATION_VERSION",
     "PROTOCOL_VERSION",
+    "TEXT_MAX_NEW_TOKENS",
+    "TEXT_OUTPUT_ENDPOINT_VERSION",
     "TextReplicationTask",
     "WorkspaceReplicationRefused",
     "anthropic_text_tasks",
@@ -653,4 +810,6 @@ __all__ = [
     "summarize_loading",
     "text_replication_verdict",
     "text_task_digest",
+    "unrestricted_greedy_completion",
+    "unrestricted_greedy_swap_trial",
 ]

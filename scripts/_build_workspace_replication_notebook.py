@@ -31,6 +31,9 @@ The order is mandatory:
 1. **Text replication.** Reproduce the paper's text-only implicit two-hop task
    (`spider → ant`, expected downstream answer `8 → 6`) and its France/China
    flexible-function family with the validated text lens and exact `alpha=1`.
+   Gemma tokenizes the paper's digit outputs as whitespace + digit, so success
+   is the complete answer from unrestricted two-token greedy generation—not a
+   one-token prefix, candidate score, or teacher-forced likelihood.
 2. **Clean source loading.** On development media, measure whether the source
    concept is actually visible through the matched pooled lens at each layer and
    prompt position. Causal outcomes do not exist yet.
@@ -155,14 +158,17 @@ else:
 TEXT_TASKS = __import__(
     "jlens.mmpilot.workspace_replication", fromlist=["anthropic_text_tasks"]
 ).anthropic_text_tasks()
-print("TEXT TASKS", len(TEXT_TASKS), "(7 clean + 7 exact + 7 random + 7 unrelated forwards)")
+print("TEXT TASKS", len(TEXT_TASKS))
+print("  unrestricted generation passes", len(TEXT_TASKS) * 2 * 4)
+print("  clean source-loading passes", len(TEXT_TASKS))
+print("  Stage-1 total passes", len(TEXT_TASKS) * 2 * 4 + len(TEXT_TASKS))
 print("DEVELOPMENT UPPER BOUND")
-print("  clean loading forwards", len({p[0] for p in CANDIDATE_PAIRS}) * DEVELOPMENT_IMAGES_PER_SOURCE * 3)
+print("  clean loading forwards", len(CANDIDATE_PAIRS) * DEVELOPMENT_IMAGES_PER_SOURCE * 3)
 print("  no intervention forwards in Stage 2")
 print("FRESH CONFIRMATION UPPER BOUND")
-print("  clean forwards", CONFIRMATION_IMAGES_PER_SOURCE * 3 * 2)
+print("  clean generation forwards", CONFIRMATION_IMAGES_PER_SOURCE * 3 * 2 * 2)
 print("  exact/random/unrelated x alpha1 plus alpha=.75 sensitivity",
-      CONFIRMATION_IMAGES_PER_SOURCE * 3 * 2 * 4)
+      CONFIRMATION_IMAGES_PER_SOURCE * 3 * 2 * 4 * 2)
 print("RESUME UNIT: one text task, loading sample, or causal condition JSON")
 
 if REAL_MODE:
@@ -243,10 +249,15 @@ markdown("## 4. Fingerprinted run and atomic unit store")
 code(
     r'''
 from jlens.mmpilot.store import RunFingerprint, UnitStore, payload_checksum
-from jlens.mmpilot.workspace_replication import text_task_digest
+from jlens.mmpilot.workspace_replication import (
+    PROTOCOL_VERSION, TEXT_MAX_NEW_TOKENS, TEXT_OUTPUT_ENDPOINT_VERSION,
+    text_task_digest,
+)
 
 SCIENTIFIC_CONFIG = {
-    "protocol": "mmpilot.paper_first_workspace_replication.v1",
+    "protocol": PROTOCOL_VERSION,
+    "output_endpoint": TEXT_OUTPUT_ENDPOINT_VERSION,
+    "max_new_tokens": TEXT_MAX_NEW_TOKENS,
     "model_repo_id": MODEL_REPO_ID, "model_revision": MODEL_REVISION,
     "audio_protocol_fingerprint": AUDIO_PROTOCOL_FINGERPRINT,
     "layers": list(LAYERS), "text_task_digest": text_task_digest(TEXT_TASKS),
@@ -338,7 +349,7 @@ elif MODEL_STAGE:
 '''
 )
 
-markdown("## 6. Stage 1 — literal text-only paper replication and source-loading audit")
+markdown("## 6. Stage 1 — paper-task text replication and source-loading audit")
 code(
     r'''
 TEXT_VERDICT = STORE.load("metric", "text_replication_verdict")
@@ -346,21 +357,21 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
     from jlens.mmpilot.coordinate_swap import (
         build_swap_basis_from_vectors, random_two_direction_basis,
     )
-    from jlens.mmpilot.full_vocabulary import answer_token_table
-    from jlens.mmpilot.multimodal_lens import unrestricted_swap_trial
     from jlens.mmpilot.store import safe_key
     from jlens.mmpilot.workspace_replication import (
-        capture_source_loading, text_replication_verdict,
+        TEXT_MAX_NEW_TOKENS, capture_source_loading, text_replication_verdict,
+        unrestricted_greedy_completion, unrestricted_greedy_swap_trial,
     )
-    answers = sorted({task.clean_answer for task in TEXT_TASKS} | {task.swapped_answer for task in TEXT_TASKS})
-    answer_tokens = answer_token_table(BACKEND, answers, required=answers)
     text_rows = []
     for task in TEXT_TASKS:
         key = safe_key("text-paper", task.task_id)
         stored = STORE.load("intervention", key)
         if stored is None:
             inputs = BACKEND.build_inputs(prompt=task.prompt, modality="text")
-            clean = BACKEND.forward_logits(inputs.tensors)[0, inputs.final_prompt_position].float()
+            clean = unrestricted_greedy_completion(
+                BACKEND, inputs, answer=task.clean_answer,
+                max_new_tokens=TEXT_MAX_NEW_TOKENS,
+            )
             bases = {
                 layer: build_swap_basis_from_vectors(
                     TEXT_TOKEN_VECTORS[layer][task.source], TEXT_TOKEN_VECTORS[layer][task.target],
@@ -375,10 +386,21 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
                     layer=layer, source=TEXT_CONCEPT_TOKENS[controls[0]], target=TEXT_CONCEPT_TOKENS[controls[1]],
                 ) for layer in LAYERS
             }
-            target_id = answer_tokens[task.swapped_answer]["token_id"]
-            exact = unrestricted_swap_trial(BACKEND, inputs, bases=bases, alpha=1.0, target_token_id=target_id, clean_logits=clean)
-            random = unrestricted_swap_trial(BACKEND, inputs, bases=random_bases, alpha=1.0, target_token_id=target_id, clean_logits=clean)
-            unrelated_result = unrestricted_swap_trial(BACKEND, inputs, bases=unrelated, alpha=1.0, target_token_id=target_id, clean_logits=clean)
+            exact = unrestricted_greedy_swap_trial(
+                BACKEND, inputs, bases=bases, alpha=1.0,
+                answer=task.swapped_answer,
+                max_new_tokens=TEXT_MAX_NEW_TOKENS,
+            )
+            random = unrestricted_greedy_swap_trial(
+                BACKEND, inputs, bases=random_bases, alpha=1.0,
+                answer=task.swapped_answer,
+                max_new_tokens=TEXT_MAX_NEW_TOKENS,
+            )
+            unrelated_result = unrestricted_greedy_swap_trial(
+                BACKEND, inputs, bases=unrelated, alpha=1.0,
+                answer=task.swapped_answer,
+                max_new_tokens=TEXT_MAX_NEW_TOKENS,
+            )
             loading = capture_source_loading(
                 BACKEND, inputs, vectors_by_layer=TEXT_TOKEN_VECTORS,
                 source=task.source, target=task.target, unrelated=controls,
@@ -386,11 +408,12 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
             )
             stored = {
                 "task_id": task.task_id, "task": task.to_dict(),
-                "clean_top_token_id": int(clean.argmax()),
-                "clean_correct": int(clean.argmax()) == answer_tokens[task.clean_answer]["token_id"],
-                "exact_alpha1_target_top1": bool(exact["target_is_top1"]),
-                "random_target_top1": bool(random["target_is_top1"]),
-                "unrelated_target_top1": bool(unrelated_result["target_is_top1"]),
+                "output_endpoint": "unrestricted_greedy_complete_answer",
+                "clean_correct": bool(clean["answer_match"]),
+                "exact_alpha1_swapped_answer_generated": bool(exact["answer_match"]),
+                "random_swapped_answer_generated": bool(random["answer_match"]),
+                "unrelated_swapped_answer_generated": bool(unrelated_result["answer_match"]),
+                "clean": clean,
                 "exact": exact, "random": random, "unrelated": unrelated_result,
                 "loading_rows": loading,
             }
@@ -399,7 +422,12 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
         else:
             work = "reused"
         text_rows.append(stored)
-        print(task.task_id, work, "clean", stored["clean_correct"], "target top1", stored["exact_alpha1_target_top1"])
+        print(
+            task.task_id, work,
+            "clean", stored["clean_correct"],
+            "swapped answer generated",
+            stored["exact_alpha1_swapped_answer_generated"],
+        )
     TEXT_VERDICT = text_replication_verdict(text_rows)
     STORE.save("metric", "text_replication_verdict", TEXT_VERDICT)
     print(json.dumps(TEXT_VERDICT, indent=2))
@@ -525,11 +553,13 @@ code(
 CONFIRMATION_REPORT = STORE.load("metric", "fresh_confirmation_report")
 if REAL_MODE and RUN_STAGE4_FRESH_CONFIRMATION and CONFIRM_MODEL_LOAD and CONFIRM_CONFIRMATION_BUDGET:
     from jlens.mmpilot.coordinate_swap import random_two_direction_basis, resolve_concept_token
-    from jlens.mmpilot.full_vocabulary import answer_token_table
     from jlens.mmpilot.media_io import RetryJournal, drive_media_loaders
-    from jlens.mmpilot.multimodal_lens import build_swap_bases_for_lens, open_answer_matches, unrestricted_swap_trial
+    from jlens.mmpilot.multimodal_lens import build_swap_bases_for_lens
     from jlens.mmpilot.store import safe_key
-    from jlens.mmpilot.workspace_replication import assert_fresh_population
+    from jlens.mmpilot.workspace_replication import (
+        TEXT_MAX_NEW_TOKENS, assert_fresh_population,
+        unrestricted_greedy_completion, unrestricted_greedy_swap_trial,
+    )
     if CONFIRMATION_DESIGN is None:
         CONFIRMATION_DESIGN = STORE.load("metric", "confirmation_design")
     if CONFIRMATION_DESIGN is None:
@@ -547,7 +577,6 @@ if REAL_MODE and RUN_STAGE4_FRESH_CONFIRMATION and CONFIRM_MODEL_LOAD and CONFIR
     answers = {"bird": "2", "cat": "4", "zebra": "4", "giraffe": "4"}
     if answers[source] == answers[target]:
         raise RuntimeError("selected pair has no downstream leg-count contrast")
-    DIGITS = answer_token_table(BACKEND, sorted({answers[source], answers[target]}), required=sorted({answers[source], answers[target]}))
     band = CONFIRMATION_DESIGN["layer_band"]
     exact_bases = build_swap_bases_for_lens(
         MATCHED_LENSES["pooled"], BACKEND.unembedding_weight(), layers=band,
@@ -574,12 +603,12 @@ if REAL_MODE and RUN_STAGE4_FRESH_CONFIRMATION and CONFIRM_MODEL_LOAD and CONFIR
         for modality in ("text", "image", "spoken_audio"):
             for kind in ("identity", "property"):
                 inputs = build_inputs(group, modality, kind)
-                clean = BACKEND.forward_logits(inputs.tensors)[0, inputs.final_prompt_position].float()
                 source_answer = source if kind == "identity" else answers[source]
                 target_answer = target if kind == "identity" else answers[target]
-                source_id = TOKENS[source].token_id if kind == "identity" else DIGITS[source_answer]["token_id"]
-                target_id = TOKENS[target].token_id if kind == "identity" else DIGITS[target_answer]["token_id"]
-                clean_surface = BACKEND.decode_token(int(clean.argmax())).strip()
+                clean = unrestricted_greedy_completion(
+                    BACKEND, inputs, answer=source_answer,
+                    max_new_tokens=TEXT_MAX_NEW_TOKENS,
+                )
                 key = safe_key("fresh-confirm", group["group_id"], modality, kind)
                 stored = STORE.load("intervention", key)
                 if stored is None:
@@ -590,22 +619,28 @@ if REAL_MODE and RUN_STAGE4_FRESH_CONFIRMATION and CONFIRM_MODEL_LOAD and CONFIR
                         ("unrelated_alpha1", unrelated_bases, 1.0),
                         ("exact_alpha075", exact_bases, 0.75),
                     ):
-                        trial = unrestricted_swap_trial(
+                        trial = unrestricted_greedy_swap_trial(
                             BACKEND, inputs, bases=bases, alpha=alpha,
-                            target_token_id=target_id, source_token_id=source_id,
-                            clean_logits=clean,
+                            answer=target_answer,
+                            max_new_tokens=TEXT_MAX_NEW_TOKENS,
                             position_rule=CONFIRMATION_DESIGN[
                                 "position_rule_by_modality"
                             ][modality],
                         )
-                        surface = BACKEND.decode_token(trial["patched_top_token_id"]).strip()
-                        conditions[name] = {**trial, "patched_surface": surface, "success": open_answer_matches(surface, target_answer)}
+                        conditions[name] = {
+                            **trial,
+                            "patched_surface": trial["generated_text"],
+                            "success": bool(trial["answer_match"]),
+                        }
                     stored = {
                         "group_id": group["group_id"], "image_id": group["image_id"],
                         "source": source, "target": target, "modality": modality,
                         "prompt_kind": kind, "source_answer": source_answer,
-                        "target_answer": target_answer, "clean_surface": clean_surface,
-                        "clean_correct": open_answer_matches(clean_surface, source_answer),
+                        "target_answer": target_answer,
+                        "output_endpoint": "unrestricted_greedy_complete_answer",
+                        "clean_surface": clean["generated_text"],
+                        "clean_correct": bool(clean["answer_match"]),
+                        "clean": clean,
                         "conditions": conditions,
                     }
                     STORE.save("intervention", key, stored)

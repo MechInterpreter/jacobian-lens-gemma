@@ -38,6 +38,8 @@ def test_notebook_enforces_the_paper_first_order() -> None:
     for required in (
         "anthropic_text_tasks",
         "text_replication_verdict",
+        "unrestricted_greedy_completion",
+        "unrestricted_greedy_swap_trial",
         "capture_source_loading",
         "select_pair_from_loading",
         "freeze_loading_localization",
@@ -55,6 +57,7 @@ def test_notebook_enforces_the_paper_first_order() -> None:
         "FRESH_MULTIMODAL_DOWNSTREAM_RECOMPUTATION_GO",
     ):
         assert required in source
+    assert "answer_token_table(BACKEND" not in source
 
 
 def test_all_result_switches_default_false() -> None:

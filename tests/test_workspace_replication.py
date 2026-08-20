@@ -6,7 +6,9 @@ import pytest
 import torch
 from torch import nn
 
+from jlens.mmpilot.coordinate_swap import ConceptToken, build_swap_basis_from_vectors
 from jlens.mmpilot.workspace_replication import (
+    TEXT_MAX_NEW_TOKENS,
     WorkspaceReplicationRefused,
     anthropic_text_tasks,
     assert_fresh_population,
@@ -19,6 +21,8 @@ from jlens.mmpilot.workspace_replication import (
     summarize_loading,
     text_replication_verdict,
     text_task_digest,
+    unrestricted_greedy_completion,
+    unrestricted_greedy_swap_trial,
 )
 
 
@@ -55,6 +59,72 @@ def test_text_tasks_are_frozen_and_include_the_paper_two_hop_case() -> None:
     assert tasks[0].implicit_intermediate is True
     assert len({task.task_id for task in tasks}) == len(tasks) == 7
     assert text_task_digest() == text_task_digest(tasks)
+
+
+class _GenerationBackend:
+    def __init__(self) -> None:
+        self.blocks = nn.ModuleList([nn.Identity()])
+
+    def decode_token(self, token_id: int) -> str:
+        return {1: " ", 2: "8"}.get(int(token_id), "x")
+
+    def forward_logits(self, tensors):
+        input_ids = tensors["input_ids"]
+        seq_len = int(input_ids.shape[1])
+        hidden = torch.zeros((1, seq_len, 3), dtype=torch.float32)
+        for block in self.blocks:
+            hidden = block(hidden)
+        logits = torch.zeros((1, seq_len, 4), dtype=torch.float32)
+        logits[0, -1, 1 if seq_len == 1 else 2] = 10.0
+        return logits
+
+
+def _generation_inputs() -> SimpleNamespace:
+    return SimpleNamespace(
+        tensors={
+            "input_ids": torch.tensor([[0]], dtype=torch.long),
+            "attention_mask": torch.ones((1, 1), dtype=torch.long),
+        },
+        prompt_len=1,
+        final_prompt_position=0,
+        modality_token_range=None,
+    )
+
+
+def test_complete_answer_endpoint_handles_gemma_style_two_token_digit() -> None:
+    result = unrestricted_greedy_completion(
+        _GenerationBackend(),
+        _generation_inputs(),
+        answer="8",
+        max_new_tokens=TEXT_MAX_NEW_TOKENS,
+    )
+    assert result["generated_token_ids"] == [1, 2]
+    assert result["generated_text"] == " 8"
+    assert result["answer_match"] is True
+    assert result["teacher_forcing_used"] is False
+    assert result["candidate_list_supplied"] is False
+
+
+def test_complete_answer_swap_keeps_hooks_active_for_both_decode_steps() -> None:
+    source = ConceptToken("spider", 10, " spider", " {}")
+    target = ConceptToken("ant", 11, " ant", " {}")
+    basis = build_swap_basis_from_vectors(
+        torch.tensor([1.0, 0.0, 0.0]),
+        torch.tensor([0.0, 1.0, 0.0]),
+        layer=0,
+        source=source,
+        target=target,
+    )
+    result = unrestricted_greedy_swap_trial(
+        _GenerationBackend(),
+        _generation_inputs(),
+        bases={0: basis},
+        alpha=1.0,
+        answer="8",
+    )
+    assert result["answer_match"] is True
+    assert result["hook_forward_passes_by_layer"] == {"0": 2}
+    assert result["all_prompt_positions_patched"] is True
 
 
 def test_capture_loading_is_observation_only_and_marks_evidence_positions() -> None:
@@ -163,13 +233,13 @@ def test_text_replication_gate_requires_two_hop_flexible_and_controls() -> None:
             {
                 "task_id": task.task_id,
                 "clean_correct": True,
-                "exact_alpha1_target_top1": True,
-                "random_target_top1": False,
-                "unrelated_target_top1": False,
+                "exact_alpha1_swapped_answer_generated": True,
+                "random_swapped_answer_generated": False,
+                "unrelated_swapped_answer_generated": False,
             }
         )
     assert text_replication_verdict(rows)["verdict"] == "TEXT_PAPER_REPLICATION_GO"
-    rows[0]["exact_alpha1_target_top1"] = False
+    rows[0]["exact_alpha1_swapped_answer_generated"] = False
     assert text_replication_verdict(rows)["verdict"] == "TEXT_PAPER_REPLICATION_NO_GO"
 
 
