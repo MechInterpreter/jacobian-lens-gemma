@@ -54,6 +54,16 @@ def test_notebook_contains_the_four_arm_scientific_contract() -> None:
         "matched_multimodal_jlens_unrestricted_swap.v3",
         "open_answer_matches",
         "imported read-only",
+        "RUN_STAGE3B_ALPHA_SWEEP",
+        "ALPHA_SWEEP = (0.5, 1.0, 2.0, 4.0)",
+        "load_completed_alpha_sweep_source",
+        "matched_multimodal_jlens_unrestricted_alpha_sweep.v4",
+        "target_logit_delta",
+        "target_rank_improvement",
+        "controls_are_intensity_matched",
+        "population_reused_without_reselection",
+        "alpha1_exact_outcome_parity",
+        "Alpha=1 remains primary",
     ):
         assert required in source
     assert "int(_clean_logits.argmax()) == int(_expected)" not in source

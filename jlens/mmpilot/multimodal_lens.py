@@ -59,6 +59,7 @@ ANSWER_EQUIVALENCE_VERSION = (
     "mmpilot.open_answer_equivalence.casefold_whitespace.v1"
 )
 CAUSAL_SOURCE_VERSION = "mmpilot.matched_multimodal_causal_source.v1"
+ALPHA_SWEEP_SOURCE_VERSION = "mmpilot.matched_multimodal_alpha_sweep_source.v1"
 
 
 class MultimodalLensRefused(RuntimeError):
@@ -213,6 +214,168 @@ def load_completed_causal_source(
         "lens_paths": lens_paths,
         "excluded_image_ids": excluded_image_ids,
         "n_excluded_images": len(excluded_image_ids),
+    }
+    return {**payload, "source_digest": payload_checksum(payload)}
+
+
+def load_completed_alpha_sweep_source(
+    run_dir: str | Path,
+    *,
+    expected_final_report_checksum: str,
+    expected_causal_report_checksum: str,
+    expected_scientific_fingerprint: str,
+    expected_lens_checksums: Mapping[str, str],
+    expected_lens_source_digest: str,
+) -> dict:
+    """Verify the completed alpha=1 population reused by a dose-response run.
+
+    This is deliberately a *sensitivity* source, not a new confirmation
+    population.  The completed run fixed the 16 clean-capable photographs
+    before any alpha other than one was measured.  Reusing exactly those
+    photographs gives the alpha sweep paired power without silently recruiting
+    a population that happens to respond at a preferred strength.
+    """
+
+    root = Path(run_dir)
+    final = _verified_payload(
+        root / "matched_multimodal_jlens_report.json",
+        expected_checksum=expected_final_report_checksum,
+        label="completed alpha=1 matched-multimodal report",
+    )
+    causal = _verified_payload(
+        root / "multimodal_lens_causal_comparison_report.json",
+        expected_checksum=expected_causal_report_checksum,
+        label="completed alpha=1 causal report",
+    )
+    problems: list[str] = []
+    if final.get("scientific_fingerprint") != expected_scientific_fingerprint:
+        problems.append("scientific fingerprint differs from the pinned alpha=1 run")
+    if (final.get("causal_comparison") or {}).get("report_checksum") != (
+        expected_causal_report_checksum
+    ):
+        problems.append("the final report does not embed the pinned causal report")
+    if dict(final.get("lens_checksums") or {}) != dict(expected_lens_checksums):
+        problems.append("the final report's lens checksums differ from the pinned lenses")
+    if causal.get("protocol") != "matched_multimodal_jlens_unrestricted_swap.v3":
+        problems.append("the source is not the unrestricted alpha=1 protocol v3")
+    if causal.get("verdict") != "MEASURED":
+        problems.append("the source causal run did not reach its measured endpoint")
+    if float(causal.get("primary_alpha", float("nan"))) != 1.0:
+        problems.append("the source causal run is not alpha=1")
+    if bool(causal.get("teacher_forcing_used")):
+        problems.append("the source used teacher forcing")
+    if bool(causal.get("candidate_list_supplied")):
+        problems.append("the source supplied a candidate list")
+    if list(causal.get("arms_compared") or []) != ["text", "pooled"]:
+        problems.append("the source did not compare the text and pooled arms")
+    if set(causal.get("controls") or []) != {"random", "unrelated"}:
+        problems.append("the source lacks the random and unrelated controls")
+    if dict(causal.get("recruited_counts") or {}) != {"bird": 8, "cat": 8}:
+        problems.append("the source did not freeze eight clean-capable images per concept")
+    if not bool(causal.get("clean_capability_required_in_every_modality_and_endpoint")):
+        problems.append("the source did not require clean capability in all six cells")
+    equivalence = dict(causal.get("answer_equivalence") or {})
+    if equivalence.get("version") != ANSWER_EQUIVALENCE_VERSION:
+        problems.append("the source used a different open-answer equivalence rule")
+    if equivalence.get("semantic_aliases") or equivalence.get("punctuation_removed"):
+        problems.append("the source answer rule included semantic or punctuation aliases")
+    fresh = dict(causal.get("fresh_population") or {})
+    if int(fresh.get("candidate_count_per_concept", -1)) != 96:
+        problems.append("the source did not screen 96 candidates per concept")
+    if int(fresh.get("excluded_previous_screen_images", -1)) != 64:
+        problems.append("the source did not exclude all 64 prior-screen photographs")
+    provenance = dict(causal.get("source_run_provenance") or {})
+    if provenance.get("source_digest") != expected_lens_source_digest:
+        problems.append("the source does not point to the pinned four-lens run")
+    if dict(provenance.get("lens_checksums") or {}) != dict(expected_lens_checksums):
+        problems.append("the source provenance records different lens checksums")
+
+    rows = list(causal.get("rows") or [])
+    if len(rows) != 96:
+        problems.append(f"the source records {len(rows)} causal rows, not 96")
+    alpha1_exact_outcomes: list[dict] = []
+    for row in rows:
+        for arm in ("text", "pooled"):
+            exact = dict((row.get("arms") or {}).get(arm, {}).get("exact") or {})
+            if "patched_top_token_id" not in exact:
+                problems.append(
+                    f"a source row lacks the {arm} alpha=1 exact outcome"
+                )
+                continue
+            alpha1_exact_outcomes.append(
+                {
+                    "source": str(row.get("source")),
+                    "target": str(row.get("target")),
+                    "group_id": str(row.get("group_id")),
+                    "modality": str(row.get("modality")),
+                    "prompt_kind": str(row.get("prompt_kind")),
+                    "lens_arm": arm,
+                    "patched_top_token_id": int(exact["patched_top_token_id"]),
+                    "success": bool(exact.get("success")),
+                }
+            )
+    if len(alpha1_exact_outcomes) != 192:
+        problems.append(
+            f"the source records {len(alpha1_exact_outcomes)} exact alpha=1 arm "
+            "outcomes, not 192"
+        )
+    groups_by_source: dict[str, list[dict]] = {}
+    for source in ("bird", "cat"):
+        selected = [row for row in rows if row.get("source") == source]
+        identities: dict[str, str] = {}
+        for row in selected:
+            group_id = str(row.get("group_id") or "")
+            image_id = str(row.get("image_id") or "")
+            if not group_id or not image_id:
+                problems.append(f"a {source} row lacks a group_id or image_id")
+                continue
+            previous = identities.setdefault(group_id, image_id)
+            if previous != image_id:
+                problems.append(f"group {group_id!r} maps to multiple images")
+        if len(identities) != 8:
+            problems.append(
+                f"the source has {len(identities)} distinct {source} groups, not 8"
+            )
+        for group_id in identities:
+            cells = {
+                (str(row.get("modality")), str(row.get("prompt_kind")))
+                for row in selected
+                if str(row.get("group_id")) == group_id
+            }
+            expected_cells = {
+                (modality, prompt_kind)
+                for modality in MODALITIES
+                for prompt_kind in ("identity", "property")
+            }
+            if cells != expected_cells:
+                problems.append(
+                    f"group {group_id!r} does not contain all six endpoint cells"
+                )
+        groups_by_source[source] = [
+            {"group_id": group_id, "image_id": image_id}
+            for group_id, image_id in sorted(identities.items())
+        ]
+    if problems:
+        raise MultimodalLensRefused(
+            "the completed alpha=1 run cannot seed the sensitivity sweep:\n  - "
+            + "\n  - ".join(problems)
+        )
+
+    payload = {
+        "version": ALPHA_SWEEP_SOURCE_VERSION,
+        "run_dir": str(root),
+        "scientific_fingerprint": expected_scientific_fingerprint,
+        "final_report_checksum": expected_final_report_checksum,
+        "causal_report_checksum": expected_causal_report_checksum,
+        "lens_source_digest": expected_lens_source_digest,
+        "lens_checksums": dict(expected_lens_checksums),
+        "groups_by_source": groups_by_source,
+        "alpha1_exact_outcomes": alpha1_exact_outcomes,
+        "population_digest": str(
+            fresh.get("causal_population_digest")
+            or ""
+        ),
+        "answer_equivalence": dict(causal.get("answer_equivalence") or {}),
     }
     return {**payload, "source_digest": payload_checksum(payload)}
 
@@ -861,10 +1024,29 @@ def unrestricted_swap_trial(
     *,
     bases: Mapping[int, SwapBasis],
     alpha: float = 1.0,
+    target_token_id: int | None = None,
+    source_token_id: int | None = None,
+    clean_logits: torch.Tensor | None = None,
+    compact_positions: bool = False,
 ) -> dict:
-    """One exact exchange scored on the unrestricted next-token distribution."""
+    """One paper-style exchange scored on the unrestricted next-token output.
 
-    clean = backend.forward_logits(inputs.tensors)[0, inputs.final_prompt_position].float()
+    ``alpha=1`` is the exact two-coordinate exchange.  Other values use the
+    identical intervention path and are labelled interpolation or
+    extrapolation.  Optional token ids add graded full-vocabulary diagnostics;
+    they never restrict the model's output or supply candidates to it.
+    """
+
+    if clean_logits is None:
+        clean = backend.forward_logits(inputs.tensors)[
+            0, inputs.final_prompt_position
+        ].float()
+    else:
+        clean = clean_logits.detach().float()
+        if clean.ndim != 1:
+            raise MultimodalLensRefused(
+                f"clean_logits must be rank one, got shape {tuple(clean.shape)}"
+            )
     with coordinate_swap_band(
         backend.blocks,
         bases,
@@ -877,18 +1059,115 @@ def unrestricted_swap_trial(
         patched = backend.forward_logits(inputs.tensors)[
             0, inputs.final_prompt_position
         ].float()
-    return {
+    position_records: dict[str, Any] = {}
+    all_prompt_positions_patched = True
+    for layer in sorted(stats):
+        positions = list(stats[layer].get("positions") or [])
+        all_prompt_positions_patched &= positions == list(range(inputs.prompt_len))
+        if compact_positions:
+            position_records[str(layer)] = {
+                "start": positions[0] if positions else None,
+                "stop_exclusive": positions[-1] + 1 if positions else None,
+                "count": len(positions),
+                "contiguous": positions
+                == list(range(positions[0], positions[-1] + 1))
+                if positions
+                else False,
+            }
+        else:
+            position_records[str(layer)] = positions
+
+    norm_ratios: list[float] = []
+    update_ratios: list[float] = []
+    orthogonal_drifts: list[float] = []
+    coordinate_errors: list[float] = []
+    for layer in sorted(stats):
+        swap = dict(stats[layer].get("swap") or {})
+        before = list(swap.get("activation_norm_before") or [])
+        after = list(swap.get("activation_norm_after") or [])
+        updates = list(swap.get("update_norm") or [])
+        norm_ratios.extend(
+            float(post) / max(float(pre), 1e-12)
+            for pre, post in zip(before, after, strict=True)
+        )
+        update_ratios.extend(
+            float(update) / max(float(pre), 1e-12)
+            for pre, update in zip(before, updates, strict=True)
+        )
+        orthogonal_drifts.append(float(swap.get("max_orthogonal_residual_drift", 0.0)))
+        coordinate_errors.append(float(swap.get("max_coordinate_update_error", 0.0)))
+
+    result = {
         "alpha": float(alpha),
+        "alpha_role": (
+            "exact_exchange"
+            if float(alpha) == 1.0
+            else "interpolation"
+            if 0.0 <= float(alpha) < 1.0
+            else "extrapolation"
+        ),
+        "alpha_is_extrapolation": bool(float(alpha) > 1.0),
         "teacher_forcing_used": False,
         "candidate_list_supplied": False,
         "clean_top_token_id": int(clean.argmax()),
         "patched_top_token_id": int(patched.argmax()),
         "prediction_changed": int(clean.argmax()) != int(patched.argmax()),
         "layers_patched": sorted(int(layer) for layer in stats),
-        "positions_patched": {
-            str(layer): list(stats[layer].get("positions") or []) for layer in stats
-        },
+        "positions_patched": position_records,
+        "all_prompt_positions_patched": bool(all_prompt_positions_patched),
+        "max_activation_norm_ratio": max(norm_ratios, default=1.0),
+        "min_activation_norm_ratio": min(norm_ratios, default=1.0),
+        "max_update_to_activation_norm_ratio": max(update_ratios, default=0.0),
+        "max_orthogonal_residual_drift": max(orthogonal_drifts, default=0.0),
+        "max_coordinate_update_error": max(coordinate_errors, default=0.0),
     }
+    if target_token_id is not None:
+        target = int(target_token_id)
+        if not 0 <= target < clean.numel():
+            raise MultimodalLensRefused(
+                f"target token id {target} is outside vocabulary size {clean.numel()}"
+            )
+        clean_log_probs = clean.log_softmax(dim=-1)
+        patched_log_probs = patched.log_softmax(dim=-1)
+        clean_target = float(clean[target])
+        patched_target = float(patched[target])
+        clean_rank = 1 + int((clean > clean[target]).sum())
+        patched_rank = 1 + int((patched > patched[target]).sum())
+        clean_probability = float(clean_log_probs[target].exp())
+        patched_probability = float(patched_log_probs[target].exp())
+        result.update(
+            {
+                "target_token_id": target,
+                "clean_target_logit": clean_target,
+                "patched_target_logit": patched_target,
+                "target_logit_delta": patched_target - clean_target,
+                "clean_target_rank": clean_rank,
+                "patched_target_rank": patched_rank,
+                "target_rank_improvement": clean_rank - patched_rank,
+                "clean_target_probability": clean_probability,
+                "patched_target_probability": patched_probability,
+                "target_probability_delta": patched_probability - clean_probability,
+                "target_is_top1": int(patched.argmax()) == target,
+                "kl_clean_to_patched": float(
+                    (clean_log_probs.exp() * (clean_log_probs - patched_log_probs)).sum()
+                ),
+            }
+        )
+    if source_token_id is not None:
+        source = int(source_token_id)
+        if not 0 <= source < clean.numel():
+            raise MultimodalLensRefused(
+                f"source token id {source} is outside vocabulary size {clean.numel()}"
+            )
+        result.update(
+            {
+                "source_token_id": source,
+                "clean_source_logit": float(clean[source]),
+                "patched_source_logit": float(patched[source]),
+                "source_logit_delta": float(patched[source] - clean[source]),
+            }
+        )
+    return result
 
 
 def fit_budget(
@@ -935,6 +1214,7 @@ __all__ = [
     "fit_budget",
     "fitting_prompt",
     "jacobian_for_built_inputs",
+    "load_completed_alpha_sweep_source",
     "plan_units",
     "selected_lens_vector",
     "select_causal_groups",

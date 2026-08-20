@@ -17,6 +17,7 @@ from jlens.mmpilot.multimodal_lens import (
     fit_arm,
     fit_budget,
     jacobian_for_built_inputs,
+    load_completed_alpha_sweep_source,
     load_completed_causal_source,
     normalize_open_answer_surface,
     open_answer_matches,
@@ -207,6 +208,62 @@ def test_exact_swap_trial_is_unrestricted():
     assert row["positions_patched"]["2"] == list(range(inputs.prompt_len))
 
 
+def test_swap_trial_records_graded_full_vocabulary_diagnostics() -> None:
+    backend = MockPilotBackend(MockWorld(), n_layers=4)
+    lens = JacobianLens(
+        jacobians={2: torch.eye(backend.d_model)},
+        n_prompts=1,
+        d_model=backend.d_model,
+    )
+    source = resolve_concept_token(backend.encode_token, "bird")
+    target = resolve_concept_token(backend.encode_token, "cat")
+    bases = build_swap_bases_for_lens(
+        lens,
+        backend.unembedding_weight(),
+        layers=(2,),
+        source=source,
+        target=target,
+    )
+    evidence = backend.world.evidence(
+        concepts_present=("bird",), modality="text", nuisance_key="graded"
+    )
+    inputs = backend.build_inputs(
+        prompt="What animal is present? Answer:", modality="image", image=evidence
+    )
+    clean = backend.forward_logits(inputs.tensors)[
+        0, inputs.final_prompt_position
+    ].float()
+    row = unrestricted_swap_trial(
+        backend,
+        inputs,
+        bases=bases,
+        alpha=2.0,
+        target_token_id=target.token_id,
+        source_token_id=source.token_id,
+        clean_logits=clean,
+        compact_positions=True,
+    )
+    assert row["alpha_role"] == "extrapolation"
+    assert row["alpha_is_extrapolation"] is True
+    assert row["all_prompt_positions_patched"] is True
+    assert row["positions_patched"]["2"] == {
+        "start": 0,
+        "stop_exclusive": inputs.prompt_len,
+        "count": inputs.prompt_len,
+        "contiguous": True,
+    }
+    for key in (
+        "target_logit_delta",
+        "target_rank_improvement",
+        "target_probability_delta",
+        "source_logit_delta",
+        "kl_clean_to_patched",
+        "max_activation_norm_ratio",
+        "max_update_to_activation_norm_ratio",
+    ):
+        assert torch.isfinite(torch.tensor(row[key]))
+
+
 def test_budget_counts_all_four_arms():
     budget = fit_budget(n_fit_groups=250, n_layers=8, d_model=2560, dim_batch=8)
     assert budget["prompts_by_arm"] == {
@@ -304,3 +361,84 @@ def test_completed_causal_source_refuses_a_changed_lens(tmp_path: Path) -> None:
             expected_causal_report_checksum="sha256:missing",
             expected_lens_checksums={},
         )
+
+
+def test_completed_alpha_sweep_source_freezes_the_measured_population(
+    tmp_path: Path,
+) -> None:
+    checksums = {
+        arm: f"sha256:{arm}" for arm in ("text", "image", "spoken_audio", "pooled")
+    }
+    rows = []
+    for source, target in (("bird", "cat"), ("cat", "bird")):
+        for index in range(8):
+            for modality in ("text", "image", "spoken_audio"):
+                for prompt_kind in ("identity", "property"):
+                    rows.append(
+                        {
+                            "source": source,
+                            "target": target,
+                            "group_id": f"{source}-g{index}",
+                            "image_id": f"{source}-i{index}",
+                            "modality": modality,
+                            "prompt_kind": prompt_kind,
+                            "arms": {
+                                arm: {
+                                    "exact": {
+                                        "patched_top_token_id": index,
+                                        "success": False,
+                                    }
+                                }
+                                for arm in ("text", "pooled")
+                            },
+                        }
+                    )
+    causal, causal_checksum = _write_report(
+        tmp_path / "multimodal_lens_causal_comparison_report.json",
+        {
+            "protocol": "matched_multimodal_jlens_unrestricted_swap.v3",
+            "verdict": "MEASURED",
+            "primary_alpha": 1.0,
+            "teacher_forcing_used": False,
+            "candidate_list_supplied": False,
+            "arms_compared": ["text", "pooled"],
+            "controls": ["random", "unrelated"],
+            "recruited_counts": {"bird": 8, "cat": 8},
+            "clean_capability_required_in_every_modality_and_endpoint": True,
+            "source_run_provenance": {
+                "source_digest": "sha256:lenses",
+                "lens_checksums": checksums,
+            },
+            "fresh_population": {
+                "candidate_count_per_concept": 96,
+                "excluded_previous_screen_images": 64,
+                "causal_population_digest": "sha256:population",
+            },
+            "answer_equivalence": answer_equivalence_record(),
+            "rows": rows,
+        },
+    )
+    final, final_checksum = _write_report(
+        tmp_path / "matched_multimodal_jlens_report.json",
+        {
+            "scientific_fingerprint": "sha256:alpha-one",
+            "lens_checksums": checksums,
+            "causal_comparison": causal,
+        },
+    )
+    assert final["causal_comparison"]["report_checksum"] == causal_checksum
+    source = load_completed_alpha_sweep_source(
+        tmp_path,
+        expected_final_report_checksum=final_checksum,
+        expected_causal_report_checksum=causal_checksum,
+        expected_scientific_fingerprint="sha256:alpha-one",
+        expected_lens_checksums=checksums,
+        expected_lens_source_digest="sha256:lenses",
+    )
+    assert {key: len(value) for key, value in source["groups_by_source"].items()} == {
+        "bird": 8,
+        "cat": 8,
+    }
+    assert source["population_digest"] == "sha256:population"
+    assert len(source["alpha1_exact_outcomes"]) == 192
+    assert source["source_digest"].startswith("sha256:")

@@ -106,6 +106,55 @@ The clean screen and every intervention are stored as fingerprint-bound units.
 A disconnect resumes completed work; it never reuses the superseded exact-ID
 screen and never refits a lens.
 
+## Paired alpha dose-response
+
+The completed alpha=1 run measured zero target-answer flips for both the text
+and pooled lenses.  A separate exploratory stage tests whether that endpoint
+conceals a graded causal effect or merely needs a stronger intervention.  It
+reuses the same 16 clean-capable photographs without reselecting them, verifies
+the completed run and all four lens checksums, and smart-saves one
+`arm x alpha x condition` trial at a time.
+
+This uses Anthropic's coordinate-swap equation exactly:
+
+```text
+V = [v_source, v_target]
+c = pinv(V) h
+h_patched = h + alpha * V (swap(c) - c)
+```
+
+The raw J-lens vectors are used without normalization; coordinates are
+recomputed at every physical layer L33-L40; every original prompt position is
+patched; and the orthogonal residual is unchanged.  Alpha=1 is the exact
+exchange.  Alpha=2 is Anthropic's reported double-strength condition.  Alpha
+0.5 and 4 are labelled exploratory interpolation and high extrapolation,
+respectively.  The multimodal Gemma/SpokenCOCO task is an extension of the
+paper's protocol, not an exact replication of Anthropic's model and data.
+
+Run the same notebook on an L4 with:
+
+```python
+RUN_REAL_MATCHED_JLENS = True
+RUN_STAGE0_FREEZE_PLAN = True
+RUN_STAGE1_FIT_LENSES = False
+RUN_STAGE2_CROSS_EVALUATE = False
+RUN_STAGE3_CAUSAL_COMPARE = False
+RUN_STAGE3B_ALPHA_SWEEP = True
+RUN_STAGE4_WRITE_REPORT = True
+
+CONFIRM_MODEL_LOAD = True
+CONFIRM_FIT_BUDGET = False
+CONFIRM_CAUSAL_BUDGET = False
+CONFIRM_ALPHA_SWEEP_BUDGET = True
+REPORT_RUN_DIR = None
+```
+
+The output is `multimodal_lens_alpha_sweep_report.json` in a new fingerprinted
+`mmjlens6alpha_*` directory.  It reports unrestricted top-1 success plus target
+logit, target rank, target probability, source-logit suppression, KL, activation
+norm, and alpha-matched random/unrelated controls.  Alpha=1 remains the primary
+result regardless of which sensitivity value is largest.
+
 ## Interpretation
 
 The 4-by-3 cross-evaluation matrix is the primary result. It distinguishes:
