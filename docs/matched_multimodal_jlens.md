@@ -110,7 +110,13 @@ screen and never refits a lens.
 
 The completed alpha=1 run measured zero target-answer flips for both the text
 and pooled lenses.  A separate exploratory stage tests whether that endpoint
-conceals a graded causal effect or merely needs a stronger intervention.  It
+conceals a graded causal effect or merely needs a stronger intervention. After
+the coarse 0.5/1/2/4 sweep, the notebook now samples
+`0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1`. This grid brackets the
+strongest stable signal near alpha=0.5 and excludes the already destructive
+alpha>=2 regime. It was chosen after inspecting the coarse result, so it is
+explicitly exploratory; any favorable alpha must be confirmed on a fresh
+population. It
 reuses the same 16 clean-capable photographs without reselecting them, verifies
 the completed run and all four lens checksums, and smart-saves one
 `arm x alpha x condition` trial at a time.
@@ -125,11 +131,11 @@ h_patched = h + alpha * V (swap(c) - c)
 
 The raw J-lens vectors are used without normalization; coordinates are
 recomputed at every physical layer L33-L40; every original prompt position is
-patched; and the orthogonal residual is unchanged.  Alpha=1 is the exact
-exchange.  Alpha=2 is Anthropic's reported double-strength condition.  Alpha
-0.5 and 4 are labelled exploratory interpolation and high extrapolation,
-respectively.  The multimodal Gemma/SpokenCOCO task is an extension of the
-paper's protocol, not an exact replication of Anthropic's model and data.
+patched; and the orthogonal residual is unchanged. Alpha=1 is the exact
+exchange. Anthropic's alpha=2 double-strength condition was measured in the
+coarse sweep but is not repeated in this stable-range refinement. The
+multimodal Gemma/SpokenCOCO task is an extension of the paper's protocol, not an
+exact replication of Anthropic's model and data.
 
 Run the same notebook on an L4 with:
 
@@ -152,8 +158,12 @@ REPORT_RUN_DIR = None
 The output is `multimodal_lens_alpha_sweep_report.json` in a new fingerprinted
 `mmjlens6alpha_*` directory.  It reports unrestricted top-1 success plus target
 logit, target rank, target probability, source-logit suppression, KL, activation
-norm, and alpha-matched random/unrelated controls.  Alpha=1 remains the primary
-result regardless of which sensitivity value is largest.
+norm, and alpha-matched random/unrelated controls. Alpha=1 remains the primary
+result regardless of which sensitivity value is largest, and the report records
+that the refined grid was selected after outcomes were observed. A frozen
+identity-only specificity rule ranks one common alpha across both lens arms;
+the downstream leg-answer endpoint is excluded from alpha selection. The
+reported winner remains exploratory until repeated on fresh media.
 
 ## Interpretation
 

@@ -162,10 +162,15 @@ EVAL_CONCEPTS = ("bird", "cat")
 CONTROL_CONCEPTS = ("zebra", "giraffe")
 CAUSAL_LAYERS = SOURCE_LAYERS
 PRIMARY_ALPHA = 1.0
-# Alpha=1 is the exact exchange. Alpha=2 is Anthropic's reported double-strength
-# condition. Alpha=0.5 and alpha=4 are explicitly exploratory interpolation and
-# extrapolation diagnostics; none may replace alpha=1 as the primary result.
-ALPHA_SWEEP = (0.5, 1.0, 2.0, 4.0)
+# Alpha=1 is the exact exchange. The refinement grid brackets the strongest
+# stable signal in the coarse 0.5/1/2/4 sweep and never enters the alpha>=2
+# regime that already produced large activation-norm inflation. The grid was
+# chosen after observing that coarse result, so it is explicitly exploratory
+# and any selected alpha needs fresh-population confirmation.
+ALPHA_SWEEP = (0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0)
+ALPHA_SWEEP_OUTCOME_INFORMED = True
+ALPHA_SELECTION_MAX_ACTIVATION_NORM_RATIO = 1.25
+ALPHA_SELECTION_MAX_UPDATE_RATIO = 0.50
 
 # The four completed lenses are imported read-only when Stage 3 is requested
 # without Stage 1.  Every report and tensor checksum is pinned below.  Changing
@@ -416,7 +421,7 @@ print("causal", CAUSAL_POPULATION_DIGEST,
 
 SCIENTIFIC_CONFIG = {
     "study": (
-        "matched_multimodal_jlens.alpha_dose_response.v1"
+        "matched_multimodal_jlens.alpha_refinement_0125_to_1.v3"
         if ALPHA1_SOURCE is not None
         else "matched_multimodal_jlens.causal_followup.v1"
         if _use_completed_lenses else "matched_multimodal_jlens.v4"
@@ -444,13 +449,18 @@ SCIENTIFIC_CONFIG = {
     "primary_alpha": PRIMARY_ALPHA,
     "alpha_sweep": list(ALPHA_SWEEP) if ALPHA1_SOURCE else [PRIMARY_ALPHA],
     "alpha_roles": {
-        "0.5": "exploratory_interpolation",
-        "1.0": "primary_exact_exchange",
-        "2.0": "paper_reported_double_strength_sensitivity",
-        "4.0": "exploratory_high_extrapolation",
-    } if ALPHA1_SOURCE else {"1.0": "primary_exact_exchange"},
+        f"{alpha:g}": (
+            "primary_exact_exchange"
+            if alpha == 1.0
+            else "outcome_informed_stable_range_refinement"
+        )
+        for alpha in (ALPHA_SWEEP if ALPHA1_SOURCE else (PRIMARY_ALPHA,))
+    },
+    "alpha_grid_selected_after_coarse_sweep": bool(
+        ALPHA1_SOURCE and ALPHA_SWEEP_OUTCOME_INFORMED
+    ),
     "causal_protocol": (
-        "matched_multimodal_jlens_unrestricted_alpha_sweep.v4"
+        "matched_multimodal_jlens_unrestricted_alpha_refinement.v6"
         if ALPHA1_SOURCE else "matched_multimodal_jlens_unrestricted_swap.v3"
     ),
     "clean_recruitment": "all_modalities_x_identity_and_property",
@@ -1248,9 +1258,96 @@ if REAL_MODE and ALPHA_SWEEP_ENABLED:
                         }
                         _sweep_cells.append(_cell)
 
+    # Select one common alpha for both lens arms using identity evidence only.
+    # Property/leg-answer rows are deliberately excluded from selection so
+    # they remain a downstream diagnostic rather than the tuning objective.
+    _alpha_ranking = []
+    for _alpha in ALPHA_SWEEP:
+        _identity_cells = [
+            cell for cell in _sweep_cells
+            if cell["alpha"] == float(_alpha)
+            and cell["prompt_kind"] == "identity"
+        ]
+        _property_cells = [
+            cell for cell in _sweep_cells
+            if cell["alpha"] == float(_alpha)
+            and cell["prompt_kind"] == "property"
+        ]
+        _identity_vs_random = [
+            cell["specificity"]["exact_minus_random_target_logit_delta"]
+            for cell in _identity_cells
+        ]
+        _identity_vs_unrelated = [
+            cell["specificity"]["exact_minus_unrelated_target_logit_delta"]
+            for cell in _identity_cells
+        ]
+        _max_norm_ratio = max(
+            cell["exact"]["max_activation_norm_ratio"]
+            for cell in _identity_cells
+        )
+        _max_update_ratio = max(
+            cell["exact"]["max_update_to_activation_norm_ratio"]
+            for cell in _identity_cells
+        )
+        _all_specific = all(value > 0.0 for value in _identity_vs_random) and all(
+            value > 0.0 for value in _identity_vs_unrelated
+        )
+        _safe = (
+            _max_norm_ratio <= ALPHA_SELECTION_MAX_ACTIVATION_NORM_RATIO
+            and _max_update_ratio <= ALPHA_SELECTION_MAX_UPDATE_RATIO
+        )
+        _alpha_ranking.append({
+            "alpha": float(_alpha),
+            "n_identity_cells": len(_identity_cells),
+            "common_to_both_lens_arms": True,
+            "mean_identity_target_logit_delta": _mean(
+                cell["exact"]["mean_target_logit_delta"]
+                for cell in _identity_cells
+            ),
+            "mean_identity_exact_minus_random": _mean(_identity_vs_random),
+            "mean_identity_exact_minus_unrelated": _mean(
+                _identity_vs_unrelated
+            ),
+            "robust_identity_specificity_score": min(
+                _mean(_identity_vs_random), _mean(_identity_vs_unrelated)
+            ),
+            "identity_top1_success_rate": _mean(
+                cell["exact"]["top1_success_rate"]
+                for cell in _identity_cells
+            ),
+            "mean_property_target_logit_delta_not_used_for_selection": _mean(
+                cell["exact"]["mean_target_logit_delta"]
+                for cell in _property_cells
+            ),
+            "property_top1_success_rate_not_used_for_selection": _mean(
+                cell["exact"]["top1_success_rate"]
+                for cell in _property_cells
+            ),
+            "all_identity_cells_beat_both_controls": _all_specific,
+            "max_activation_norm_ratio": _max_norm_ratio,
+            "max_update_to_activation_norm_ratio": _max_update_ratio,
+            "passes_predeclared_safety_guard": _safe,
+            "eligible_for_exploratory_selection": bool(_all_specific and _safe),
+        })
+    _eligible_alphas = sorted(
+        (
+            row for row in _alpha_ranking
+            if row["eligible_for_exploratory_selection"]
+        ),
+        key=lambda row: (
+            -row["robust_identity_specificity_score"],
+            -row["identity_top1_success_rate"],
+            row["max_activation_norm_ratio"],
+            row["alpha"],
+        ),
+    )
+    _exploratory_best_alpha = (
+        _eligible_alphas[0]["alpha"] if _eligible_alphas else None
+    )
+
     ALPHA_SWEEP_REPORT = {
         "schema": "jlens.mmpilot.matched_multimodal_alpha_sweep.v1",
-        "protocol": "matched_multimodal_jlens_unrestricted_alpha_sweep.v4",
+        "protocol": "matched_multimodal_jlens_unrestricted_alpha_refinement.v6",
         "verdict": "EXPLORATORY_ALPHA_DOSE_RESPONSE_MEASURED",
         "scientific_fingerprint": SCIENTIFIC_FINGERPRINT,
         "method": {
@@ -1263,12 +1360,49 @@ if REAL_MODE and ALPHA_SWEEP_ENABLED:
             "orthogonal_component_preserved": True,
             "teacher_forcing_used": False,
             "candidate_list_supplied": False,
-            "paper_comparable_alphas": [1.0, 2.0],
+            "tested_alphas": list(ALPHA_SWEEP),
+            "paper_exact_anchor_alpha": 1.0,
+            "paper_reported_double_strength_alpha_measured_in_coarse_run": 2.0,
             "multimodal_task_is_extension_not_exact_replication": True,
         },
         "alpha_roles": SCIENTIFIC_CONFIG["alpha_roles"],
         "primary_alpha_remains": PRIMARY_ALPHA,
-        "alpha_selected_after_outcomes": False,
+        "alpha_selected_after_outcomes": ALPHA_SWEEP_OUTCOME_INFORMED,
+        "alpha_grid_provenance": (
+            "The 0.125-to-1 grid was selected after inspecting the coarse "
+            "0.5/1/2/4 sweep, where alpha=0.5 had the strongest stable identity "
+            "signal and alpha>=2 caused large norm inflation. It is exploratory "
+            "model-characterization only; any selected alpha requires a fresh, "
+            "independently frozen population."
+        ),
+        "exploratory_alpha_selection": {
+            "selection_rule_version": (
+                "mmpilot.multimodal_alpha_identity_specificity.v1"
+            ),
+            "rule_frozen_before_refinement_outcomes": True,
+            "grid_selected_after_coarse_outcomes": True,
+            "one_common_alpha_across_lens_arms": True,
+            "selection_endpoint": "identity_target_logit_specificity",
+            "property_endpoint_used_for_selection": False,
+            "score": (
+                "min(mean(exact-random target-logit delta), "
+                "mean(exact-unrelated target-logit delta)) over all 12 identity "
+                "cells from both lens arms"
+            ),
+            "eligibility": (
+                "every identity cell beats both controls and the predeclared "
+                "activation/update norm guards pass"
+            ),
+            "max_activation_norm_ratio": (
+                ALPHA_SELECTION_MAX_ACTIVATION_NORM_RATIO
+            ),
+            "max_update_to_activation_norm_ratio": (
+                ALPHA_SELECTION_MAX_UPDATE_RATIO
+            ),
+            "ranking": _alpha_ranking,
+            "exploratory_best_alpha": _exploratory_best_alpha,
+            "confirmatory_status": "REQUIRES_FRESH_POPULATION",
+        },
         "population_reused_without_reselection": True,
         "alpha1_exact_outcome_parity": {
             "passed": True,
@@ -1317,6 +1451,13 @@ if ALPHA_SWEEP_REPORT:
         )
     print("report", RUN_DIR / "multimodal_lens_alpha_sweep_report.json")
     print("checksum", ALPHA_SWEEP_REPORT["report_checksum"])
+    print(
+        "exploratory best alpha",
+        ALPHA_SWEEP_REPORT["exploratory_alpha_selection"][
+            "exploratory_best_alpha"
+        ],
+        "(fresh-population confirmation required)",
+    )
     print("Alpha=1 remains primary; every other alpha is sensitivity evidence.")
 '''
 )
