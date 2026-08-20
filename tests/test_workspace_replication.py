@@ -10,6 +10,7 @@ from jlens.mmpilot.coordinate_swap import ConceptToken, build_swap_basis_from_ve
 from jlens.mmpilot.workspace_replication import (
     TEXT_MAX_NEW_TOKENS,
     WorkspaceReplicationRefused,
+    _cosine,
     anthropic_text_tasks,
     assert_fresh_population,
     capture_source_loading,
@@ -59,6 +60,29 @@ def test_text_tasks_are_frozen_and_include_the_paper_two_hop_case() -> None:
     assert tasks[0].implicit_intermediate is True
     assert len({task.task_id for task in tasks}) == len(tasks) == 7
     assert text_task_digest() == text_task_digest(tasks)
+
+
+class _DeviceRecordingTensor:
+    def __init__(self, values) -> None:
+        self.values = torch.tensor(values)
+        self.to_calls = []
+
+    def detach(self):
+        return self
+
+    def to(self, *args, **kwargs):
+        self.to_calls.append((args, kwargs))
+        return self.values.to(*args, **kwargs)
+
+
+def test_cosine_normalizes_activation_and_lens_vector_to_cpu() -> None:
+    activation = _DeviceRecordingTensor([1.0, 0.0])
+    lens_vector = _DeviceRecordingTensor([1.0, 0.0])
+    assert _cosine(activation, lens_vector) == pytest.approx(1.0)
+    for operand in (activation, lens_vector):
+        assert operand.to_calls == [
+            ((), {"device": "cpu", "dtype": torch.float64})
+        ]
 
 
 class _GenerationBackend:

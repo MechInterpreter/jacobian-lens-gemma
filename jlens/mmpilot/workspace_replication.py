@@ -282,8 +282,13 @@ def unrestricted_greedy_swap_trial(
 
 
 def _cosine(a: torch.Tensor, b: torch.Tensor) -> float:
-    left = a.detach().to(torch.float64).flatten()
-    right = b.detach().to(torch.float64).flatten()
+    # Activations are captured on the model device while published/matched
+    # lens vectors may be retained on CPU.  This diagnostic is tiny and is not
+    # part of the model forward, so normalize both operands to CPU explicitly
+    # before taking their dot product.  A dtype-only ``to`` preserves the
+    # original devices and fails for the real CUDA/CPU pairing.
+    left = a.detach().to(device="cpu", dtype=torch.float64).flatten()
+    right = b.detach().to(device="cpu", dtype=torch.float64).flatten()
     denominator = float(left.norm() * right.norm())
     if denominator == 0.0:
         return 0.0
