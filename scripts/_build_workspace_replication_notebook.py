@@ -31,9 +31,10 @@ The order is mandatory:
 1. **Text replication.** Reproduce the paper's text-only implicit two-hop task
    (`spider → ant`, expected downstream answer `8 → 6`) and its France/China
    flexible-function family with the validated text lens and exact `alpha=1`.
-   The literal fragments are encoded through a raw text-completion route;
-   putting them in Gemma's user-turn chat template would instead ask the model
-   to respond conversationally and is a different experiment.
+   Because this checkpoint is instruction-tuned, a generic answer-free user
+   instruction is followed by the literal fragment as an assistant prefill
+   with `continue_final_message=True`. Clean capability is measured for every
+   task before any intervention is allowed to run.
    Gemma tokenizes the paper's digit outputs as whitespace + digit, so success
    is the complete answer from unrestricted two-token greedy generation—not a
    one-token prefix, candidate score, or teacher-forced likelihood.
@@ -253,14 +254,15 @@ code(
     r'''
 from jlens.mmpilot.store import RunFingerprint, UnitStore, payload_checksum
 from jlens.mmpilot.workspace_replication import (
-    PROTOCOL_VERSION, TEXT_INPUT_PROTOCOL_VERSION, TEXT_MAX_NEW_TOKENS,
-    TEXT_OUTPUT_ENDPOINT_VERSION,
+    PROTOCOL_VERSION, TEXT_COMPLETION_INSTRUCTION,
+    TEXT_INPUT_PROTOCOL_VERSION, TEXT_MAX_NEW_TOKENS, TEXT_OUTPUT_ENDPOINT_VERSION,
     text_task_digest,
 )
 
 SCIENTIFIC_CONFIG = {
     "protocol": PROTOCOL_VERSION,
     "text_input_protocol": TEXT_INPUT_PROTOCOL_VERSION,
+    "text_completion_instruction": TEXT_COMPLETION_INSTRUCTION,
     "output_endpoint": TEXT_OUTPUT_ENDPOINT_VERSION,
     "max_new_tokens": TEXT_MAX_NEW_TOKENS,
     "model_repo_id": MODEL_REPO_ID, "model_revision": MODEL_REVISION,
@@ -364,22 +366,67 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
     )
     from jlens.mmpilot.store import safe_key
     from jlens.mmpilot.workspace_replication import (
-        TEXT_MAX_NEW_TOKENS, build_raw_text_completion_inputs,
-        capture_source_loading, text_replication_verdict,
+        TEXT_MAX_NEW_TOKENS, build_assistant_prefill_completion_inputs,
+        capture_source_loading, text_capability_verdict,
+        text_replication_verdict,
         unrestricted_greedy_completion, unrestricted_greedy_swap_trial,
     )
-    text_rows = []
+
+    # Capability is a distinct first gate. No basis is built and no hook is
+    # installed unless every clean completion succeeds.
+    capability_rows = []
     for task in TEXT_TASKS:
-        key = safe_key("text-paper", task.task_id)
-        stored = STORE.load("intervention", key)
+        key = safe_key("text-paper-capability", task.task_id)
+        stored = STORE.load("capability", key)
         if stored is None:
-            inputs = build_raw_text_completion_inputs(BACKEND, task.prompt)
-            if inputs.route.get("chat_template_used") is not False:
-                raise RuntimeError("Stage 1 requires the raw completion route")
+            inputs = build_assistant_prefill_completion_inputs(BACKEND, task.prompt)
+            if not (
+                inputs.route.get("chat_template_used") is True
+                and inputs.route.get("continue_final_message") is True
+            ):
+                raise RuntimeError("Stage 1 requires the assistant-prefill route")
             clean = unrestricted_greedy_completion(
                 BACKEND, inputs, answer=task.clean_answer,
                 max_new_tokens=TEXT_MAX_NEW_TOKENS,
             )
+            stored = {
+                "task_id": task.task_id,
+                "task": task.to_dict(),
+                "input_route": dict(inputs.route),
+                "clean_correct": bool(clean["answer_match"]),
+                "clean": clean,
+                "intervention_ran": False,
+            }
+            STORE.save("capability", key, stored)
+            work = "computed"
+        else:
+            work = "reused"
+        capability_rows.append(stored)
+        print(
+            "capability", task.task_id, work,
+            "expected", repr(task.clean_answer),
+            "generated", repr(stored["clean"]["generated_text"]),
+            "pass", stored["clean_correct"],
+        )
+
+    TEXT_CAPABILITY = text_capability_verdict(capability_rows)
+    STORE.save("metric", "text_capability_verdict", TEXT_CAPABILITY)
+    print(json.dumps(TEXT_CAPABILITY, indent=2))
+
+    text_rows = []
+    if TEXT_CAPABILITY["causal_spending_licensed"]:
+        for task in TEXT_TASKS:
+            key = safe_key("text-paper", task.task_id)
+            stored = STORE.load("intervention", key)
+            if stored is not None:
+                text_rows.append(stored)
+                print(task.task_id, "reused", "swapped answer generated", stored["exact_alpha1_swapped_answer_generated"])
+                continue
+
+            clean_record = next(
+                row for row in capability_rows if row["task_id"] == task.task_id
+            )
+            inputs = build_assistant_prefill_completion_inputs(BACKEND, task.prompt)
             bases = {
                 layer: build_swap_basis_from_vectors(
                     TEXT_TOKEN_VECTORS[layer][task.source], TEXT_TOKEN_VECTORS[layer][task.target],
@@ -416,27 +463,36 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
             )
             stored = {
                 "task_id": task.task_id, "task": task.to_dict(),
+                "input_route": dict(inputs.route),
                 "output_endpoint": "unrestricted_greedy_complete_answer",
-                "clean_correct": bool(clean["answer_match"]),
+                "clean_correct": bool(clean_record["clean_correct"]),
                 "exact_alpha1_swapped_answer_generated": bool(exact["answer_match"]),
                 "random_swapped_answer_generated": bool(random["answer_match"]),
                 "unrelated_swapped_answer_generated": bool(unrelated_result["answer_match"]),
-                "clean": clean,
+                "clean": clean_record["clean"],
                 "exact": exact, "random": random, "unrelated": unrelated_result,
                 "loading_rows": loading,
             }
             STORE.save("intervention", key, stored)
-            work = "computed"
-        else:
-            work = "reused"
-        text_rows.append(stored)
-        print(
-            task.task_id, work,
-            "clean", stored["clean_correct"],
-            "swapped answer generated",
-            stored["exact_alpha1_swapped_answer_generated"],
-        )
-    TEXT_VERDICT = text_replication_verdict(text_rows)
+            text_rows.append(stored)
+            print(
+                task.task_id, "computed",
+                "swapped answer generated",
+                stored["exact_alpha1_swapped_answer_generated"],
+            )
+        TEXT_VERDICT = text_replication_verdict(text_rows)
+    else:
+        TEXT_VERDICT = {
+            **{
+                key: value
+                for key, value in TEXT_CAPABILITY.items()
+                if key != "report_checksum"
+            },
+            "verdict": "TEXT_PAPER_CAPABILITY_NO_GO",
+            "multimodal_stage_licensed": False,
+            "interventions_run": False,
+        }
+        TEXT_VERDICT["report_checksum"] = payload_checksum(TEXT_VERDICT)
     STORE.save("metric", "text_replication_verdict", TEXT_VERDICT)
     print(json.dumps(TEXT_VERDICT, indent=2))
 elif RUN_STAGE1_TEXT_REPLICATION:

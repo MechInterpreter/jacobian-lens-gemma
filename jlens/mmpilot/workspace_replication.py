@@ -30,10 +30,14 @@ from jlens.hooks import ActivationRecorder
 from jlens.mmpilot.coordinate_swap import coordinate_swap_band, read_coordinates
 from jlens.mmpilot.store import payload_checksum
 
-PROTOCOL_VERSION = "mmpilot.paper_first_workspace_replication.v3"
-TEXT_INPUT_PROTOCOL_VERSION = "mmpilot.raw_text_completion.v1"
+PROTOCOL_VERSION = "mmpilot.paper_first_workspace_replication.v4"
+TEXT_INPUT_PROTOCOL_VERSION = "mmpilot.assistant_prefill_completion.v1"
 TEXT_OUTPUT_ENDPOINT_VERSION = "mmpilot.unrestricted_greedy_complete_answer.v1"
 TEXT_MAX_NEW_TOKENS = 2
+TEXT_COMPLETION_INSTRUCTION = (
+    "Complete the assistant's factual sentence by continuing it directly. "
+    "Do not restart or explain the sentence."
+)
 LOADING_VERSION = "mmpilot.clean_source_loading.v1"
 LOCALIZATION_VERSION = "mmpilot.loading_only_localization.v1"
 CONFIRMATION_VERSION = "mmpilot.fresh_multimodal_confirmation.v1"
@@ -149,21 +153,21 @@ def text_task_digest(tasks: Sequence[TextReplicationTask] | None = None) -> str:
         {
             "version": PROTOCOL_VERSION,
             "input_protocol": TEXT_INPUT_PROTOCOL_VERSION,
+            "completion_instruction": TEXT_COMPLETION_INSTRUCTION,
             "tasks": [task.to_dict() for task in selected],
         }
     )
 
 
-def build_raw_text_completion_inputs(backend, prompt: str):
-    """Encode a literal text fragment without the instruction chat template.
+def build_assistant_prefill_completion_inputs(backend, prompt: str):
+    """Adapt a literal completion task to Gemma's instruction interface.
 
-    The paper's task is next-token completion of a sentence fragment. Passing
-    that fragment as a Gemma user turn asks a different question: the IT model
-    begins a conversational restatement (for example, ``"The capital"``)
-    instead of continuing with ``"Paris"``. This explicit route calls the
-    pinned processor directly and records that no chat template was involved.
-    It is text-only by construction; multimodal inputs continue to use the
-    backend's audited chat/media routes.
+    Gemma 4 E4B-IT restarts or echoes sentence fragments passed either as user
+    messages or as raw untemplated text.  The architecture-appropriate
+    adaptation gives a generic, answer-free completion instruction as the user
+    turn and places the paper's literal fragment in an assistant turn with
+    ``continue_final_message=True``.  The generated tokens therefore continue
+    the existing fragment rather than answer a new chat turn.
     """
 
     from jlens.mmpilot.backend import BuiltInputs, text_hash
@@ -172,9 +176,30 @@ def build_raw_text_completion_inputs(backend, prompt: str):
     device = getattr(backend, "device", None)
     if processor is None or device is None:
         raise WorkspaceReplicationRefused(
-            "raw text completion requires the real backend's processor and device"
+            "assistant-prefill completion requires the real backend's processor and device"
         )
-    encoded = processor(text=str(prompt), return_tensors="pt")
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": TEXT_COMPLETION_INSTRUCTION}],
+        },
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": str(prompt)}],
+        },
+    ]
+    apply_chat_template = getattr(processor, "apply_chat_template", None)
+    if not callable(apply_chat_template):
+        raise WorkspaceReplicationRefused(
+            "assistant-prefill completion requires the pinned chat template"
+        )
+    encoded = apply_chat_template(
+        messages,
+        continue_final_message=True,
+        tokenize=True,
+        return_dict=True,
+        return_tensors="pt",
+    )
     tensors = {
         key: (value.to(device) if torch.is_tensor(value) else value)
         for key, value in dict(encoded).items()
@@ -183,7 +208,7 @@ def build_raw_text_completion_inputs(backend, prompt: str):
     input_ids = tensors.get("input_ids")
     if not torch.is_tensor(input_ids) or input_ids.ndim != 2:
         raise WorkspaceReplicationRefused(
-            "the raw completion processor did not produce rank-two input_ids"
+            "the assistant-prefill route did not produce rank-two input_ids"
         )
     return BuiltInputs(
         tensors=tensors,
@@ -191,8 +216,9 @@ def build_raw_text_completion_inputs(backend, prompt: str):
         modality="text",
         prompt_hash=text_hash(str(prompt)),
         route={
-            "route": "raw_text_completion_processor_call",
-            "chat_template_used": False,
+            "route": "assistant_prefill_completion",
+            "chat_template_used": True,
+            "continue_final_message": True,
             "input_protocol": TEXT_INPUT_PROTOCOL_VERSION,
         },
         modality_token_range=None,
@@ -667,6 +693,28 @@ def select_pair_from_loading(
     return {**payload, "selection_digest": payload_checksum(payload)}
 
 
+def text_capability_verdict(rows: Sequence[Mapping]) -> dict:
+    """Decide whether causal spending is licensed for the text tasks."""
+
+    expected = {task.task_id for task in anthropic_text_tasks()}
+    by_task = {str(row["task_id"]): dict(row) for row in rows}
+    missing = sorted(expected - set(by_task))
+    passed = not missing and all(
+        bool(by_task[task_id].get("clean_correct")) for task_id in expected
+    )
+    payload = {
+        "version": PROTOCOL_VERSION,
+        "verdict": (
+            "TEXT_PAPER_CAPABILITY_GO" if passed else "TEXT_PAPER_CAPABILITY_NO_GO"
+        ),
+        "all_clean_answers_correct": passed,
+        "missing_tasks": missing,
+        "causal_spending_licensed": passed,
+        "interventions_run": False,
+    }
+    return {**payload, "report_checksum": payload_checksum(payload)}
+
+
 def text_replication_verdict(rows: Sequence[Mapping]) -> dict:
     """Gate later stages on the paper task, not a multimodal hope."""
 
@@ -851,13 +899,14 @@ __all__ = [
     "LOCALIZATION_VERSION",
     "PROTOCOL_VERSION",
     "TEXT_INPUT_PROTOCOL_VERSION",
+    "TEXT_COMPLETION_INSTRUCTION",
     "TEXT_MAX_NEW_TOKENS",
     "TEXT_OUTPUT_ENDPOINT_VERSION",
     "TextReplicationTask",
     "WorkspaceReplicationRefused",
     "anthropic_text_tasks",
     "assert_fresh_population",
-    "build_raw_text_completion_inputs",
+    "build_assistant_prefill_completion_inputs",
     "capture_source_loading",
     "freeze_confirmation_design",
     "freeze_loading_localization",
@@ -866,6 +915,7 @@ __all__ = [
     "select_pair_from_loading",
     "summarize_loading",
     "text_replication_verdict",
+    "text_capability_verdict",
     "text_task_digest",
     "unrestricted_greedy_completion",
     "unrestricted_greedy_swap_trial",

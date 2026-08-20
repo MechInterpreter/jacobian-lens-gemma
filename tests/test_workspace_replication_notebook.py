@@ -37,7 +37,8 @@ def test_notebook_enforces_the_paper_first_order() -> None:
     source = _source()
     for required in (
         "anthropic_text_tasks",
-        "build_raw_text_completion_inputs",
+        "build_assistant_prefill_completion_inputs",
+        "text_capability_verdict",
         "text_replication_verdict",
         "unrestricted_greedy_completion",
         "unrestricted_greedy_swap_trial",
@@ -60,6 +61,8 @@ def test_notebook_enforces_the_paper_first_order() -> None:
         assert required in source
     assert "answer_token_table(BACKEND" not in source
     assert 'BACKEND.build_inputs(prompt=task.prompt, modality="text")' not in source
+    assert 'STORE.save("capability"' in source
+    assert 'if TEXT_CAPABILITY["causal_spending_licensed"]:' in source
 
 
 def test_all_result_switches_default_false() -> None:

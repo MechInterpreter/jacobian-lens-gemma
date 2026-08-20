@@ -8,13 +8,14 @@ from torch import nn
 
 from jlens.mmpilot.coordinate_swap import ConceptToken, build_swap_basis_from_vectors
 from jlens.mmpilot.workspace_replication import (
+    TEXT_COMPLETION_INSTRUCTION,
     TEXT_INPUT_PROTOCOL_VERSION,
     TEXT_MAX_NEW_TOKENS,
     WorkspaceReplicationRefused,
     _cosine,
     anthropic_text_tasks,
     assert_fresh_population,
-    build_raw_text_completion_inputs,
+    build_assistant_prefill_completion_inputs,
     capture_source_loading,
     freeze_confirmation_design,
     freeze_loading_localization,
@@ -22,6 +23,7 @@ from jlens.mmpilot.workspace_replication import (
     paired_binary_superiority,
     select_pair_from_loading,
     summarize_loading,
+    text_capability_verdict,
     text_replication_verdict,
     text_task_digest,
     unrestricted_greedy_completion,
@@ -87,35 +89,52 @@ def test_cosine_normalizes_activation_and_lens_vector_to_cpu() -> None:
         ]
 
 
-class _RawProcessor:
+class _PrefillProcessor:
     def __init__(self) -> None:
-        self.calls = []
+        self.chat_calls = []
 
     def __call__(self, **kwargs):
-        self.calls.append(dict(kwargs))
+        raise AssertionError("assistant-prefill input must use the chat template")
+
+    def apply_chat_template(self, messages, **kwargs):
+        self.chat_calls.append((messages, dict(kwargs)))
         return {
             "input_ids": torch.tensor([[7, 8, 9]], dtype=torch.long),
             "attention_mask": torch.ones((1, 3), dtype=torch.long),
         }
 
-    def apply_chat_template(self, *args, **kwargs):
-        raise AssertionError("the raw completion route must not use a chat template")
 
-
-def test_raw_text_completion_bypasses_the_chat_template() -> None:
-    processor = _RawProcessor()
+def test_assistant_prefill_uses_continue_final_message() -> None:
+    processor = _PrefillProcessor()
     backend = SimpleNamespace(processor=processor, device=torch.device("cpu"))
-    inputs = build_raw_text_completion_inputs(
+    inputs = build_assistant_prefill_completion_inputs(
         backend, "The capital of France is"
     )
-    assert processor.calls == [
-        {"text": "The capital of France is", "return_tensors": "pt"}
+    messages, kwargs = processor.chat_calls[0]
+    assert messages == [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": TEXT_COMPLETION_INSTRUCTION}],
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "The capital of France is"}
+            ],
+        },
     ]
+    assert kwargs == {
+        "continue_final_message": True,
+        "tokenize": True,
+        "return_dict": True,
+        "return_tensors": "pt",
+    }
     assert inputs.prompt_len == 3
     assert inputs.final_prompt_position == 2
     assert inputs.route == {
-        "route": "raw_text_completion_processor_call",
-        "chat_template_used": False,
+        "route": "assistant_prefill_completion",
+        "chat_template_used": True,
+        "continue_final_message": True,
         "input_protocol": TEXT_INPUT_PROTOCOL_VERSION,
     }
 
@@ -300,6 +319,22 @@ def test_text_replication_gate_requires_two_hop_flexible_and_controls() -> None:
     assert text_replication_verdict(rows)["verdict"] == "TEXT_PAPER_REPLICATION_GO"
     rows[0]["exact_alpha1_swapped_answer_generated"] = False
     assert text_replication_verdict(rows)["verdict"] == "TEXT_PAPER_REPLICATION_NO_GO"
+
+
+def test_text_capability_gate_precedes_and_licenses_causal_spending() -> None:
+    rows = [
+        {"task_id": task.task_id, "clean_correct": True}
+        for task in anthropic_text_tasks()
+    ]
+    passed = text_capability_verdict(rows)
+    assert passed["verdict"] == "TEXT_PAPER_CAPABILITY_GO"
+    assert passed["causal_spending_licensed"] is True
+    assert passed["interventions_run"] is False
+
+    rows[0]["clean_correct"] = False
+    failed = text_capability_verdict(rows)
+    assert failed["verdict"] == "TEXT_PAPER_CAPABILITY_NO_GO"
+    assert failed["causal_spending_licensed"] is False
 
 
 def test_confirmation_design_is_frozen_only_after_both_gates() -> None:
