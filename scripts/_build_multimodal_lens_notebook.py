@@ -142,7 +142,10 @@ AUDIO_PROTOCOL_FINGERPRINT = (
 # keeping every arm at the same total sample count.
 N_FIT_GROUPS = 99
 N_CROSS_EVAL_GROUPS = 48
-N_CAUSAL_CANDIDATES_PER_CONCEPT = 32
+# Prospective causal follow-up.  The completed 32-per-concept screen is read
+# only to exclude its photographs.  Ninety-six new candidates are selected
+# before any new clean answer is opened.
+N_CAUSAL_CANDIDATES_PER_CONCEPT = 96
 N_CAUSAL_IMAGES_PER_CELL = 8
 SOURCE_LAYERS = (33, 34, 35, 36, 37, 38, 39, 40)
 TARGET_LAYER = 41
@@ -150,11 +153,35 @@ DIM_BATCH = 8
 SKIP_FIRST = 16
 CHECKPOINT_EVERY = 10
 PLAN_SEED = "matched-jlens-scale99-20260819-v1"
-CAUSAL_SEED = "matched-jlens-causal-20260819-v1"
+CAUSAL_SEED = "matched-jlens-causal-followup-20260819-v1"
 EVAL_CONCEPTS = ("bird", "cat")
 CONTROL_CONCEPTS = ("zebra", "giraffe")
 CAUSAL_LAYERS = SOURCE_LAYERS
 PRIMARY_ALPHA = 1.0
+
+# The four completed lenses are imported read-only when Stage 3 is requested
+# without Stage 1.  Every report and tensor checksum is pinned below.  Changing
+# the fresh causal population creates a new run fingerprint but never triggers
+# refitting.
+CAUSAL_LENS_SOURCE_RUN_DIR = (
+    "/content/drive/MyDrive/jacobian-lens-gemma/runs/mmjlens4/"
+    "mmjlens4_real_1d3b1afbd019"
+)
+EXPECTED_SOURCE_FINAL_REPORT_CHECKSUM = (
+    "sha256:875e13a8829bfd226c637ef4522d64d4d5ef91f31adcdace4942e72e75eb1e0e"
+)
+EXPECTED_SOURCE_CROSS_REPORT_CHECKSUM = (
+    "sha256:a8536614f6e751e65ec250016852d6d614c0bc16befbfeb502e1faa148a3c69f"
+)
+EXPECTED_SOURCE_CAUSAL_REPORT_CHECKSUM = (
+    "sha256:3370a2de8713024235b154ade3d7531eca491fea5592d9cf6b0397b434d573df"
+)
+EXPECTED_SOURCE_LENS_CHECKSUMS = {
+    "text": "sha256:01c2591e55eda83fb17e784bb1e35fb437ee1ccf1ba556e95269c913b9596717",
+    "image": "sha256:16f0a7c6dcbc36133ed28028016020cb7e8c8a8ec4c2879e283e191b04c1ef6d",
+    "spoken_audio": "sha256:2f9140e28b2dd41b6f7e8e138ef0a11507d6013b1f4e95265d8e80e213936f55",
+    "pooled": "sha256:7569552f1b9137ab859fe54e5d54395920c740fea94a909c8ef43623ddb5ea0e",
+}
 
 REAL_MODE = bool(RUN_REAL_MATCHED_JLENS)
 MODEL_STAGE = any((RUN_STAGE1_FIT_LENSES, RUN_STAGE2_CROSS_EVALUATE, RUN_STAGE3_CAUSAL_COMPARE))
@@ -220,7 +247,8 @@ markdown("## 3. Load the synchronization cache and freeze all populations")
 code(
     r'''
 from jlens.mmpilot.multimodal_lens import (
-    build_matched_plan, select_causal_groups,
+    answer_equivalence_record, build_matched_plan,
+    load_completed_causal_source, select_causal_groups,
 )
 from jlens.mmpilot.store import payload_checksum
 
@@ -257,6 +285,27 @@ else:
         })
     MANIFEST_CHECKSUM = payload_checksum(GROUPS)
 
+CAUSAL_SOURCE = None
+SOURCE_EXCLUDED_IMAGE_IDS = []
+_use_completed_lenses = bool(
+    REAL_MODE and RUN_STAGE3_CAUSAL_COMPARE and not RUN_STAGE1_FIT_LENSES
+)
+if _use_completed_lenses:
+    CAUSAL_SOURCE = load_completed_causal_source(
+        CAUSAL_LENS_SOURCE_RUN_DIR,
+        expected_final_report_checksum=EXPECTED_SOURCE_FINAL_REPORT_CHECKSUM,
+        expected_cross_report_checksum=EXPECTED_SOURCE_CROSS_REPORT_CHECKSUM,
+        expected_causal_report_checksum=EXPECTED_SOURCE_CAUSAL_REPORT_CHECKSUM,
+        expected_lens_checksums=EXPECTED_SOURCE_LENS_CHECKSUMS,
+    )
+    SOURCE_EXCLUDED_IMAGE_IDS = list(CAUSAL_SOURCE["excluded_image_ids"])
+    print("completed lens source", CAUSAL_SOURCE["run_dir"])
+    print("source digest", CAUSAL_SOURCE["source_digest"])
+    print("previously screened images excluded", len(SOURCE_EXCLUDED_IMAGE_IDS))
+
+ANSWER_EQUIVALENCE = answer_equivalence_record()
+print("answer equivalence", ANSWER_EQUIVALENCE)
+
 _fit_n = N_FIT_GROUPS if REAL_MODE else 3
 _eval_n = N_CROSS_EVAL_GROUPS if REAL_MODE else 2
 PLAN = build_matched_plan(
@@ -266,7 +315,10 @@ PLAN = build_matched_plan(
 CAUSAL_POPULATION = select_causal_groups(
     GROUPS, concepts=EVAL_CONCEPTS,
     n_per_concept=N_CAUSAL_CANDIDATES_PER_CONCEPT if REAL_MODE else 3,
-    excluded_image_ids=(*PLAN["fit_image_ids"], *PLAN["eval_image_ids"]),
+    excluded_image_ids=(
+        *PLAN["fit_image_ids"], *PLAN["eval_image_ids"],
+        *SOURCE_EXCLUDED_IMAGE_IDS,
+    ),
     seed=CAUSAL_SEED,
 )
 CAUSAL_POPULATION_DIGEST = payload_checksum(CAUSAL_POPULATION)
@@ -278,19 +330,27 @@ print("causal", CAUSAL_POPULATION_DIGEST,
       {name: len(rows) for name, rows in CAUSAL_POPULATION.items()})
 
 SCIENTIFIC_CONFIG = {
-    "study": "matched_multimodal_jlens.v4",
+    "study": (
+        "matched_multimodal_jlens.causal_followup.v1"
+        if _use_completed_lenses else "matched_multimodal_jlens.v4"
+    ),
     "model_repo_id": MODEL_REPO_ID,
     "model_revision": MODEL_REVISION,
     "audio_protocol_fingerprint": AUDIO_PROTOCOL_FINGERPRINT,
     "manifest_checksum": MANIFEST_CHECKSUM,
     "plan_digest": PLAN["plan_digest"],
     "causal_population_digest": CAUSAL_POPULATION_DIGEST,
+    "causal_source_digest": (
+        CAUSAL_SOURCE["source_digest"] if CAUSAL_SOURCE else None
+    ),
+    "answer_equivalence": ANSWER_EQUIVALENCE,
+    "n_causal_candidates_per_concept": N_CAUSAL_CANDIDATES_PER_CONCEPT,
     "source_layers": list(SOURCE_LAYERS if REAL_MODE else (1, 2)),
     "target_layer": TARGET_LAYER if REAL_MODE else 3,
     "dim_batch": DIM_BATCH if REAL_MODE else 4,
     "skip_first": SKIP_FIRST if REAL_MODE else 2,
     "primary_alpha": PRIMARY_ALPHA,
-    "causal_protocol": "matched_multimodal_jlens_unrestricted_swap.v2",
+    "causal_protocol": "matched_multimodal_jlens_unrestricted_swap.v3",
     "clean_recruitment": "all_modalities_x_identity_and_property",
     "causal_controls": ["random", "unrelated"],
     "causal_concepts": list(EVAL_CONCEPTS),
@@ -298,7 +358,8 @@ SCIENTIFIC_CONFIG = {
     "commit": COMMIT,
 }
 SCIENTIFIC_FINGERPRINT = payload_checksum(SCIENTIFIC_CONFIG)
-RUN_DIR = RUNS_ROOT / "mmjlens4" / f"mmjlens4_{'real' if REAL_MODE else 'mock'}_{SCIENTIFIC_FINGERPRINT.split(':')[1][:12]}"
+_run_family = "mmjlens5causal" if _use_completed_lenses else "mmjlens4"
+RUN_DIR = RUNS_ROOT / _run_family / f"{_run_family}_{'real' if REAL_MODE else 'mock'}_{SCIENTIFIC_FINGERPRINT.split(':')[1][:12]}"
 RUN_DIR.mkdir(parents=True, exist_ok=True)
 _plan_path = RUN_DIR / "matched_population_plan.json"
 if _plan_path.is_file():
@@ -307,6 +368,10 @@ if _plan_path.is_file():
         raise RuntimeError("run directory holds a different population plan")
 else:
     _plan_path.write_text(json.dumps(PLAN, indent=2, default=str))
+if CAUSAL_SOURCE is not None:
+    (RUN_DIR / "causal_source_provenance.json").write_text(
+        json.dumps(CAUSAL_SOURCE, indent=2, default=str)
+    )
 print("run", RUN_DIR)
 print("fingerprint", SCIENTIFIC_FINGERPRINT)
 '''
@@ -419,6 +484,10 @@ for _arm in LENS_ARMS:
     if _lens_path.is_file():
         LENSES[_arm] = JacobianLens.load(str(_lens_path))
         print(_arm, "reused completed lens", _lens_path)
+    elif CAUSAL_SOURCE is not None:
+        _source_path = Path(CAUSAL_SOURCE["lens_paths"][_arm])
+        LENSES[_arm] = JacobianLens.load(str(_source_path))
+        print(_arm, "imported read-only", _source_path)
     elif _fit_requested:
         _units = plan_units(PLAN, _arm)
         LENSES[_arm] = fit_arm(
@@ -435,7 +504,9 @@ for _arm in LENS_ARMS:
         LENSES[_arm].save(str(_temporary))
         os.replace(_temporary, _lens_path)
         print(_arm, "completed", LENSES[_arm].n_prompts, "units")
-    if _lens_path.is_file():
+    if CAUSAL_SOURCE is not None:
+        LENS_CHECKSUMS[_arm] = CAUSAL_SOURCE["lens_checksums"][_arm]
+    elif _lens_path.is_file():
         LENS_CHECKSUMS[_arm] = file_sha256(str(_lens_path))
 
 if len(LENSES) != 4 and (RUN_STAGE2_CROSS_EVALUATE or RUN_STAGE3_CAUSAL_COMPARE or not REAL_MODE):
@@ -510,6 +581,11 @@ if _cross_requested:
     )
 else:
     CROSS_REPORT = STORE.load("metric", "cross_eval_report")
+    if CROSS_REPORT is None and CAUSAL_SOURCE is not None:
+        CROSS_REPORT = json.loads(
+            Path(CAUSAL_SOURCE["cross_report_path"]).read_text(encoding="utf-8")
+        )
+        print("cross-evaluation imported read-only from completed source run")
 
 if CROSS_REPORT:
     print("=" * 96)
@@ -532,7 +608,8 @@ from jlens.mmpilot.coordinate_swap import (
 )
 from jlens.mmpilot.digit_reasoning_confirmation import resolve_digit_endpoints
 from jlens.mmpilot.multimodal_lens import (
-    build_swap_bases_for_lens, unrestricted_swap_trial,
+    build_swap_bases_for_lens, open_answer_matches,
+    unrestricted_swap_trial,
 )
 
 CAUSAL_REPORT = None
@@ -596,15 +673,26 @@ if _causal_requested:
                             if _kind == "identity"
                             else DIGITS["token_ids"][_answers[_source]]
                         )
+                        _expected_surface = (
+                            _source if _kind == "identity" else _answers[_source]
+                        )
+                        _clean_top_token_id = int(_clean_logits.argmax())
+                        _clean_surface = BACKEND.decode_token(
+                            _clean_top_token_id
+                        ).strip()
                         _stored = {
                             "source": _source,
                             "group_id": _group["group_id"], "image_id": _group["image_id"],
                             "modality": _modality, "prompt_kind": _kind,
-                            "clean_top_token_id": int(_clean_logits.argmax()),
-                            "clean_surface": BACKEND.decode_token(int(_clean_logits.argmax())).strip(),
+                            "clean_top_token_id": _clean_top_token_id,
+                            "clean_surface": _clean_surface,
                             "expected_source_token_id": int(_expected),
+                            "expected_surface": _expected_surface,
+                            "answer_equivalence_version": ANSWER_EQUIVALENCE["version"],
                             "clean_success": (
-                                int(_clean_logits.argmax()) == int(_expected)
+                                open_answer_matches(
+                                    _clean_surface, _expected_surface
+                                )
                                 if REAL_MODE else True
                             ),
                         }
@@ -655,12 +743,20 @@ if _causal_requested:
                                 if _kind == "identity"
                                 else DIGITS["token_ids"][_answers[_target_name]]
                             )
+                            _expected_surface = (
+                                _target_name
+                                if _kind == "identity"
+                                else _answers[_target_name]
+                            )
                             _record = {
                                 "source": _source, "target": _target_name,
                                 "group_id": _group["group_id"],
                                 "image_id": _group["image_id"],
                                 "modality": _modality, "prompt_kind": _kind,
-                                "expected_token_id": int(_expected), "arms": {},
+                                "expected_token_id": int(_expected),
+                                "expected_surface": _expected_surface,
+                                "answer_equivalence_version": ANSWER_EQUIVALENCE["version"],
+                                "arms": {},
                             }
                             for _arm in ("text", "pooled"):
                                 _exact_bases = _bases[(_arm, _source, _target_name)]
@@ -681,14 +777,14 @@ if _causal_requested:
                                         BACKEND, _inputs, bases=_condition_basis,
                                         alpha=PRIMARY_ALPHA,
                                     )
+                                    _patched_surface = BACKEND.decode_token(
+                                        _trial["patched_top_token_id"]
+                                    ).strip()
                                     _record["arms"][_arm][_condition] = {
                                         **_trial,
-                                        "patched_surface": BACKEND.decode_token(
-                                            _trial["patched_top_token_id"]
-                                        ).strip(),
-                                        "success": (
-                                            _trial["patched_top_token_id"]
-                                            == int(_expected)
+                                        "patched_surface": _patched_surface,
+                                        "success": open_answer_matches(
+                                            _patched_surface, _expected_surface
                                         ),
                                     }
                             STORE.save("intervention", _key, _record)
@@ -725,13 +821,20 @@ if _causal_requested:
                             },
                         })
     CAUSAL_REPORT = {
-        "protocol": "matched_multimodal_jlens_unrestricted_swap.v2",
+        "protocol": "matched_multimodal_jlens_unrestricted_swap.v3",
         "verdict": (
             "MEASURED" if _capability_ok else "CAPABILITY_NO_GO"
         ),
         "primary_alpha": PRIMARY_ALPHA,
         "teacher_forcing_used": False,
         "candidate_list_supplied": False,
+        "answer_equivalence": ANSWER_EQUIVALENCE,
+        "source_run_provenance": CAUSAL_SOURCE,
+        "fresh_population": {
+            "candidate_count_per_concept": N_CAUSAL_CANDIDATES_PER_CONCEPT,
+            "excluded_previous_screen_images": len(SOURCE_EXCLUDED_IMAGE_IDS),
+            "causal_population_digest": CAUSAL_POPULATION_DIGEST,
+        },
         "clean_capability_required_in_every_modality_and_endpoint": True,
         "recruited_counts": {
             name: len(rows) for name, rows in _recruited.items()

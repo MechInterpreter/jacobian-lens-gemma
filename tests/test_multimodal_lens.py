@@ -6,19 +6,25 @@ import pytest
 import torch
 
 from jlens.lens import JacobianLens
+from jlens.metadata import file_sha256
 from jlens.mmpilot.coordinate_swap import resolve_concept_token
 from jlens.mmpilot.mock import MockPilotBackend, MockWorld
 from jlens.mmpilot.multimodal_lens import (
     MultimodalLensRefused,
+    answer_equivalence_record,
     build_matched_plan,
     build_swap_bases_for_lens,
     fit_arm,
     fit_budget,
     jacobian_for_built_inputs,
+    load_completed_causal_source,
+    normalize_open_answer_surface,
+    open_answer_matches,
     plan_units,
     select_causal_groups,
     unrestricted_swap_trial,
 )
+from jlens.mmpilot.store import payload_checksum
 
 
 def groups(n: int = 12) -> list[dict]:
@@ -211,3 +217,90 @@ def test_budget_counts_all_four_arms():
     }
     assert budget["total_prompt_forwards"] == 1000
     assert budget["total_backward_passes"] == 320_000
+
+
+def test_open_answer_equivalence_is_only_case_and_whitespace() -> None:
+    assert normalize_open_answer_surface("  Cat\n") == "cat"
+    assert open_answer_matches(" bird", "BIRD")
+    assert open_answer_matches("  2 ", "2")
+    assert not open_answer_matches("birds", "bird")
+    assert not open_answer_matches("crow", "bird")
+    assert not open_answer_matches("cat.", "cat")
+    record = answer_equivalence_record()
+    assert record["semantic_aliases"] == []
+    assert record["punctuation_removed"] is False
+    assert record["protocol_digest"].startswith("sha256:")
+
+
+def _write_report(path: Path, body: dict) -> tuple[dict, str]:
+    checksum = payload_checksum(body)
+    report = {**body, "report_checksum": checksum}
+    path.write_text(__import__("json").dumps(report), encoding="utf-8")
+    return report, checksum
+
+
+def test_completed_causal_source_is_pinned_and_excludes_screened_images(
+    tmp_path: Path,
+) -> None:
+    lens_dir = tmp_path / "lenses"
+    lens_dir.mkdir()
+    checksums = {}
+    for arm in ("text", "image", "spoken_audio", "pooled"):
+        lens = JacobianLens(
+            jacobians={2: torch.eye(4)}, n_prompts=99, d_model=4
+        )
+        path = lens_dir / f"lens.{arm}.pt"
+        lens.save(str(path))
+        checksums[arm] = file_sha256(str(path))
+
+    cross, cross_checksum = _write_report(
+        tmp_path / "multimodal_lens_cross_eval_report.json",
+        {"version": "cross", "cells": []},
+    )
+    causal, causal_checksum = _write_report(
+        tmp_path / "multimodal_lens_causal_comparison_report.json",
+        {
+            "protocol": "old",
+            "verdict": "CAPABILITY_NO_GO",
+            "clean_screen": [
+                {"image_id": "spent-2"},
+                {"image_id": "spent-1"},
+                {"image_id": "spent-1"},
+            ],
+        },
+    )
+    final, final_checksum = _write_report(
+        tmp_path / "matched_multimodal_jlens_report.json",
+        {
+            "schema": "final",
+            "scientific_fingerprint": "sha256:source",
+            "lens_checksums": checksums,
+            "cross_evaluation": cross,
+            "causal_comparison": causal,
+        },
+    )
+    assert final["report_checksum"] == final_checksum
+    source = load_completed_causal_source(
+        tmp_path,
+        expected_final_report_checksum=final_checksum,
+        expected_cross_report_checksum=cross_checksum,
+        expected_causal_report_checksum=causal_checksum,
+        expected_lens_checksums=checksums,
+    )
+    assert source["excluded_image_ids"] == ["spent-1", "spent-2"]
+    assert source["n_excluded_images"] == 2
+    assert source["cross_report_path"].endswith(
+        "multimodal_lens_cross_eval_report.json"
+    )
+    assert source["source_digest"].startswith("sha256:")
+
+
+def test_completed_causal_source_refuses_a_changed_lens(tmp_path: Path) -> None:
+    with pytest.raises(MultimodalLensRefused, match="missing completed"):
+        load_completed_causal_source(
+            tmp_path,
+            expected_final_report_checksum="sha256:missing",
+            expected_cross_report_checksum="sha256:missing",
+            expected_causal_report_checksum="sha256:missing",
+            expected_lens_checksums={},
+        )

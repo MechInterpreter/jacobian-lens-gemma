@@ -23,10 +23,12 @@ estimator configuration refuses resume instead of mixing accumulators.
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import os
 import random
 import time
+import unicodedata
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import asdict, dataclass
@@ -38,6 +40,7 @@ import torch
 from jlens.fitting import valid_position_mask
 from jlens.hooks import ActivationRecorder
 from jlens.lens import JacobianLens
+from jlens.metadata import file_sha256
 from jlens.mmpilot.coordinate_swap import (
     ConceptToken,
     SwapBasis,
@@ -52,10 +55,166 @@ ESTIMATOR_VERSION = "mmpilot.multimodal_average_jacobian.v1"
 PLAN_VERSION = "mmpilot.matched_multimodal_lens_plan.v1"
 CROSS_EVAL_VERSION = "mmpilot.multimodal_lens_cross_eval.v1"
 PRIMARY_POSITION_RULE = "all_prompt_positions"
+ANSWER_EQUIVALENCE_VERSION = (
+    "mmpilot.open_answer_equivalence.casefold_whitespace.v1"
+)
+CAUSAL_SOURCE_VERSION = "mmpilot.matched_multimodal_causal_source.v1"
 
 
 class MultimodalLensRefused(RuntimeError):
     """The requested run would mix or mislabel scientific inputs."""
+
+
+def normalize_open_answer_surface(value: str) -> str:
+    """Normalize only tokenizer/case aliases declared before causal sampling.
+
+    This deliberately does not remove punctuation, singularize words, or map
+    species names onto a parent category.  It licenses only Unicode
+    normalization, case folding, and whitespace equivalence, which are
+    properties of surface realization rather than semantic relabeling.
+    """
+
+    normalized = unicodedata.normalize("NFKC", str(value)).casefold()
+    return " ".join(normalized.split())
+
+
+def open_answer_matches(observed: str, expected: str) -> bool:
+    """Whether two one-token answer surfaces are equivalent under v1."""
+
+    return normalize_open_answer_surface(observed) == normalize_open_answer_surface(
+        expected
+    )
+
+
+def answer_equivalence_record() -> dict:
+    """Machine-readable boundary for the prospective causal follow-up."""
+
+    payload = {
+        "version": ANSWER_EQUIVALENCE_VERSION,
+        "unicode_normalization": "NFKC",
+        "case_sensitive": False,
+        "whitespace_rule": "strip_and_collapse",
+        "punctuation_removed": False,
+        "semantic_aliases": [],
+        "plural_or_taxonomy_mapping": False,
+    }
+    return {**payload, "protocol_digest": payload_checksum(payload)}
+
+
+def _verified_payload(path: Path, *, expected_checksum: str, label: str) -> dict:
+    if not path.is_file():
+        raise MultimodalLensRefused(f"missing {label}: {path}")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise MultimodalLensRefused(f"could not read {label}: {path}") from exc
+    recorded = str(payload.get("report_checksum") or "")
+    body = {key: value for key, value in payload.items() if key != "report_checksum"}
+    recomputed = payload_checksum(body)
+    if recorded != expected_checksum or recomputed != expected_checksum:
+        raise MultimodalLensRefused(
+            f"{label} checksum mismatch: recorded={recorded!r}, "
+            f"recomputed={recomputed!r}, expected={expected_checksum!r}"
+        )
+    return payload
+
+
+def load_completed_causal_source(
+    run_dir: str | Path,
+    *,
+    expected_final_report_checksum: str,
+    expected_cross_report_checksum: str,
+    expected_causal_report_checksum: str,
+    expected_lens_checksums: Mapping[str, str],
+) -> dict:
+    """Verify the completed four-lens run reused by a fresh causal follow-up.
+
+    The old clean-screen photographs are harvested from the completed causal
+    report and become mandatory exclusions.  Lens files are read in place and
+    checksum-pinned; they are never refitted or copied into the new run.
+    """
+
+    root = Path(run_dir)
+    final = _verified_payload(
+        root / "matched_multimodal_jlens_report.json",
+        expected_checksum=expected_final_report_checksum,
+        label="completed matched-multimodal report",
+    )
+    causal = _verified_payload(
+        root / "multimodal_lens_causal_comparison_report.json",
+        expected_checksum=expected_causal_report_checksum,
+        label="completed causal report",
+    )
+    cross_path = root / "multimodal_lens_cross_eval_report.json"
+    _cross = _verified_payload(
+        cross_path,
+        expected_checksum=expected_cross_report_checksum,
+        label="completed cross-evaluation report",
+    )
+    if causal.get("verdict") != "CAPABILITY_NO_GO":
+        raise MultimodalLensRefused(
+            "the pinned source causal report is not the completed "
+            "CAPABILITY_NO_GO run"
+        )
+    if (final.get("causal_comparison") or {}).get("report_checksum") != (
+        expected_causal_report_checksum
+    ):
+        raise MultimodalLensRefused(
+            "the final report does not embed the pinned causal report"
+        )
+    if (final.get("cross_evaluation") or {}).get("report_checksum") != (
+        expected_cross_report_checksum
+    ):
+        raise MultimodalLensRefused(
+            "the final report does not embed the pinned cross-evaluation report"
+        )
+
+    recorded_checksums = dict(final.get("lens_checksums") or {})
+    if set(recorded_checksums) != set(LENS_ARMS):
+        raise MultimodalLensRefused(
+            f"the source report does not record all four lens arms: "
+            f"{sorted(recorded_checksums)}"
+        )
+    lens_paths: dict[str, str] = {}
+    for arm in LENS_ARMS:
+        expected = str(expected_lens_checksums.get(arm) or "")
+        recorded = str(recorded_checksums.get(arm) or "")
+        path = root / "lenses" / f"lens.{arm}.pt"
+        observed = file_sha256(str(path)) if path.is_file() else "missing"
+        if not expected or recorded != expected or observed != expected:
+            raise MultimodalLensRefused(
+                f"source lens {arm!r} is not checksum-pinned: "
+                f"recorded={recorded!r}, observed={observed!r}, "
+                f"expected={expected!r}"
+            )
+        lens_paths[arm] = str(path)
+
+    clean_screen = list(causal.get("clean_screen") or [])
+    excluded_image_ids = sorted(
+        {
+            str(row.get("image_id"))
+            for row in clean_screen
+            if str(row.get("image_id") or "").strip()
+        }
+    )
+    if not excluded_image_ids:
+        raise MultimodalLensRefused(
+            "the completed causal report records no screened image identities"
+        )
+    payload = {
+        "version": CAUSAL_SOURCE_VERSION,
+        "run_dir": str(root),
+        "source_scientific_fingerprint": final.get("scientific_fingerprint"),
+        "final_report_checksum": expected_final_report_checksum,
+        "cross_report_checksum": expected_cross_report_checksum,
+        "cross_report_path": str(cross_path),
+        "causal_report_checksum": expected_causal_report_checksum,
+        "lens_checksums": recorded_checksums,
+        "lens_paths": lens_paths,
+        "excluded_image_ids": excluded_image_ids,
+        "n_excluded_images": len(excluded_image_ids),
+    }
+    return {**payload, "source_digest": payload_checksum(payload)}
 
 
 @dataclass(frozen=True)

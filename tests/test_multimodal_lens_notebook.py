@@ -47,8 +47,16 @@ def test_notebook_contains_the_four_arm_scientific_contract() -> None:
         '"candidate_list_supplied": False',
         "unrestricted_swap_trial",
         "checkpoint_every=CHECKPOINT_EVERY",
+        "answer_equivalence_record",
+        "load_completed_causal_source",
+        "N_CAUSAL_CANDIDATES_PER_CONCEPT = 96",
+        "previously screened images excluded",
+        "matched_multimodal_jlens_unrestricted_swap.v3",
+        "open_answer_matches",
+        "imported read-only",
     ):
         assert required in source
+    assert "int(_clean_logits.argmax()) == int(_expected)" not in source
 
 
 def test_mock_notebook_executes_end_to_end(tmp_path: Path, monkeypatch) -> None:

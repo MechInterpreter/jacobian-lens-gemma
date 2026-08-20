@@ -64,12 +64,47 @@ CONFIRM_CAUSAL_BUDGET = True
 REPORT_RUN_DIR = None
 ```
 
-The causal stage first smart-saves unrestricted clean answers for 32 candidate
-photographs per concept. It intervenes only after eight photographs per
-concept answer both identity and leg-count questions correctly in text, image,
-and spoken audio. It then compares the text and pooled lenses using exact
-alpha-one exchange against matched random and unrelated-coordinate controls.
-No answer token is appended and no candidate list is shown to the model.
+The original causal stage smart-saved unrestricted clean answers for 32
+candidate photographs per concept. It was designed to intervene only after
+eight photographs per concept answered both identity and leg-count questions
+correctly in text, image, and spoken audio. No answer token was appended and no
+candidate list was shown to the model.
+
+## Prospective causal follow-up after the completed capability no-go
+
+The first causal screen used exact token-ID equality.  It therefore refused
+case and tokenizer aliases even when they decoded to the same answer surface.
+The completed run remains immutable and retains its `CAPABILITY_NO_GO`
+verdict.  The follow-up declares, before selecting new media, a narrower
+surface-equivalence rule: NFKC normalization, case folding, and collapsed
+whitespace only.  It does not strip punctuation, singularize, or map bird
+species onto the parent category.
+
+The follow-up imports the four completed lens files read-only from
+`mmjlens4_real_1d3b1afbd019`, verifies every report and tensor checksum, and
+excludes all 64 photographs opened by the completed clean screen.  It selects
+96 fresh candidates per concept and writes to a new fingerprinted
+`mmjlens5causal_*` run.  No fitting or cross-evaluation is repeated.
+
+Use the same notebook with:
+
+```python
+RUN_REAL_MATCHED_JLENS = True
+RUN_STAGE0_FREEZE_PLAN = True
+RUN_STAGE1_FIT_LENSES = False
+RUN_STAGE2_CROSS_EVALUATE = False
+RUN_STAGE3_CAUSAL_COMPARE = True
+RUN_STAGE4_WRITE_REPORT = True
+
+CONFIRM_MODEL_LOAD = True
+CONFIRM_FIT_BUDGET = False
+CONFIRM_CAUSAL_BUDGET = True
+REPORT_RUN_DIR = None
+```
+
+The clean screen and every intervention are stored as fingerprint-bound units.
+A disconnect resumes completed work; it never reuses the superseded exact-ID
+screen and never refits a lens.
 
 ## Interpretation
 
