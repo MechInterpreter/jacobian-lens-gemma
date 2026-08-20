@@ -20,6 +20,7 @@ unit tests and for a resumable notebook orchestrator.
 from __future__ import annotations
 
 import math
+import re
 import statistics
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
@@ -30,14 +31,33 @@ from jlens.hooks import ActivationRecorder
 from jlens.mmpilot.coordinate_swap import coordinate_swap_band, read_coordinates
 from jlens.mmpilot.store import payload_checksum
 
-PROTOCOL_VERSION = "mmpilot.paper_first_workspace_replication.v4"
+PROTOCOL_VERSION = "mmpilot.paper_first_workspace_replication.v5"
 TEXT_INPUT_PROTOCOL_VERSION = "mmpilot.assistant_prefill_completion.v1"
-TEXT_OUTPUT_ENDPOINT_VERSION = "mmpilot.unrestricted_greedy_complete_answer.v1"
+TEXT_OUTPUT_ENDPOINT_VERSION = "mmpilot.unrestricted_greedy_semantic_head_answer.v2"
 TEXT_MAX_NEW_TOKENS = 2
 TEXT_COMPLETION_INSTRUCTION = (
     "Complete the assistant's factual sentence by continuing it directly. "
     "Do not restart or explain the sentence."
 )
+TEXT_ANSWER_MATCH_RULE = (
+    "after NFKC/case/whitespace/punctuation normalization, the expected answer "
+    "or its fixed digit/English-number-word equivalent must be the final lexical "
+    "item; explicit negation markers anywhere in the completion reject the match"
+)
+_NUMBER_WORDS = {
+    "0": "zero",
+    "1": "one",
+    "2": "two",
+    "3": "three",
+    "4": "four",
+    "5": "five",
+    "6": "six",
+    "7": "seven",
+    "8": "eight",
+    "9": "nine",
+    "10": "ten",
+}
+_NEGATION_MARKERS = frozenset({"not", "no", "non", "never", "except", "outside"})
 LOADING_VERSION = "mmpilot.clean_source_loading.v1"
 LOCALIZATION_VERSION = "mmpilot.loading_only_localization.v1"
 CONFIRMATION_VERSION = "mmpilot.fresh_multimodal_confirmation.v1"
@@ -225,6 +245,37 @@ def build_assistant_prefill_completion_inputs(backend, prompt: str):
     )
 
 
+def completion_answer_matches(generated: str, answer: str) -> bool:
+    """Match an unrestricted completion by its final semantic head.
+
+    Instruction models often produce a short modifier before the answer
+    (``Western Europe``, ``Mandarin Chinese``) and spell a digit as a number
+    word.  This rule is deliberately narrower than substring matching: the
+    answer must be the final lexical item, and a negated mention never counts.
+    """
+
+    from jlens.mmpilot.full_vocabulary import normalize_generated_text
+
+    generated_words = re.findall(
+        r"\w+", normalize_generated_text(str(generated)), flags=re.UNICODE
+    )
+    wanted_words = re.findall(
+        r"\w+", normalize_generated_text(str(answer)), flags=re.UNICODE
+    )
+    if not generated_words or not wanted_words:
+        return False
+    if any(word in _NEGATION_MARKERS for word in generated_words):
+        return False
+    wanted = wanted_words[-1]
+    aliases = {wanted}
+    if wanted in _NUMBER_WORDS:
+        aliases.add(_NUMBER_WORDS[wanted])
+    reverse = {word: digit for digit, word in _NUMBER_WORDS.items()}
+    if wanted in reverse:
+        aliases.add(reverse[wanted])
+    return generated_words[-1] in aliases
+
+
 @torch.no_grad()
 def unrestricted_greedy_completion(
     backend,
@@ -245,7 +296,6 @@ def unrestricted_greedy_completion(
 
     from jlens.mmpilot.capability import _extend_tensors
     from jlens.mmpilot.full_vocabulary import (
-        greedy_matches,
         normalize_generated_text,
         token_decoder,
     )
@@ -295,7 +345,8 @@ def unrestricted_greedy_completion(
         "normalized_generated_text": normalize_generated_text(text),
         "answer": str(answer),
         "normalized_answer": normalize_generated_text(str(answer)),
-        "answer_match": bool(greedy_matches(text, str(answer))),
+        "answer_match_rule": TEXT_ANSWER_MATCH_RULE,
+        "answer_match": bool(completion_answer_matches(text, str(answer))),
     }
 
 
@@ -900,6 +951,7 @@ __all__ = [
     "PROTOCOL_VERSION",
     "TEXT_INPUT_PROTOCOL_VERSION",
     "TEXT_COMPLETION_INSTRUCTION",
+    "TEXT_ANSWER_MATCH_RULE",
     "TEXT_MAX_NEW_TOKENS",
     "TEXT_OUTPUT_ENDPOINT_VERSION",
     "TextReplicationTask",
@@ -908,6 +960,7 @@ __all__ = [
     "assert_fresh_population",
     "build_assistant_prefill_completion_inputs",
     "capture_source_loading",
+    "completion_answer_matches",
     "freeze_confirmation_design",
     "freeze_loading_localization",
     "holm_adjust",

@@ -17,6 +17,7 @@ from jlens.mmpilot.workspace_replication import (
     assert_fresh_population,
     build_assistant_prefill_completion_inputs,
     capture_source_loading,
+    completion_answer_matches,
     freeze_confirmation_design,
     freeze_loading_localization,
     holm_adjust,
@@ -137,6 +138,40 @@ def test_assistant_prefill_uses_continue_final_message() -> None:
         "continue_final_message": True,
         "input_protocol": TEXT_INPUT_PROTOCOL_VERSION,
     }
+
+
+@pytest.mark.parametrize(
+    ("generated", "answer"),
+    (
+        (" eight.", "8"),
+        (" 8", "8"),
+        (" Western Europe", "Europe"),
+        (" Mandarin Chinese", "Chinese"),
+        (" East Asia", "Asia"),
+        (" Paris,", "Paris"),
+        ("a bird", "bird"),
+    ),
+)
+def test_semantic_head_match_accepts_fixed_natural_answer_forms(
+    generated: str, answer: str
+) -> None:
+    assert completion_answer_matches(generated, answer) is True
+
+
+@pytest.mark.parametrize(
+    ("generated", "answer"),
+    (
+        ("not Europe", "Europe"),
+        ("Europe or Asia", "Europe"),
+        ("Chinese Mandarin", "Chinese"),
+        ("eighteen", "8"),
+        ("", "Paris"),
+    ),
+)
+def test_semantic_head_match_rejects_negation_and_nonfinal_mentions(
+    generated: str, answer: str
+) -> None:
+    assert completion_answer_matches(generated, answer) is False
 
 
 class _GenerationBackend:

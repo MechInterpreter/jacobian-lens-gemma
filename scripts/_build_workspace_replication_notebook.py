@@ -35,6 +35,8 @@ The order is mandatory:
    instruction is followed by the literal fragment as an assistant prefill
    with `continue_final_message=True`. Clean capability is measured for every
    task before any intervention is allowed to run.
+   The answer must be the final lexical item; fixed digit/number-word
+   equivalents are accepted and explicit negation is rejected.
    Gemma tokenizes the paper's digit outputs as whitespace + digit, so success
    is the complete answer from unrestricted two-token greedy generation—not a
    one-token prefix, candidate score, or teacher-forced likelihood.
@@ -254,7 +256,7 @@ code(
     r'''
 from jlens.mmpilot.store import RunFingerprint, UnitStore, payload_checksum
 from jlens.mmpilot.workspace_replication import (
-    PROTOCOL_VERSION, TEXT_COMPLETION_INSTRUCTION,
+    PROTOCOL_VERSION, TEXT_ANSWER_MATCH_RULE, TEXT_COMPLETION_INSTRUCTION,
     TEXT_INPUT_PROTOCOL_VERSION, TEXT_MAX_NEW_TOKENS, TEXT_OUTPUT_ENDPOINT_VERSION,
     text_task_digest,
 )
@@ -263,6 +265,7 @@ SCIENTIFIC_CONFIG = {
     "protocol": PROTOCOL_VERSION,
     "text_input_protocol": TEXT_INPUT_PROTOCOL_VERSION,
     "text_completion_instruction": TEXT_COMPLETION_INSTRUCTION,
+    "text_answer_match_rule": TEXT_ANSWER_MATCH_RULE,
     "output_endpoint": TEXT_OUTPUT_ENDPOINT_VERSION,
     "max_new_tokens": TEXT_MAX_NEW_TOKENS,
     "model_repo_id": MODEL_REPO_ID, "model_revision": MODEL_REVISION,
