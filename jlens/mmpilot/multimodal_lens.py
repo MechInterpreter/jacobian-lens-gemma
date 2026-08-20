@@ -1028,6 +1028,7 @@ def unrestricted_swap_trial(
     source_token_id: int | None = None,
     clean_logits: torch.Tensor | None = None,
     compact_positions: bool = False,
+    position_rule: str = PRIMARY_POSITION_RULE,
 ) -> dict:
     """One paper-style exchange scored on the unrestricted next-token output.
 
@@ -1052,7 +1053,7 @@ def unrestricted_swap_trial(
         bases,
         alpha=float(alpha),
         prompt_len=inputs.prompt_len,
-        position_rule=PRIMARY_POSITION_RULE,
+        position_rule=position_rule,
         evidence_span=inputs.modality_token_range,
         record_coordinates=False,
     ) as stats:
@@ -1109,6 +1110,7 @@ def unrestricted_swap_trial(
         "alpha_is_extrapolation": bool(float(alpha) > 1.0),
         "teacher_forcing_used": False,
         "candidate_list_supplied": False,
+        "position_rule": str(position_rule),
         "clean_top_token_id": int(clean.argmax()),
         "patched_top_token_id": int(patched.argmax()),
         "prediction_changed": int(clean.argmax()) != int(patched.argmax()),

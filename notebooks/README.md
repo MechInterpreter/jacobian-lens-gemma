@@ -1,6 +1,6 @@
 # Notebooks
 
-Fourteen notebooks at this level are the **active research workflow**. Everything
+Fifteen notebooks at this level are the **active research workflow**. Everything
 else has been moved into `archive/`, where it is preserved rather than
 preserved-and-confusing: an archived notebook produced a completed result, and
 re-running it today would re-run an *older protocol*.
@@ -40,9 +40,10 @@ published. Notebooks 1, 2, and 13 are the only ones that fit lenses.
 | 11 | `multimodal_jspace_full_vocabulary_causal_validation_colab.ipynb` | **New. The endpoint correction, and the final bounded rerun.** Stage 0 (CPU) audits every active endpoint, writes the claim ledger, and writes versioned amendments relabelling the completed restricted-candidate results. Stage 1 (GPU) reuses notebook 10's *exact* population and the canonical three-modality run's own inputs, and rescores them on the unrestricted next-token endpoint: original prompt, nothing appended, complete vocabulary, success only at unique global rank 1. Stage 2 (CPU) judges from the saved units alone. | `mmfv_real_*` run, `mmfv_audit_*` amendments |
 | 12 | `multimodal_jspace_digit_reasoning_confirmation_colab.ipynb` | **Exact-exchange confirmation (v3).** The completed alpha=2 null and alpha=1 capability-no-go run remain immutable. V3 changes only recruitment capacity: 64 fresh candidates per concept, still requiring eight selected examples per direction×modality cell and excluding both completed digit populations. The causal design remains alpha=1-only over L33-L40 with unrestricted global argmax, greedy parity, exact-exchange diagnostics, both directions, every modality, a direct-answer positive control, and matched controls. Every forward pass is an atomic resume unit; nothing is fitted. | `mmalpha1confirm64_real_*` run and `alpha1_exact_swap_recruitment64_confirmation_report.json` |
 | 13 | `multimodal_jspace_matched_jlens_colab.ipynb` | **Matched-distribution J-Lens study.** Fits equal-size text, image, spoken-caption, and pooled average-Jacobian lenses from the checkpoint's real processor inputs; the pooled arm is exactly 33/33/33 at the default 99-example scale. It cross-evaluates every lens on every modality with unrestricted full-vocabulary readout, then optionally compares the text and pooled lenses with exact alpha-one coordinate exchange on a fresh, clean-capability-recruited population. Fit accumulators and every evaluation/causal unit smart-save to Drive. | `mmjlens4_real_*` run and `matched_multimodal_jlens_report.json` |
+| 14 | `multimodal_jspace_workspace_replication_colab.ipynb` | **Paper-first replication and fresh confirmation.** First requires a literal text-only replication of the paper's spider→ant downstream task and France/China flexible-function family. It then measures clean source-concept loading with the matched pooled lens, chooses the concept pair, contiguous band, and modality-specific position rule from loading only, freezes the design, and finally opens disjoint photographs/recordings for unrestricted alpha-one confirmation. Alpha=.75 is sensitivity only. | `mmworkspace_real_*` and `paper_first_workspace_study_report.json` |
 | A | `mats_research_evidence_analysis.ipynb` | CPU-only analysis of the completed run archives for the MATS research dossier. It produces descriptive tables and figures; it runs no model and changes no scientific result. | `reports/mats_application/figures/` |
 
-Notebooks 1–5 and 7–13 are all **switched off** in the committed file. Opening
+Notebooks 1–5 and 7–14 are all **switched off** in the committed file. Opening
 one downloads no model and spends no GPU compute. Notebooks 9, 10, 11, and 13
 have off states that are complete MOCK runs on CPU.
 
@@ -165,6 +166,7 @@ semantics and what a fresh process reconstructs versus re-proves.
 | paper-style hidden-intermediate exchange versus the answer-swap confound, one layer at a time | (8) Anthropic reasoning swap |
 | the paper's contiguous-band clamp, and the lenses for physical layers 33/34/36/37/39 | (9) Anthropic band swap |
 | causal exchange across the **validated** band L33–L40 | (10) the L33–L40 follow-up |
+| paper-comparable text replication, clean source-loading localization, and untouched multimodal confirmation | (14) workspace replication |
 | anything about a band beginning at L32, or any layer earlier than 33 | nothing. L32 failed the frozen gate and no notebook may claim it |
 
 ---

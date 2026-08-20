@@ -208,6 +208,36 @@ def test_exact_swap_trial_is_unrestricted():
     assert row["positions_patched"]["2"] == list(range(inputs.prompt_len))
 
 
+def test_unrestricted_swap_trial_accepts_a_loading_frozen_position_rule():
+    backend = MockPilotBackend(MockWorld(), n_layers=4)
+    lens = JacobianLens(
+        jacobians={2: torch.eye(backend.d_model)}, n_prompts=1, d_model=backend.d_model
+    )
+    source = resolve_concept_token(backend.encode_token, "bird")
+    target = resolve_concept_token(backend.encode_token, "cat")
+    bases = build_swap_bases_for_lens(
+        lens, backend.unembedding_weight(), layers=(2,), source=source, target=target
+    )
+    evidence = backend.world.evidence(
+        concepts_present=("bird",), modality="text", nuisance_key="span"
+    )
+    inputs = backend.build_inputs(
+        prompt="What animal is present? Answer:", modality="image", image=evidence
+    )
+    inputs.modality_token_range = [0, 1]
+    row = unrestricted_swap_trial(
+        backend,
+        inputs,
+        bases=bases,
+        alpha=1.0,
+        position_rule="evidence_span_only",
+    )
+    assert row["position_rule"] == "evidence_span_only"
+    assert row["positions_patched"]["2"] == list(
+        range(*inputs.modality_token_range)
+    )
+
+
 def test_swap_trial_records_graded_full_vocabulary_diagnostics() -> None:
     backend = MockPilotBackend(MockWorld(), n_layers=4)
     lens = JacobianLens(
