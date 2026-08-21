@@ -133,6 +133,7 @@ CONFIRM_CONFIRMATION_BUDGET = False
 
 MODEL_REPO_ID = "google/gemma-4-E4B-it"
 MODEL_REVISION = "fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd"
+STUDY_LAYER_WINDOW = "late_jr_l33_l40"
 SCIENTIFIC_IMPLEMENTATION_COMMIT = (
     "c6b5dc144051a13ae163c89d2bfb5a0f955e9288"
 )
@@ -140,7 +141,17 @@ EXPECT_N_LAYERS, EXPECT_D_MODEL, EXPECT_VOCAB = 42, 2560, 262144
 AUDIO_PROTOCOL_FINGERPRINT = (
     "sha256:9ad8bcc9420a7983f6e3b75d5d7080c0e2fcf0a94a76431917fcde73ba777920"
 )
-LAYERS = tuple(range(33, 41))
+if STUDY_LAYER_WINDOW == "late_jr_l33_l40":
+    LAYERS = tuple(range(33, 41))
+    SCIENTIFIC_IMPLEMENTATION_ID = SCIENTIFIC_IMPLEMENTATION_COMMIT
+elif STUDY_LAYER_WINDOW == "early_r_l27_l32":
+    LAYERS = tuple(range(27, 33))
+    SCIENTIFIC_IMPLEMENTATION_ID = "loading-first-early-r-l27-l32.v1"
+else:
+    raise ValueError(
+        "STUDY_LAYER_WINDOW must be 'late_jr_l33_l40' or "
+        "'early_r_l27_l32'"
+    )
 TEXT_PRIMARY_ALPHA = 1.0
 TEXT_DIAGNOSTIC_RANDOM_SEED = 20260820
 MULTIMODAL_PRIMARY_ALPHA = 1.0
@@ -337,6 +348,7 @@ SCIENTIFIC_CONFIG = {
     "output_endpoint": TEXT_OUTPUT_ENDPOINT_VERSION,
     "max_new_tokens": TEXT_MAX_NEW_TOKENS,
     "model_repo_id": MODEL_REPO_ID, "model_revision": MODEL_REVISION,
+    "study_layer_window": STUDY_LAYER_WINDOW,
     "audio_protocol_fingerprint": AUDIO_PROTOCOL_FINGERPRINT,
     "layers": list(LAYERS), "text_task_digest": text_task_digest(TEXT_TASKS),
     "text_diagnostic": {
@@ -370,7 +382,7 @@ SCIENTIFIC_CONFIG = {
     # Reporting-only amendments must not strand expensive checksum-valid
     # scientific units in a new run namespace. This is the exact commit whose
     # model-facing implementation generated the existing run.
-    "commit": SCIENTIFIC_IMPLEMENTATION_COMMIT,
+    "commit": SCIENTIFIC_IMPLEMENTATION_ID,
 }
 FINGERPRINT_DIGEST = payload_checksum(SCIENTIFIC_CONFIG)
 RUN_DIR = RUNS_ROOT / "mmworkspace" / f"mmworkspace_{'real' if REAL_MODE else 'mock'}_{FINGERPRINT_DIGEST.split(':')[-1][:12]}"
@@ -424,13 +436,6 @@ if REAL_MODE and MODEL_STAGE and CONFIRM_MODEL_LOAD:
         raise RuntimeError("native spoken audio did not resolve: " + BUNDLE.audio_blocked_reason)
     assert_audio_protocol(BUNDLE.audio_interface, expected_fingerprint=AUDIO_PROTOCOL_FINGERPRINT)
     BACKEND = BUNDLE.backend
-    corrected_path, corrected = read_corrected_validation_report(
-        CORRECTED_RUN_DIR, expected_model_repo_id=MODEL_REPO_ID,
-        expected_model_revision=BUNDLE.model_revision,
-    )
-    CORRECTED_ARTIFACTS, _ = discover_corrected_band_lenses(
-        CORRECTED_RUN_DIR, report=corrected, layers=LAYERS,
-    )
     from jlens.mmpilot.workspace_replication import semantic_answer_concept
     names = sorted(
         {task.source for task in TEXT_TASKS}
@@ -441,18 +446,8 @@ if REAL_MODE and MODEL_STAGE and CONFIRM_MODEL_LOAD:
     )
     from jlens.mmpilot.coordinate_swap import resolve_concept_token
     TEXT_CONCEPT_TOKENS = {name: resolve_concept_token(BACKEND.encode_candidate, name) for name in names}
-    unembedding = BACKEND.unembedding_weight()
-    rows = {name: unembedding[token.token_id].detach().float().cpu() for name, token in TEXT_CONCEPT_TOKENS.items()}
-    loaded = {}
-    for layer in LAYERS:
-        source = CORRECTED_ARTIFACTS[layer]
-        loaded.setdefault(source.lens_path, JacobianLens.load(source.lens_path))
-        jacobian = loaded[source.lens_path].jacobians[source.layer_key_in_file].detach().float().cpu()
-        TEXT_TOKEN_VECTORS[layer] = {name: row @ jacobian for name, row in rows.items()}
-    del loaded, rows, unembedding
     for arm in ("text", "image", "spoken_audio", "pooled"):
         MATCHED_LENSES[arm] = JacobianLens.load(str(MATCHED_LENS_RUN_DIR / "lenses" / f"lens.{arm}.pt"))
-    INSTRUMENT_VECTORS["published_text_j"] = TEXT_TOKEN_VECTORS
     from jlens.mmpilot.multimodal_lens import (
         fit_arm, plan_units, selected_lens_vector,
     )
@@ -469,8 +464,43 @@ if REAL_MODE and MODEL_STAGE and CONFIRM_MODEL_LOAD:
             for layer in LAYERS
         }
 
-    INSTRUMENT_VECTORS["matched_text_j"] = _vectors_for(MATCHED_LENSES["text"])
-    INSTRUMENT_VECTORS["matched_pooled_j"] = _vectors_for(MATCHED_LENSES["pooled"])
+    if STUDY_LAYER_WINDOW == "late_jr_l33_l40":
+        corrected_path, corrected = read_corrected_validation_report(
+            CORRECTED_RUN_DIR, expected_model_repo_id=MODEL_REPO_ID,
+            expected_model_revision=BUNDLE.model_revision,
+        )
+        CORRECTED_ARTIFACTS, _ = discover_corrected_band_lenses(
+            CORRECTED_RUN_DIR, report=corrected, layers=LAYERS,
+        )
+        unembedding = BACKEND.unembedding_weight()
+        rows = {
+            name: unembedding[token.token_id].detach().float().cpu()
+            for name, token in TEXT_CONCEPT_TOKENS.items()
+        }
+        loaded = {}
+        for layer in LAYERS:
+            source = CORRECTED_ARTIFACTS[layer]
+            loaded.setdefault(
+                source.lens_path, JacobianLens.load(source.lens_path)
+            )
+            jacobian = loaded[source.lens_path].jacobians[
+                source.layer_key_in_file
+            ].detach().float().cpu()
+            TEXT_TOKEN_VECTORS[layer] = {
+                name: row @ jacobian for name, row in rows.items()
+            }
+        del loaded, rows, unembedding
+        INSTRUMENT_VECTORS["published_text_j"] = TEXT_TOKEN_VECTORS
+        for _arm in ("text", "pooled"):
+            if set(LAYERS).issubset(MATCHED_LENSES[_arm].jacobians):
+                INSTRUMENT_VECTORS[f"matched_{_arm}_j"] = _vectors_for(
+                    MATCHED_LENSES[_arm]
+                )
+    else:
+        print(
+            "early R-lens mode: late J-lens artifacts are historical controls "
+            "only and are not applied outside their fitted layer grid"
+        )
 
     _fit_plan = json.loads(MATCHED_FIT_PLAN_PATH.read_text())
     from jlens.mmpilot.media_io import RetryJournal, drive_media_loaders
@@ -1061,9 +1091,15 @@ if (
     MEDIA = drive_media_loaders(journal=RetryJournal())
     names = sorted({name for pair in CANDIDATE_PAIRS for name in pair} | set(CONTROL_CONCEPTS))
     TOKENS = {name: resolve_concept_token(BACKEND.encode_candidate, name) for name in names}
-    _pooled_candidates = {"matched_pooled_j": MATCHED_LENSES["pooled"]}
+    _pooled_candidates = {}
+    if set(LAYERS).issubset(MATCHED_LENSES["pooled"].jacobians):
+        _pooled_candidates["matched_pooled_j"] = MATCHED_LENSES["pooled"]
     if "pooled" in R_LENSES:
         _pooled_candidates["matched_pooled_r"] = R_LENSES["pooled"]
+    if not _pooled_candidates:
+        raise RuntimeError(
+            "no pooled lens covers the configured study layer window"
+        )
     MULTIMODAL_VECTORS = {
         instrument: {
             layer: {

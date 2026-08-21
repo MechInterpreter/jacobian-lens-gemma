@@ -86,6 +86,10 @@ def test_notebook_enforces_the_paper_first_order() -> None:
     assert "TEXT_DIAGNOSTIC_BANDS = (tuple(ACTIVE_TEXT_LAYERS),)" in source
     assert "SCIENTIFIC_IMPLEMENTATION_COMMIT" in source
     assert '"c6b5dc144051a13ae163c89d2bfb5a0f955e9288"' in source
+    assert 'STUDY_LAYER_WINDOW = "late_jr_l33_l40"' in source
+    assert 'STUDY_LAYER_WINDOW == "early_r_l27_l32"' in source
+    assert "LAYERS = tuple(range(27, 33))" in source
+    assert "late J-lens artifacts are historical controls" in source
     assert 'STORE.save("intervention", key, trial)' in source
     assert 'text_diagnostic=TEXT_DIAGNOSTIC_REPORT' in source
 
