@@ -645,6 +645,7 @@ BACKEND = None
 TEXT_TOKEN_VECTORS = {}
 MATCHED_LENSES = {}
 R_LENSES = {}
+R_LENS_SOURCE_PATHS = {}
 INSTRUMENT_VECTORS = {}
 if REAL_MODE and MODEL_STAGE and CONFIRM_MODEL_LOAD:
     import getpass, torch
@@ -788,6 +789,7 @@ if REAL_MODE and MODEL_STAGE and CONFIRM_MODEL_LOAD:
             pass
         elif _path.is_file():
             R_LENSES[_arm] = JacobianLens.load(str(_path))
+            R_LENS_SOURCE_PATHS[_arm] = _path
             print("R-lens", _arm, "reused", _path)
         elif (
             STUDY_LAYER_WINDOW == "early_r_l27_l32"
@@ -807,6 +809,7 @@ if REAL_MODE and MODEL_STAGE and CONFIRM_MODEL_LOAD:
                     "refusing to reuse an incompatible R-lens shard"
                 )
             R_LENSES[_arm] = _candidate
+            R_LENS_SOURCE_PATHS[_arm] = _early_path
             print("R-lens", _arm, "reused from", _early_path)
         elif RUN_STAGE0_FIT_MATCHED_R_LENSES and CONFIRM_R_LENS_FIT_BUDGET:
             _units = plan_units(_fit_plan, _arm)
@@ -836,6 +839,7 @@ if REAL_MODE and MODEL_STAGE and CONFIRM_MODEL_LOAD:
             _tmp = _path.with_suffix(".tmp.pt")
             R_LENSES[_arm].save(str(_tmp))
             os.replace(_tmp, _path)
+            R_LENS_SOURCE_PATHS[_arm] = _path
             print("R-lens", _arm, "completed", _path)
         if _arm in R_LENSES:
             INSTRUMENT_VECTORS[f"matched_{_arm}_r"] = _vectors_for(R_LENSES[_arm])
@@ -870,12 +874,17 @@ if REAL_MODE and MODEL_STAGE and CONFIRM_MODEL_LOAD:
                     "audit_checksum"
                 ],
                 "lenses": {
+                    # The shard may live in this RUN_DIR (freshly fitted) or in
+                    # the completed early run (reused without refitting), so the
+                    # inventory records where it actually came from rather than
+                    # assuming RUN_DIR.
                     arm: {
-                        "path": str(RUN_DIR / "r_lenses" / f"lens.{arm}.pt"),
-                        "checksum": file_sha256(
-                            str(RUN_DIR / "r_lenses" / f"lens.{arm}.pt")
-                        ),
+                        "path": str(R_LENS_SOURCE_PATHS[arm]),
+                        "checksum": file_sha256(str(R_LENS_SOURCE_PATHS[arm])),
                         "n_prompts": lens.n_prompts,
+                        "reused_without_refitting": (
+                            R_LENS_SOURCE_PATHS[arm].parent.parent != RUN_DIR
+                        ),
                     }
                     for arm, lens in sorted(R_LENSES.items())
                 },
