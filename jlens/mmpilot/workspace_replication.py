@@ -636,6 +636,16 @@ def build_assistant_prefill_completion_inputs(backend, prompt: str):
     )
 
 
+#: Gemma control tokens that can terminate a completion. They are markup, not
+#: content, and must be removed before the final lexical item is identified --
+#: the normalizer strips ``<``, ``|`` and ``>`` as punctuation, so ``<turn|>``
+#: otherwise survives as the bare word ``"turn"`` and *becomes* the final item.
+#: That silently rejected correct answers: ``" Paris<turn|>"`` on
+#: ``china_to_france_capital`` is exactly the swapped answer and scored False.
+_CONTROL_TOKEN_WORDS = frozenset({"turn", "eos", "bos", "pad", "unk", "mask"})
+_CONTROL_TOKEN = re.compile(r"<\|?[a-z_]+\|?>", re.IGNORECASE)
+
+
 def completion_answer_matches(generated: str, answer: str) -> bool:
     """Match an unrestricted completion by its final semantic head.
 
@@ -643,13 +653,23 @@ def completion_answer_matches(generated: str, answer: str) -> bool:
     (``Western Europe``, ``Mandarin Chinese``) and spell a digit as a number
     word.  This rule is deliberately narrower than substring matching: the
     answer must be the final lexical item, and a negated mention never counts.
+
+    Control tokens such as ``<turn|>`` are stripped first. They are generation
+    terminators rather than content, and leaving them in makes ``"turn"`` the
+    final lexical item and rejects an otherwise-correct answer.
     """
 
     from jlens.mmpilot.full_vocabulary import normalize_generated_text
 
     generated_words = re.findall(
-        r"\w+", normalize_generated_text(str(generated)), flags=re.UNICODE
+        r"\w+",
+        normalize_generated_text(_CONTROL_TOKEN.sub(" ", str(generated))),
+        flags=re.UNICODE,
     )
+    # Defence in depth: if a control token survived in a shape the pattern above
+    # does not cover, drop it from the tail rather than scoring it as content.
+    while len(generated_words) > 1 and generated_words[-1] in _CONTROL_TOKEN_WORDS:
+        generated_words.pop()
     wanted_words = re.findall(
         r"\w+", normalize_generated_text(str(answer)), flags=re.UNICODE
     )
