@@ -1230,7 +1230,7 @@ if (
             for layer, basis in bases_all.items()
         }
         control_names = (
-            ("zebra", "giraffe")
+            IMPLICIT_UNRELATED_CONCEPTS
             if task.family == "implicit_two_hop"
             else ("Japan", "Brazil")
         )
