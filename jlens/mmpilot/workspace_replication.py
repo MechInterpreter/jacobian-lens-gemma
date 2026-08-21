@@ -489,6 +489,62 @@ def semantic_answer_concept(answer: str) -> str:
     return _NUMBER_WORDS.get(normalized, normalized)
 
 
+def swapped_answer_diagnostic_tokens(
+    answer: str,
+    concept_tokens: Mapping[str, object],
+    encode: Callable[[str], Sequence[int]] | None = None,
+) -> dict[str, int]:
+    """Diagnostic token ids for a swapped answer, covering both surface forms.
+
+    ``semantic_answer_concept`` maps a digit answer to its English word so the
+    concept resolves to a single leading-space token (``" four"``). But Gemma
+    can answer the digit path instead, and ``" 4"`` tokenizes as **two** tokens
+    (``" "`` then ``"4"``) -- so on that path the word-form probe observes
+    neither decoded step and the recorded log-probability is about a token the
+    model never considered emitting.
+
+    ``bird_to_cow_legs`` is the worked example: the swap flipped the completion
+    to ``" 4"`` (a correct recomputation, matched by
+    :func:`completion_answer_matches`, which knows digit/word equivalence) while
+    the word-form probe reported a *decrease* of 2.32 nats.
+
+    So numeric answers also get ``swapped_answer_digit``, the bare digit token,
+    and any analysis should take the **max** over the two forms. Non-numeric
+    answers are unchanged, and the ``swapped_answer_head`` key keeps its exact
+    previous meaning so completed runs stay comparable on that field.
+    """
+
+    head = semantic_answer_concept(answer)
+    out = {"swapped_answer_head": int(concept_tokens[head].token_id)}
+    bare = str(answer).strip()
+    if bare in _NUMBER_WORDS and encode is not None:
+        ids = list(encode(bare))
+        if len(ids) == 1:
+            out["swapped_answer_digit"] = int(ids[0])
+    return out
+
+
+def best_swapped_answer_logprob(result: Mapping, step: int | None = None) -> float | None:
+    """Best log-probability across every recorded swapped-answer surface form.
+
+    Takes the max over ``swapped_answer_head`` and ``swapped_answer_digit`` so a
+    digit-path answer is not scored on a word-form probe. ``step`` selects one
+    decoded position; ``None`` maximizes over all of them.
+    """
+
+    best = None
+    for entry in result.get("full_vocabulary_diagnostic_trace") or ():
+        if step is not None and int(entry.get("step", -1)) != int(step):
+            continue
+        for name, token in (entry.get("tokens") or {}).items():
+            if not str(name).startswith("swapped_answer"):
+                continue
+            value = float(token["logprob"])
+            if best is None or value > best:
+                best = value
+    return best
+
+
 def text_diagnostic_bands(layers: Sequence[int]) -> tuple[tuple[int, ...], ...]:
     """Predeclare every singleton and every suffix band, without duplicates.
 

@@ -964,7 +964,7 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
     from jlens.mmpilot.workspace_replication import (
         TEXT_MAX_NEW_TOKENS, build_assistant_prefill_completion_inputs,
         capture_source_loading, text_capability_verdict,
-        semantic_answer_concept,
+        semantic_answer_concept, swapped_answer_diagnostic_tokens,
         text_replication_verdict,
         unrestricted_greedy_completion, unrestricted_greedy_swap_trial,
     )
@@ -985,11 +985,10 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
             clean = unrestricted_greedy_completion(
                 BACKEND, inputs, answer=task.clean_answer,
                 max_new_tokens=TEXT_MAX_NEW_TOKENS,
-                diagnostic_token_ids={
-                    "swapped_answer_head": TEXT_CONCEPT_TOKENS[
-                        semantic_answer_concept(task.swapped_answer)
-                    ].token_id
-                },
+                diagnostic_token_ids=swapped_answer_diagnostic_tokens(
+                    task.swapped_answer, TEXT_CONCEPT_TOKENS,
+                    BACKEND.encode_candidate,
+                ),
             )
             stored = {
                 "task_id": task.task_id,
@@ -1123,33 +1122,30 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
                 BACKEND, inputs, bases=bases, alpha=TEXT_PRIMARY_ALPHA,
                 answer=task.swapped_answer,
                 max_new_tokens=TEXT_MAX_NEW_TOKENS,
-                diagnostic_token_ids={
-                    "swapped_answer_head": TEXT_CONCEPT_TOKENS[
-                        semantic_answer_concept(task.swapped_answer)
-                    ].token_id
-                },
+                diagnostic_token_ids=swapped_answer_diagnostic_tokens(
+                    task.swapped_answer, TEXT_CONCEPT_TOKENS,
+                    BACKEND.encode_candidate,
+                ),
                 realization_policy=TEXT_MODEL_DTYPE_REALIZATION,
             )
             random = unrestricted_greedy_swap_trial(
                 BACKEND, inputs, bases=random_bases, alpha=TEXT_PRIMARY_ALPHA,
                 answer=task.swapped_answer,
                 max_new_tokens=TEXT_MAX_NEW_TOKENS,
-                diagnostic_token_ids={
-                    "swapped_answer_head": TEXT_CONCEPT_TOKENS[
-                        semantic_answer_concept(task.swapped_answer)
-                    ].token_id
-                },
+                diagnostic_token_ids=swapped_answer_diagnostic_tokens(
+                    task.swapped_answer, TEXT_CONCEPT_TOKENS,
+                    BACKEND.encode_candidate,
+                ),
                 realization_policy=TEXT_MODEL_DTYPE_REALIZATION,
             )
             unrelated_result = unrestricted_greedy_swap_trial(
                 BACKEND, inputs, bases=unrelated, alpha=TEXT_PRIMARY_ALPHA,
                 answer=task.swapped_answer,
                 max_new_tokens=TEXT_MAX_NEW_TOKENS,
-                diagnostic_token_ids={
-                    "swapped_answer_head": TEXT_CONCEPT_TOKENS[
-                        semantic_answer_concept(task.swapped_answer)
-                    ].token_id
-                },
+                diagnostic_token_ids=swapped_answer_diagnostic_tokens(
+                    task.swapped_answer, TEXT_CONCEPT_TOKENS,
+                    BACKEND.encode_candidate,
+                ),
                 realization_policy=TEXT_MODEL_DTYPE_REALIZATION,
             )
             stored = {
@@ -1241,7 +1237,7 @@ if (
     from jlens.mmpilot.store import safe_key
     from jlens.mmpilot.workspace_replication import (
         build_assistant_prefill_completion_inputs, semantic_answer_concept,
-        text_capability_verdict,
+        swapped_answer_diagnostic_tokens, text_capability_verdict,
         text_swap_diagnostic_report, unrestricted_greedy_direct_answer_trial,
         unrestricted_greedy_swap_trial,
     )
@@ -1283,9 +1279,9 @@ if (
             )
         inputs = build_assistant_prefill_completion_inputs(BACKEND, task.prompt)
         answer_name = semantic_answer_concept(task.swapped_answer)
-        diagnostic_tokens = {
-            "swapped_answer_head": TEXT_CONCEPT_TOKENS[answer_name].token_id
-        }
+        diagnostic_tokens = swapped_answer_diagnostic_tokens(
+            task.swapped_answer, TEXT_CONCEPT_TOKENS, BACKEND.encode_candidate,
+        )
         bases_all = {
             layer: build_swap_basis_from_vectors(
                 TEXT_TOKEN_VECTORS[layer][task.source],
