@@ -216,12 +216,24 @@ CONFIRMATION_IMAGES_PER_SOURCE = 8
 MIN_SOURCE_ADVANTAGE = 0.0
 MIN_SOURCE_COSINE = 0.0
 R_LENS_CHECKPOINT_EVERY = 5
+# Cotangent rows per backward pass, and therefore the replicated forward batch.
+# Purely a memory/speed tradeoff: the full d_model x d_model Jacobian is
+# assembled either way, so halving this is mathematically identical and only
+# doubles the number of backward passes. Drop to 4 (or 2) if the pooled arm
+# OOMs -- its image units have far longer sequences than the text arm's.
+R_LENS_DIM_BATCH = 8
 EVIDENCE_POSITION_MARGIN = 0.0
 MIN_CONFIRMATION_SUCCESS_RATE = 0.50
 CONFIRMATION_FAMILYWISE_ALPHA = 0.05
 DEVELOPMENT_SEED = "paper-first-loading-development-20260820-v1"
 CONFIRMATION_SEED = "paper-first-fresh-confirmation-20260820-v1"
 PROMPT_PROTOCOL = "mmpilot.implicit_animal_property_open_output.v1"
+
+# The fitter allocates and frees large transient tensors every backward pass;
+# expandable_segments lets the caching allocator reuse those blocks instead of
+# fragmenting. Set before torch initializes CUDA to take effect.
+import os as _os
+_os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 REAL_MODE = bool(RUN_REAL_WORKSPACE_REPLICATION)
 MODEL_STAGE = any((
@@ -846,7 +858,7 @@ if REAL_MODE and MODEL_STAGE and CONFIRM_MODEL_LOAD:
                 ),
                 arm=_arm,
                 scientific_fingerprint=FINGERPRINT_DIGEST + ":r_lens:" + _arm,
-                dim_batch=8, skip_first=16,
+                dim_batch=R_LENS_DIM_BATCH, skip_first=16,
                 checkpoint_every=R_LENS_CHECKPOINT_EVERY,
                 backward_context=lambda: dense_relprop_backward(
                     BACKEND.hf_model.model.language_model

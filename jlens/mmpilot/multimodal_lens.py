@@ -667,6 +667,18 @@ def _replicate_tensors(tensors: Mapping[str, Any], batch_size: int) -> dict:
                 "expected one example before Jacobian replication"
             )
     out.setdefault("use_cache", False)
+    # The Jacobian estimator reads recorded block activations and discards the
+    # forward's return value entirely, but Gemma4 still materializes
+    # lm_head(hidden) as [batch, seq, 262144] and then chains three more
+    # same-sized temporaries through the tanh softcap. At dim_batch=8 that is
+    # ~1.25 GiB per temporary for a multimodal unit, which OOM'd an L4 on the
+    # pooled arm's first image example while the text arm (shorter sequences)
+    # completed fine. logits_to_keep=1 computes them for one position instead.
+    #
+    # This cannot change any fitted value: the logits sit *downstream* of the
+    # target layer, so they are not on the path from source layers to target
+    # and contribute nothing to torch.autograd.grad(target, sources).
+    out.setdefault("logits_to_keep", 1)
     return out
 
 
