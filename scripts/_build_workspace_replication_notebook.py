@@ -165,6 +165,19 @@ elif STUDY_LAYER_WINDOW == "early_r_l27_l32":
 elif STUDY_LAYER_WINDOW == "combined_r_l27_l40":
     LAYERS = tuple(range(27, 41))
     SCIENTIFIC_IMPLEMENTATION_ID = "paper-band-combined-r-l27-l40-alpha2.v1"
+elif STUDY_LAYER_WINDOW == "all_r_l01_l40":
+    # Scan every layer instead of guessing which band holds the workspace.
+    # This is affordable because jacobian_for_built_inputs calls
+    # torch.autograd.grad(target, sources) with ALL source layers at once, so a
+    # single backward pass yields every layer's Jacobian -- the cost driver is
+    # only how far back the graph spans, not how many layers are read from it.
+    # Fitting 1-40 spans 40 blocks against 20 for mid_r_l21_l29, so roughly 2x,
+    # and it ends the layer-guessing: the outcome-blind loading gate then picks
+    # the band from 40 measured layers rather than from a depth-mapping prior.
+    # Layer 0 is excluded because it is the embedding output rather than a
+    # transformer block's, and target_layer stays 41.
+    LAYERS = tuple(range(1, 41))
+    SCIENTIFIC_IMPLEMENTATION_ID = "paper-band-all-r-l01-l40.v1"
 elif STUDY_LAYER_WINDOW == "mid_r_l21_l29":
     # The paper reindexes depth to [0,100] and puts the workspace at ~38-92,
     # which on 42 layers is L16-L39; it applies the swap across a band of
@@ -178,7 +191,7 @@ elif STUDY_LAYER_WINDOW == "mid_r_l21_l29":
 else:
     raise ValueError(
         "STUDY_LAYER_WINDOW must be 'late_jr_l33_l40', 'early_r_l27_l32', "
-        "'combined_r_l27_l40', or 'mid_r_l21_l29'"
+        "'combined_r_l27_l40', 'mid_r_l21_l29', or 'all_r_l01_l40'"
     )
 TEXT_PRIMARY_ALPHA = 2.0 if STUDY_LAYER_WINDOW == "combined_r_l27_l40" else 1.0
 # Instrument-power override, set from the POSITIVE CONTROL only.
@@ -221,7 +234,14 @@ R_LENS_CHECKPOINT_EVERY = 5
 # assembled either way, so halving this is mathematically identical and only
 # doubles the number of backward passes. Drop to 4 (or 2) if the pooled arm
 # OOMs -- its image units have far longer sequences than the text arm's.
-R_LENS_DIM_BATCH = 8
+R_LENS_DIM_BATCH = 4 if STUDY_LAYER_WINDOW == "all_r_l01_l40" else 8
+# Which R-lens arms to fit. The pooled arm has never been chosen by the
+# outcome-blind loading gate in any completed run -- matched_text_r or
+# published_text_j won every time -- so fitting it doubles the cost of a scan
+# for an instrument the selector then discards. Fitting one arm simply leaves
+# the selector one fewer candidate; it does not change how any candidate is
+# scored. This is in SCIENTIFIC_CONFIG, so it changes the fingerprint.
+R_LENS_ARMS = ("text",) if STUDY_LAYER_WINDOW == "all_r_l01_l40" else ("text", "pooled")
 EVIDENCE_POSITION_MARGIN = 0.0
 MIN_CONFIRMATION_SUCCESS_RATE = 0.50
 CONFIRMATION_FAMILYWISE_ALPHA = 0.05
@@ -390,7 +410,7 @@ if REAL_MODE and STUDY_LAYER_WINDOW == "combined_r_l27_l40":
             )
         _plan_digests.add(str(_config.get("population_plan_digest")))
         _arms = {}
-        for _arm in ("text", "pooled"):
+        for _arm in R_LENS_ARMS:
             _record = dict(_inventory["lenses"][_arm])
             _path = Path(_record["path"])
             if not _path.is_file():
@@ -638,7 +658,7 @@ SCIENTIFIC_CONFIG = {
     "loading_first_selection": "mmpilot.loading_first_instrument_selection.v1",
     "r_lens_method": R_LENS_METHOD.to_dict(),
     "r_lens_method_digest": R_LENS_METHOD.digest,
-    "r_lens_fit_arms": ["text", "pooled"],
+    "r_lens_fit_arms": list(R_LENS_ARMS),
     "r_lens_checkpoint_every": R_LENS_CHECKPOINT_EVERY,
     "combined_r_source_provenance": COMBINED_R_SOURCE_PROVENANCE,
     "evidence_position_margin": EVIDENCE_POSITION_MARGIN,
@@ -759,12 +779,14 @@ if REAL_MODE and MODEL_STAGE and CONFIRM_MODEL_LOAD:
             }
         del loaded, rows, unembedding
         INSTRUMENT_VECTORS["published_text_j"] = TEXT_TOKEN_VECTORS
-        for _arm in ("text", "pooled"):
+        for _arm in R_LENS_ARMS:
             if set(LAYERS).issubset(MATCHED_LENSES[_arm].jacobians):
                 INSTRUMENT_VECTORS[f"matched_{_arm}_j"] = _vectors_for(
                     MATCHED_LENSES[_arm]
                 )
-    elif STUDY_LAYER_WINDOW in ("early_r_l27_l32", "mid_r_l21_l29"):
+    elif STUDY_LAYER_WINDOW in (
+        "early_r_l27_l32", "mid_r_l21_l29", "all_r_l01_l40",
+    ):
         print(
             STUDY_LAYER_WINDOW,
             "R-lens mode: late J-lens artifacts are historical controls "
@@ -777,7 +799,7 @@ if REAL_MODE and MODEL_STAGE and CONFIRM_MODEL_LOAD:
         )
         from jlens.mmpilot.loading_first import combine_disjoint_layer_lenses
 
-        for _arm in ("text", "pooled"):
+        for _arm in R_LENS_ARMS:
             _shards = []
             for _source in COMBINED_R_SOURCE_PROVENANCE["sources"]:
                 _shards.append(
@@ -814,7 +836,7 @@ if REAL_MODE and MODEL_STAGE and CONFIRM_MODEL_LOAD:
     R_LENS_ARCHITECTURE_AUDIT = audit_dense_relprop_architecture(
         BACKEND.hf_model.model.language_model
     )
-    for _arm in ("text", "pooled"):
+    for _arm in R_LENS_ARMS:
         _path = RUN_DIR / "r_lenses" / f"lens.{_arm}.pt"
         _early_path = (
             EARLY_R_LENS_RUN_DIR / "r_lenses" / f"lens.{_arm}.pt"
