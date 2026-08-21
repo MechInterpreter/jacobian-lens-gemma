@@ -779,11 +779,35 @@ if REAL_MODE and MODEL_STAGE and CONFIRM_MODEL_LOAD:
     )
     for _arm in ("text", "pooled"):
         _path = RUN_DIR / "r_lenses" / f"lens.{_arm}.pt"
+        _early_path = (
+            EARLY_R_LENS_RUN_DIR / "r_lenses" / f"lens.{_arm}.pt"
+            if EARLY_R_LENS_RUN_DIR is not None
+            else None
+        )
         if STUDY_LAYER_WINDOW == "combined_r_l27_l40":
             pass
         elif _path.is_file():
             R_LENSES[_arm] = JacobianLens.load(str(_path))
             print("R-lens", _arm, "reused", _path)
+        elif (
+            STUDY_LAYER_WINDOW == "early_r_l27_l32"
+            and _early_path is not None
+            and _early_path.is_file()
+        ):
+            # The standalone L27-32 window has its own completed shard from
+            # mmworkspace_real_62ef81c904c5 -- the same one combined_r_l27_l40
+            # joins without refitting. A fresh TEXT_TASK_SET changes this run's
+            # fingerprint and therefore RUN_DIR, so the RUN_DIR-local reuse
+            # check above never finds it; without this branch every task-set
+            # change would silently re-trigger a full Stage 0 fit.
+            _candidate = JacobianLens.load(str(_early_path))
+            if not set(LAYERS).issubset(_candidate.jacobians):
+                raise RuntimeError(
+                    f"{_early_path} does not cover layers {list(LAYERS)}; "
+                    "refusing to reuse an incompatible R-lens shard"
+                )
+            R_LENSES[_arm] = _candidate
+            print("R-lens", _arm, "reused from", _early_path)
         elif RUN_STAGE0_FIT_MATCHED_R_LENSES and CONFIRM_R_LENS_FIT_BUDGET:
             _units = plan_units(_fit_plan, _arm)
             R_LENSES[_arm] = fit_arm(
