@@ -171,6 +171,18 @@ else:
         "'early_r_l27_l32', or 'combined_r_l27_l40'"
     )
 TEXT_PRIMARY_ALPHA = 2.0 if STUDY_LAYER_WINDOW == "combined_r_l27_l40" else 1.0
+# Instrument-power override, set from the POSITIVE CONTROL only.
+# direct_answer_norm_matched measures whether a perturbation of this magnitude
+# can move the output at all, with no reference to whether the swap succeeds.
+# A short band delivers less total perturbation -- L30-32 (3 layers) passed the
+# control on 4/17 tasks vs 15/17 for L33-40 (8 layers) -- so an implicit null
+# read off an underpowered band is uninterpretable. Raise this until the control
+# passes a majority, then read the swap. Selecting alpha on the SWAP outcome
+# instead would violate causal_outcome_may_select_band and is not what this is
+# for. None keeps the window's derived value.
+TEXT_PRIMARY_ALPHA_OVERRIDE = None
+if TEXT_PRIMARY_ALPHA_OVERRIDE is not None:
+    TEXT_PRIMARY_ALPHA = float(TEXT_PRIMARY_ALPHA_OVERRIDE)
 TEXT_DIAGNOSTIC_RANDOM_SEED = 20260820
 MULTIMODAL_PRIMARY_ALPHA = TEXT_PRIMARY_ALPHA
 MULTIMODAL_SENSITIVITY_ALPHA = (
@@ -596,6 +608,7 @@ SCIENTIFIC_CONFIG = {
     "implicit_unrelated_concepts": list(IMPLICIT_UNRELATED_CONCEPTS),
     "text_task_set": TEXT_TASK_SET,
     "primary_alpha": TEXT_PRIMARY_ALPHA,
+    "primary_alpha_overridden": TEXT_PRIMARY_ALPHA_OVERRIDE is not None,
     "sensitivity_alpha": MULTIMODAL_SENSITIVITY_ALPHA,
     "population_plan_digest": POPULATION_PLAN["plan_digest"],
     "min_source_advantage": MIN_SOURCE_ADVANTAGE,
@@ -1193,7 +1206,11 @@ if (
     and RUN_STAGE1B_TEXT_DIAGNOSTIC
     and CONFIRM_MODEL_LOAD
     and CONFIRM_TEXT_DIAGNOSTIC_BUDGET
-    and TEXT_PRIMARY_ALPHA == 1.0
+    # An explicit TEXT_PRIMARY_ALPHA_OVERRIDE is a deliberate power calibration
+    # and must reach the diagnostic; without this clause setting the override
+    # would silently skip Stage 1B, which is how the alpha=2 combined run
+    # produced a bare verdict with no integrity audit at all.
+    and (TEXT_PRIMARY_ALPHA == 1.0 or TEXT_PRIMARY_ALPHA_OVERRIDE is not None)
 ):
     from jlens.mmpilot.coordinate_swap import (
         build_swap_basis_from_vectors, random_two_direction_basis,
@@ -1405,8 +1422,8 @@ if (
     print("resume", STORE.status_report())
 elif RUN_STAGE1B_TEXT_DIAGNOSTIC:
     print(
-        "skipped: Stage 6b is the legacy alpha=1 localization and requires "
-        "alpha=1, real mode, model confirmation, and its budget gate"
+        "skipped: Stage 6b needs real mode, model confirmation, its budget "
+        "gate, and either alpha=1 or an explicit TEXT_PRIMARY_ALPHA_OVERRIDE"
     )
 '''
 )
