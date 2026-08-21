@@ -48,6 +48,8 @@ def test_notebook_enforces_the_paper_first_order() -> None:
         "direct_answer_norm_matched",
         "derived_from_stage1",
         "post_cast_max_relative_coordinate_error",
+        "model_dtype_realization",
+        "TEXT_MODEL_DTYPE_REALIZATION",
         "diagnostic_token_ids",
         "capture_source_loading",
         "select_pair_from_loading",
@@ -60,6 +62,11 @@ def test_notebook_enforces_the_paper_first_order() -> None:
         '"candidate_list_supplied": False',
         "random_two_direction_basis",
         "unrelated_alpha1",
+        '"zero"',
+        "both_directions_tested",
+        "direct_answer_success",
+        "paired_text_tests",
+        "maximum_completed_forward_passes_lost_on_disconnect",
         "position_rule_by_modality",
         "STORE.save(\"activation\"",
         "STORE.save(\"intervention\"",
@@ -70,6 +77,8 @@ def test_notebook_enforces_the_paper_first_order() -> None:
     assert 'BACKEND.build_inputs(prompt=task.prompt, modality="text")' not in source
     assert 'STORE.save("capability"' in source
     assert 'if TEXT_CAPABILITY["causal_spending_licensed"]:' in source
+    assert 'STORE.save("intervention", key, trial)' in source
+    assert 'text_diagnostic=TEXT_DIAGNOSTIC_REPORT' in source
 
 
 def test_all_result_switches_default_false() -> None:

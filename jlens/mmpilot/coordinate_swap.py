@@ -143,6 +143,12 @@ from jlens.mmpilot.store import payload_checksum
 #: under the older algebra.
 METHOD_VERSION = "jlens.mmpilot.coordinate_swap.v1"
 
+#: Optional model-dtype realization used by new studies. The historical v1
+#: path remains the default so completed artifacts keep their original meaning.
+MODEL_DTYPE_REALIZATION_VERSION = (
+    "jlens.mmpilot.coordinate_swap.model_dtype_realization.v1"
+)
+
 #: The intervention family. The completed multimodal result carries
 #: :data:`STEERING_FAMILY`; nothing may carry both.
 INTERVENTION_FAMILY = "anthropic_coordinate_swap"
@@ -170,6 +176,45 @@ SOLVE_POLICY = (
     "torch.linalg.svdvals(V) before the solve and a failing pair is refused, "
     "never regularized"
 )
+
+
+@dataclass(frozen=True)
+class ModelDtypeRealizationPolicy:
+    """Make intended coordinates true in the dtype the model consumes.
+
+    A float64 coordinate exchange can move after it is rounded to bf16. This
+    policy performs bounded corrections in ``span(V)`` and re-audits the cast
+    tensor after every correction. It never changes alpha or adds a component
+    outside the two-coordinate subspace.
+    """
+
+    max_corrections: int = 8
+    relative_coordinate_tolerance: float = 0.02
+    relative_residual_tolerance: float = 0.02
+    minimum_scale: float = 1.0
+
+    def __post_init__(self) -> None:
+        if int(self.max_corrections) < 0:
+            raise ValueError("max_corrections must be non-negative")
+        for name in (
+            "relative_coordinate_tolerance",
+            "relative_residual_tolerance",
+            "minimum_scale",
+        ):
+            value = float(getattr(self, name))
+            if not math.isfinite(value) or value <= 0.0:
+                raise ValueError(f"{name} must be finite and positive, got {value}")
+
+    def to_dict(self) -> dict:
+        return {
+            "version": MODEL_DTYPE_REALIZATION_VERSION,
+            "max_corrections": int(self.max_corrections),
+            "relative_coordinate_tolerance": float(
+                self.relative_coordinate_tolerance
+            ),
+            "relative_residual_tolerance": float(self.relative_residual_tolerance),
+            "minimum_scale": float(self.minimum_scale),
+        }
 
 #: Prompt protocols the **primary** coordinate-swap study may run under. The
 #: swap target must be absent from everything the model can see, which a prompt
@@ -786,6 +831,7 @@ def swap_coordinates(
     *,
     alpha: float = 1.0,
     policy: StabilityPolicy = DEFAULT_STABILITY,
+    realization_policy: ModelDtypeRealizationPolicy | None = None,
 ) -> tuple[torch.Tensor, dict]:
     """``h_patched = h + alpha * V (sigma(c) - c)``, with diagnostics.
 
@@ -829,22 +875,66 @@ def swap_coordinates(
     # This is especially important for bf16 models: an exact exchange before
     # the cast is not evidence that the value written back to the residual
     # stream still realizes the intended coordinates.
-    patched_model_dtype = patched.to(device=original_device, dtype=original_dtype)
-    patched_after_cast = patched_model_dtype.detach().to(
-        device=H.device, dtype=dtype
+    expected_scale = expected_coordinates_after.abs().amax(dim=-1).clamp_min(
+        1.0 if realization_policy is None else float(realization_policy.minimum_scale)
     )
-    coordinates_after_cast = read_coordinates(
-        patched_after_cast, Vd, policy=policy
+    residual_scale = residual_before.norm(dim=-1).clamp_min(
+        1.0 if realization_policy is None else float(realization_policy.minimum_scale)
     )
-    residual_after_cast = patched_after_cast - coordinates_after_cast @ Vd.T
-    expected_scale = expected_coordinates_after.abs().amax(dim=-1).clamp_min(1.0)
-    post_cast_coordinate_error = (
-        coordinates_after_cast - expected_coordinates_after
-    ).abs().amax(dim=-1)
-    residual_scale = residual_before.norm(dim=-1).clamp_min(1.0)
-    post_cast_residual_drift = (
-        residual_after_cast - residual_before
-    ).norm(dim=-1)
+    candidate = patched
+    realization_history = []
+    max_corrections = (
+        0 if realization_policy is None else int(realization_policy.max_corrections)
+    )
+    for correction_index in range(max_corrections + 1):
+        patched_model_dtype = candidate.to(
+            device=original_device, dtype=original_dtype
+        )
+        patched_after_cast = patched_model_dtype.detach().to(
+            device=H.device, dtype=dtype
+        )
+        coordinates_after_cast = read_coordinates(
+            patched_after_cast, Vd, policy=policy
+        )
+        residual_after_cast = patched_after_cast - coordinates_after_cast @ Vd.T
+        post_cast_coordinate_error = (
+            coordinates_after_cast - expected_coordinates_after
+        ).abs().amax(dim=-1)
+        post_cast_residual_drift = (
+            residual_after_cast - residual_before
+        ).norm(dim=-1)
+        relative_coordinate_error = post_cast_coordinate_error / expected_scale
+        relative_residual_drift = post_cast_residual_drift / residual_scale
+        coordinate_max = float(relative_coordinate_error.max())
+        residual_max = float(relative_residual_drift.max())
+        realization_history.append(
+            {
+                "correction_index": correction_index,
+                "max_relative_coordinate_error": coordinate_max,
+                "max_relative_residual_drift": residual_max,
+            }
+        )
+        if realization_policy is None or (
+            coordinate_max
+            <= float(realization_policy.relative_coordinate_tolerance)
+            and residual_max
+            <= float(realization_policy.relative_residual_tolerance)
+        ):
+            break
+        coordinate_correction = (
+            expected_coordinates_after - coordinates_after_cast
+        ) @ Vd.T
+        candidate = patched_after_cast + coordinate_correction
+
+    realization_converged = bool(
+        realization_policy is None
+        or (
+            float(relative_coordinate_error.max())
+            <= float(realization_policy.relative_coordinate_tolerance)
+            and float(relative_residual_drift.max())
+            <= float(realization_policy.relative_residual_tolerance)
+        )
+    )
 
     record = {
         "method_version": METHOD_VERSION,
@@ -870,14 +960,20 @@ def swap_coordinates(
             post_cast_coordinate_error.max()
         ),
         "max_post_cast_relative_coordinate_update_error": float(
-            (post_cast_coordinate_error / expected_scale).max()
+            relative_coordinate_error.max()
         ),
         "max_post_cast_orthogonal_residual_drift": float(
             post_cast_residual_drift.max()
         ),
         "max_post_cast_relative_orthogonal_residual_drift": float(
-            (post_cast_residual_drift / residual_scale).max()
+            relative_residual_drift.max()
         ),
+        "model_dtype_realization": (
+            None if realization_policy is None else realization_policy.to_dict()
+        ),
+        "model_dtype_realization_converged": realization_converged,
+        "model_dtype_corrections_applied": len(realization_history) - 1,
+        "model_dtype_realization_history": realization_history,
         "V_checksum": tensor_checksum(Vd.cpu()),
         "solve_policy": SOLVE_POLICY,
     }
@@ -1028,6 +1124,7 @@ def coordinate_swap_layer(
     evidence_span: Sequence[int] | None = None,
     batch_row: int = 0,
     policy: StabilityPolicy = DEFAULT_STABILITY,
+    realization_policy: ModelDtypeRealizationPolicy | None = None,
     require_frozen: bool = True,
     record_coordinates: bool = True,
 ):
@@ -1087,7 +1184,13 @@ def coordinate_swap_layer(
             evidence_span=evidence_span,
         )
         selected = hidden[batch_row, positions]
-        patched, record = swap_coordinates(selected, basis.V, alpha=alpha, policy=policy)
+        patched, record = swap_coordinates(
+            selected,
+            basis.V,
+            alpha=alpha,
+            policy=policy,
+            realization_policy=realization_policy,
+        )
         _finite_or_raise(patched, f"patched activation at layer {layer}")
         new_hidden = hidden.clone()
         new_hidden[batch_row, positions] = patched.to(hidden.dtype)
@@ -1127,6 +1230,7 @@ def coordinate_swap_band(
     evidence_span: Sequence[int] | None = None,
     batch_row: int = 0,
     policy: StabilityPolicy = DEFAULT_STABILITY,
+    realization_policy: ModelDtypeRealizationPolicy | None = None,
     require_frozen: bool = True,
     record_coordinates: bool = True,
 ):
@@ -1153,6 +1257,7 @@ def coordinate_swap_band(
                     evidence_span=evidence_span,
                     batch_row=batch_row,
                     policy=policy,
+                    realization_policy=realization_policy,
                     require_frozen=require_frozen,
                     record_coordinates=record_coordinates,
                 )

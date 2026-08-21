@@ -41,7 +41,9 @@ The order is mandatory:
    is the complete answer from unrestricted two-token greedy generation—not a
    one-token prefix, candidate score, or teacher-forced likelihood.
 1b. **Bounded text diagnostic if the full band is null.** Audit the actual
-   post-cast exchange, then test every L33--L40 singleton and suffix band at
+   post-cast exchange and iteratively correct only its two-coordinate component
+   until the BF16 tensor consumed by Gemma meets the frozen 2% tolerance. Then
+   test every L33--L40 singleton and suffix band at
    exact `alpha=1` against zero, random, unrelated, and norm-matched
    direct-answer controls. This is development-only localization; any selected
    band still requires a fresh confirmation and cannot retroactively change the
@@ -49,12 +51,15 @@ The order is mandatory:
 2. **Clean source loading.** On development media, measure whether the source
    concept is actually visible through the matched pooled lens at each layer and
    prompt position. Causal outcomes do not exist yet.
-3. **Freeze the design.** Choose the concept pair, contiguous layer band, and
-   position rule from clean loading only. `alpha=1` remains primary; `alpha=.75`
-   is a labelled interpolation sensitivity.
+3. **Freeze the design.** Keep the band selected by the audited text causal
+   diagnostic, require that every layer in it carries clean source loading in
+   all three modalities, and choose only the concept pair and modality-specific
+   position rule from clean loading. `alpha=1` remains primary; `alpha=.75` is
+   a labelled interpolation sensitivity.
 4. **Fresh confirmation.** Open new photographs/recordings, prove zero overlap,
-   and test unrestricted identity and downstream property outputs against random
-   and unrelated controls.
+   and test both swap directions with unrestricted identity and downstream
+   property outputs against zero, random, unrelated, and norm-matched
+   direct-answer controls. Every two-token condition is saved atomically.
 
 If the text replication or clean-loading gate fails, later causal spending is
 blocked. No threshold, pair, layer, position, or alpha may be changed after its
@@ -206,10 +211,11 @@ print("DEVELOPMENT UPPER BOUND")
 print("  clean loading forwards", len(CANDIDATE_PAIRS) * DEVELOPMENT_IMAGES_PER_SOURCE * 3)
 print("  no intervention forwards in Stage 2")
 print("FRESH CONFIRMATION UPPER BOUND")
-print("  clean generation forwards", CONFIRMATION_IMAGES_PER_SOURCE * 3 * 2 * 2)
-print("  exact/random/unrelated x alpha1 plus alpha=.75 sensitivity",
-      CONFIRMATION_IMAGES_PER_SOURCE * 3 * 2 * 4 * 2)
-print("RESUME UNIT: one text task, loading sample, or causal condition JSON")
+print("  clean generation forwards",
+      CONFIRMATION_IMAGES_PER_SOURCE * 3 * 2 * 2 * 2)
+print("  six causal/control conditions, two directions, two-token generation",
+      CONFIRMATION_IMAGES_PER_SOURCE * 3 * 2 * 2 * 6 * 2)
+print("RESUME UNIT: one two-token condition JSON; completed work lost = 0")
 
 if REAL_MODE:
     missing = [path for path in (CORRECTED_RUN_DIR, MATCHED_LENS_RUN_DIR, EXPANDED_MANIFEST_CACHE) if not path.exists()]
@@ -293,6 +299,7 @@ from jlens.mmpilot.workspace_replication import (
     PROTOCOL_VERSION, TEXT_ANSWER_MATCH_RULE, TEXT_COMPLETION_INSTRUCTION,
     TEXT_DIAGNOSTIC_VERSION, TEXT_POST_CAST_MAX_RELATIVE_ERROR,
     TEXT_INPUT_PROTOCOL_VERSION, TEXT_MAX_NEW_TOKENS, TEXT_OUTPUT_ENDPOINT_VERSION,
+    TEXT_MODEL_DTYPE_REALIZATION,
     text_task_digest,
 )
 
@@ -313,6 +320,7 @@ SCIENTIFIC_CONFIG = {
         "alpha": 1.0,
         "random_seed": TEXT_DIAGNOSTIC_RANDOM_SEED,
         "post_cast_max_relative_coordinate_error": TEXT_POST_CAST_MAX_RELATIVE_ERROR,
+        "model_dtype_realization": TEXT_MODEL_DTYPE_REALIZATION.to_dict(),
         "primary_endpoint": "unrestricted_greedy_complete_answer",
         "teacher_forcing_used": False,
         "selection_is_development_only": True,
@@ -451,6 +459,7 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
                         semantic_answer_concept(task.swapped_answer)
                     ].token_id
                 },
+                realization_policy=TEXT_MODEL_DTYPE_REALIZATION,
             )
             stored = {
                 "task_id": task.task_id,
@@ -513,6 +522,7 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
                         semantic_answer_concept(task.swapped_answer)
                     ].token_id
                 },
+                realization_policy=TEXT_MODEL_DTYPE_REALIZATION,
             )
             random = unrestricted_greedy_swap_trial(
                 BACKEND, inputs, bases=random_bases, alpha=1.0,
@@ -523,6 +533,7 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
                         semantic_answer_concept(task.swapped_answer)
                     ].token_id
                 },
+                realization_policy=TEXT_MODEL_DTYPE_REALIZATION,
             )
             unrelated_result = unrestricted_greedy_swap_trial(
                 BACKEND, inputs, bases=unrelated, alpha=1.0,
@@ -698,24 +709,28 @@ if (
                             BACKEND, inputs, bases=bases, alpha=1.0,
                             answer=task.swapped_answer,
                             diagnostic_token_ids=diagnostic_tokens,
+                            realization_policy=TEXT_MODEL_DTYPE_REALIZATION,
                         )
                     elif condition == "zero":
                         result = unrestricted_greedy_swap_trial(
                             BACKEND, inputs, bases=bases, alpha=0.0,
                             answer=task.swapped_answer,
                             diagnostic_token_ids=diagnostic_tokens,
+                            realization_policy=TEXT_MODEL_DTYPE_REALIZATION,
                         )
                     elif condition == "random_alpha1":
                         result = unrestricted_greedy_swap_trial(
                             BACKEND, inputs, bases=random_bases, alpha=1.0,
                             answer=task.swapped_answer,
                             diagnostic_token_ids=diagnostic_tokens,
+                            realization_policy=TEXT_MODEL_DTYPE_REALIZATION,
                         )
                     elif condition == "unrelated_alpha1":
                         result = unrestricted_greedy_swap_trial(
                             BACKEND, inputs, bases=unrelated_bases, alpha=1.0,
                             answer=task.swapped_answer,
                             diagnostic_token_ids=diagnostic_tokens,
+                            realization_policy=TEXT_MODEL_DTYPE_REALIZATION,
                         )
                     elif condition == "direct_answer_norm_matched":
                         result = unrestricted_greedy_direct_answer_trial(
@@ -723,6 +738,7 @@ if (
                             answer_vectors=answer_vectors,
                             answer=task.swapped_answer,
                             diagnostic_token_ids=diagnostic_tokens,
+                            realization_policy=TEXT_MODEL_DTYPE_REALIZATION,
                         )
                     else:
                         raise RuntimeError(f"unknown diagnostic condition {condition}")
@@ -773,7 +789,8 @@ if (
             f"flexible={row['flexible_function_success_rate']:.3f} "
             f"direct={row['direct_answer_positive_control_rate']:.3f} "
             f"controls={row['matched_controls_pass']} "
-            f"audit={row['coordinate_audits_pass']} "
+            f"coordinate_audit={row['coordinate_audits_pass']} "
+            f"all_integrity={row['all_condition_integrity_pass']} "
             f"eligible={row['eligible_for_fresh_confirmation']}"
         )
     print("selected", TEXT_DIAGNOSTIC_REPORT["selected_band_for_fresh_confirmation"])
@@ -794,7 +811,15 @@ code(
     r'''
 LOCALIZATION = STORE.load("metric", "loading_localization")
 PAIR_SELECTION = STORE.load("metric", "loading_pair_selection")
-if REAL_MODE and RUN_STAGE2_MULTIMODAL_LOADING_DEVELOPMENT and CONFIRM_MODEL_LOAD and CONFIRM_DEVELOPMENT_BUDGET:
+if (
+    REAL_MODE
+    and RUN_STAGE2_MULTIMODAL_LOADING_DEVELOPMENT
+    and CONFIRM_MODEL_LOAD
+    and CONFIRM_DEVELOPMENT_BUDGET
+    and TEXT_DIAGNOSTIC_REPORT is not None
+    and TEXT_DIAGNOSTIC_REPORT.get("verdict")
+    == "TEXT_DIAGNOSTIC_ALPHA1_CANDIDATE_FOUND"
+):
     from jlens.mmpilot.coordinate_swap import resolve_concept_token
     from jlens.mmpilot.media_io import RetryJournal, drive_media_loaders
     from jlens.mmpilot.multimodal_lens import selected_lens_vector
@@ -866,6 +891,11 @@ if REAL_MODE and RUN_STAGE2_MULTIMODAL_LOADING_DEVELOPMENT and CONFIRM_MODEL_LOA
     STORE.save("metric", "loading_localization", LOCALIZATION)
     print(json.dumps(PAIR_SELECTION, indent=2))
     print(json.dumps(LOCALIZATION, indent=2))
+elif RUN_STAGE2_MULTIMODAL_LOADING_DEVELOPMENT:
+    print(
+        "Stage 2 did not spend: it requires an audited alpha=1 text candidate "
+        "plus the model and development-budget confirmations."
+    )
 '''
 )
 
@@ -881,22 +911,38 @@ if RUN_STAGE3_FREEZE_DESIGN:
         LOCALIZATION = STORE.load("metric", "loading_localization")
     if PAIR_SELECTION is None:
         PAIR_SELECTION = STORE.load("metric", "loading_pair_selection")
-    CONFIRMATION_DESIGN = freeze_confirmation_design(
-        text_verdict=TEXT_VERDICT, localization=LOCALIZATION,
-        pair=PAIR_SELECTION["selected_pair"], alpha=MULTIMODAL_PRIMARY_ALPHA,
-        sensitivity_alpha=MULTIMODAL_SENSITIVITY_ALPHA,
-        prompt_protocol=PROMPT_PROTOCOL,
-        development_population_digest=POPULATION_PLAN["plan_digest"],
+    TEXT_DIAGNOSTIC_REPORT = TEXT_DIAGNOSTIC_REPORT or STORE.load(
+        "metric", "text_swap_diagnostic_report"
     )
-    CONFIRMATION_DESIGN["forbidden_development_image_ids"] = sorted(DEV_IMAGE_IDS)
-    CONFIRMATION_DESIGN["forbidden_development_group_ids"] = sorted(DEV_GROUP_IDS)
-    CONFIRMATION_DESIGN["forbidden_prior_image_ids"] = sorted(PRIOR_EXCLUDED_IMAGES)
-    CONFIRMATION_DESIGN["design_digest"] = payload_checksum(
-        {k: v for k, v in CONFIRMATION_DESIGN.items() if k != "design_digest"}
-    )
-    STORE.save("metric", "confirmation_design", CONFIRMATION_DESIGN)
-    (RUN_DIR / "frozen_confirmation_design.json").write_text(json.dumps(CONFIRMATION_DESIGN, indent=2))
-    print(json.dumps(CONFIRMATION_DESIGN, indent=2))
+    if (
+        TEXT_DIAGNOSTIC_REPORT is None
+        or TEXT_DIAGNOSTIC_REPORT.get("verdict")
+        != "TEXT_DIAGNOSTIC_ALPHA1_CANDIDATE_FOUND"
+        or LOCALIZATION is None
+        or PAIR_SELECTION is None
+    ):
+        print("Stage 3 did not freeze: its text/loading gates are not met.")
+    else:
+        CONFIRMATION_DESIGN = freeze_confirmation_design(
+            text_diagnostic=TEXT_DIAGNOSTIC_REPORT,
+            localization=LOCALIZATION,
+            pair=PAIR_SELECTION["selected_pair"],
+            alpha=MULTIMODAL_PRIMARY_ALPHA,
+            sensitivity_alpha=MULTIMODAL_SENSITIVITY_ALPHA,
+            prompt_protocol=PROMPT_PROTOCOL,
+            development_population_digest=POPULATION_PLAN["plan_digest"],
+        )
+        CONFIRMATION_DESIGN["forbidden_development_image_ids"] = sorted(DEV_IMAGE_IDS)
+        CONFIRMATION_DESIGN["forbidden_development_group_ids"] = sorted(DEV_GROUP_IDS)
+        CONFIRMATION_DESIGN["forbidden_prior_image_ids"] = sorted(PRIOR_EXCLUDED_IMAGES)
+        CONFIRMATION_DESIGN["design_digest"] = payload_checksum(
+            {k: v for k, v in CONFIRMATION_DESIGN.items() if k != "design_digest"}
+        )
+        STORE.save("metric", "confirmation_design", CONFIRMATION_DESIGN)
+        (RUN_DIR / "frozen_confirmation_design.json").write_text(
+            json.dumps(CONFIRMATION_DESIGN, indent=2)
+        )
+        print(json.dumps(CONFIRMATION_DESIGN, indent=2))
 '''
 )
 
@@ -907,159 +953,302 @@ CONFIRMATION_REPORT = STORE.load("metric", "fresh_confirmation_report")
 if REAL_MODE and RUN_STAGE4_FRESH_CONFIRMATION and CONFIRM_MODEL_LOAD and CONFIRM_CONFIRMATION_BUDGET:
     from jlens.mmpilot.coordinate_swap import random_two_direction_basis, resolve_concept_token
     from jlens.mmpilot.media_io import RetryJournal, drive_media_loaders
-    from jlens.mmpilot.multimodal_lens import build_swap_bases_for_lens
+    from jlens.mmpilot.multimodal_lens import (
+        build_swap_bases_for_lens, selected_lens_vector,
+    )
     from jlens.mmpilot.store import safe_key
     from jlens.mmpilot.workspace_replication import (
-        TEXT_MAX_NEW_TOKENS, assert_fresh_population,
+        TEXT_MAX_NEW_TOKENS, TEXT_MODEL_DTYPE_REALIZATION,
+        assert_fresh_population, semantic_answer_concept,
         unrestricted_greedy_completion, unrestricted_greedy_swap_trial,
+        unrestricted_greedy_direct_answer_trial,
     )
     if CONFIRMATION_DESIGN is None:
         CONFIRMATION_DESIGN = STORE.load("metric", "confirmation_design")
     if CONFIRMATION_DESIGN is None:
-        raise RuntimeError("Stage 4 requires the frozen Stage-3 design")
-    source, target = CONFIRMATION_DESIGN["pair"]
-    freshness = assert_fresh_population(
-        CONFIRM_GROUPS,
-        forbidden_image_ids=sorted(set(
-            CONFIRMATION_DESIGN["forbidden_development_image_ids"]
-        ) | set(CONFIRMATION_DESIGN["forbidden_prior_image_ids"])),
-        forbidden_group_ids=CONFIRMATION_DESIGN["forbidden_development_group_ids"],
-    )
-    MEDIA = drive_media_loaders(journal=RetryJournal())
-    TOKENS = {name: resolve_concept_token(BACKEND.encode_candidate, name) for name in (source, target, *CONTROL_CONCEPTS)}
-    answers = {"bird": "2", "cat": "4", "zebra": "4", "giraffe": "4"}
-    if answers[source] == answers[target]:
-        raise RuntimeError("selected pair has no downstream leg-count contrast")
-    band = CONFIRMATION_DESIGN["layer_band"]
-    exact_bases = build_swap_bases_for_lens(
-        MATCHED_LENSES["pooled"], BACKEND.unembedding_weight(), layers=band,
-        source=TOKENS[source], target=TOKENS[target],
-    )
-    random_bases = {layer: random_two_direction_basis(basis, seed=20260821 + layer) for layer, basis in exact_bases.items()}
-    unrelated_bases = build_swap_bases_for_lens(
-        MATCHED_LENSES["pooled"], BACKEND.unembedding_weight(), layers=band,
-        source=TOKENS[CONTROL_CONCEPTS[0]], target=TOKENS[CONTROL_CONCEPTS[1]],
-    )
-    question_identity = "Identify the animal from the evidence internally. Answer with only the animal name:\nAnswer:"
-    question_property = "Identify the animal from the evidence internally, then answer: How many legs does that animal typically have? Answer with one digit:\nAnswer:"
-    def build_inputs(group, modality, kind):
-        question = question_identity if kind == "identity" else question_property
-        if modality == "text":
-            return BACKEND.build_inputs(prompt=f"Caption: {group['caption']}\n{question}", modality="text")
-        if modality == "image":
-            return BACKEND.build_inputs(prompt=question, modality="image", image=MEDIA["load_image"](group["image_path"]), media_path=group["image_path"])
-        waveform, rate = MEDIA["load_audio"](group["audio_path"])
-        return BACKEND.build_inputs(prompt=question, modality="spoken_audio", audio=waveform, sampling_rate=rate, media_path=group["audio_path"])
-    selected_groups = [row for row in CONFIRM_GROUPS if str(row.get("concept")) == source][:CONFIRMATION_IMAGES_PER_SOURCE]
-    rows = []
-    for group in selected_groups:
-        for modality in ("text", "image", "spoken_audio"):
-            for kind in ("identity", "property"):
-                inputs = build_inputs(group, modality, kind)
-                source_answer = source if kind == "identity" else answers[source]
-                target_answer = target if kind == "identity" else answers[target]
-                clean = unrestricted_greedy_completion(
-                    BACKEND, inputs, answer=source_answer,
-                    max_new_tokens=TEXT_MAX_NEW_TOKENS,
-                )
-                key = safe_key("fresh-confirm", group["group_id"], modality, kind)
-                stored = STORE.load("intervention", key)
-                if stored is None:
-                    conditions = {}
-                    for name, bases, alpha in (
-                        ("exact_alpha1", exact_bases, 1.0),
-                        ("random_alpha1", random_bases, 1.0),
-                        ("unrelated_alpha1", unrelated_bases, 1.0),
-                        ("exact_alpha075", exact_bases, 0.75),
-                    ):
-                        trial = unrestricted_greedy_swap_trial(
-                            BACKEND, inputs, bases=bases, alpha=alpha,
-                            answer=target_answer,
-                            max_new_tokens=TEXT_MAX_NEW_TOKENS,
-                            position_rule=CONFIRMATION_DESIGN[
-                                "position_rule_by_modality"
-                            ][modality],
-                        )
-                        conditions[name] = {
-                            **trial,
-                            "patched_surface": trial["generated_text"],
-                            "success": bool(trial["answer_match"]),
-                        }
-                    stored = {
-                        "group_id": group["group_id"], "image_id": group["image_id"],
-                        "source": source, "target": target, "modality": modality,
-                        "prompt_kind": kind, "source_answer": source_answer,
-                        "target_answer": target_answer,
-                        "output_endpoint": "unrestricted_greedy_complete_answer",
-                        "clean_surface": clean["generated_text"],
-                        "clean_correct": bool(clean["answer_match"]),
-                        "clean": clean,
-                        "conditions": conditions,
-                    }
-                    STORE.save("intervention", key, stored)
-                    work = "computed"
-                else:
-                    work = "reused"
-                rows.append(stored)
-                print("confirmation", len(rows), work, group["group_id"], modality, kind)
-    cells = []
-    for kind in ("identity", "property"):
-        for modality in ("text", "image", "spoken_audio"):
-            cell = [row for row in rows if row["prompt_kind"] == kind and row["modality"] == modality]
-            cells.append({
-                "prompt_kind": kind, "modality": modality, "n": len(cell),
-                "clean_capability": sum(row["clean_correct"] for row in cell) / len(cell),
-                "alpha1_success": sum(row["conditions"]["exact_alpha1"]["success"] for row in cell) / len(cell),
-                "alpha075_success": sum(row["conditions"]["exact_alpha075"]["success"] for row in cell) / len(cell),
-                "random_alpha1_success": sum(row["conditions"]["random_alpha1"]["success"] for row in cell) / len(cell),
-                "unrelated_alpha1_success": sum(row["conditions"]["unrelated_alpha1"]["success"] for row in cell) / len(cell),
-            })
-    from jlens.mmpilot.workspace_replication import holm_adjust, paired_binary_superiority
-    paired = {}
-    raw_p = {}
-    for kind in ("identity", "property"):
-        kind_rows = [row for row in rows if row["prompt_kind"] == kind]
-        for control in ("random_alpha1", "unrelated_alpha1"):
-            key = f"{kind}_exact_vs_{control}"
-            paired[key] = paired_binary_superiority(
-                [row["conditions"]["exact_alpha1"]["success"] for row in kind_rows],
-                [row["conditions"][control]["success"] for row in kind_rows],
+        print("Stage 4 did not spend: Stage 3 produced no frozen design.")
+    else:
+        source, target = CONFIRMATION_DESIGN["pair"]
+        directions = ((source, target), (target, source))
+        freshness = assert_fresh_population(
+            CONFIRM_GROUPS,
+            forbidden_image_ids=sorted(set(
+                CONFIRMATION_DESIGN["forbidden_development_image_ids"]
+            ) | set(CONFIRMATION_DESIGN["forbidden_prior_image_ids"])),
+            forbidden_group_ids=CONFIRMATION_DESIGN["forbidden_development_group_ids"],
+        )
+        MEDIA = drive_media_loaders(journal=RetryJournal())
+        answers = {"bird": "2", "cat": "4", "zebra": "4", "giraffe": "4"}
+        if answers[source] == answers[target]:
+            raise RuntimeError("selected pair has no downstream leg-count contrast")
+        token_names = {
+            source, target, *CONTROL_CONCEPTS,
+            semantic_answer_concept(answers[source]),
+            semantic_answer_concept(answers[target]),
+        }
+        TOKENS = {
+            name: resolve_concept_token(BACKEND.encode_candidate, name)
+            for name in token_names
+        }
+        band = CONFIRMATION_DESIGN["layer_band"]
+        direction_assets = {}
+        for direction_index, (direction_source, direction_target) in enumerate(directions):
+            exact_bases = build_swap_bases_for_lens(
+                MATCHED_LENSES["pooled"], BACKEND.unembedding_weight(), layers=band,
+                source=TOKENS[direction_source], target=TOKENS[direction_target],
             )
-            raw_p[key] = paired[key]["one_sided_exact_p"]
-    adjusted = holm_adjust(raw_p)
-    for key in paired:
-        paired[key]["holm_p"] = adjusted[key]
-        paired[key]["passed"] = adjusted[key] <= CONFIRMATION_FAMILYWISE_ALPHA
-    capability = all(cell["clean_capability"] >= 0.75 for cell in cells)
-    primary = all(
-        cell["alpha1_success"] >= MIN_CONFIRMATION_SUCCESS_RATE
-        and cell["alpha1_success"] > max(
-            cell["random_alpha1_success"], cell["unrelated_alpha1_success"]
-        ) for cell in cells
-    ) and all(row["passed"] for row in paired.values())
-    downstream = all(
-        cell["alpha1_success"] >= MIN_CONFIRMATION_SUCCESS_RATE
-        for cell in cells if cell["prompt_kind"] == "property"
-    )
-    verdict = (
-        "FRESH_MULTIMODAL_DOWNSTREAM_RECOMPUTATION_GO"
-        if capability and primary and downstream
-        else "FRESH_MULTIMODAL_CONFIRMATION_NO_GO"
-    )
-    CONFIRMATION_REPORT = {
-        "version": "mmpilot.fresh_multimodal_confirmation.v1",
-        "verdict": verdict, "design": CONFIRMATION_DESIGN,
-        "freshness": freshness, "cells": cells, "paired_tests": paired,
-        "familywise_alpha": CONFIRMATION_FAMILYWISE_ALPHA,
-        "minimum_cell_success_rate": MIN_CONFIRMATION_SUCCESS_RATE,
-        "rows": rows,
-        "teacher_forcing_used": False, "candidate_list_supplied": False,
-        "alpha1_is_primary": True, "alpha075_is_sensitivity_only": True,
-    }
-    CONFIRMATION_REPORT["report_checksum"] = payload_checksum(CONFIRMATION_REPORT)
-    STORE.save("metric", "fresh_confirmation_report", CONFIRMATION_REPORT)
-    (RUN_DIR / "fresh_multimodal_confirmation_report.json").write_text(json.dumps(CONFIRMATION_REPORT, indent=2, default=str))
-    print(json.dumps({k: v for k, v in CONFIRMATION_REPORT.items() if k != "rows"}, indent=2))
+            direction_assets[(direction_source, direction_target)] = {
+                "exact": exact_bases,
+                "random": {
+                    layer: random_two_direction_basis(
+                        basis, seed=20260821 + 100 * direction_index + layer
+                    ) for layer, basis in exact_bases.items()
+                },
+                "unrelated": build_swap_bases_for_lens(
+                    MATCHED_LENSES["pooled"], BACKEND.unembedding_weight(),
+                    layers=band, source=TOKENS[CONTROL_CONCEPTS[0]],
+                    target=TOKENS[CONTROL_CONCEPTS[1]],
+                ),
+                "answer_vectors": {
+                    layer: selected_lens_vector(
+                        MATCHED_LENSES["pooled"], BACKEND.unembedding_weight(),
+                        layer=layer,
+                        token_id=TOKENS[
+                            semantic_answer_concept(answers[direction_target])
+                        ].token_id,
+                    ) for layer in band
+                },
+            }
+        question_identity = "Identify the animal from the evidence internally. Answer with only the animal name:\nAnswer:"
+        question_property = "Identify the animal from the evidence internally, then answer: How many legs does that animal typically have? Answer with one digit:\nAnswer:"
+        def build_inputs(group, modality, kind):
+            question = question_identity if kind == "identity" else question_property
+            if modality == "text":
+                return BACKEND.build_inputs(prompt=f"Caption: {group['caption']}\n{question}", modality="text")
+            if modality == "image":
+                return BACKEND.build_inputs(prompt=question, modality="image", image=MEDIA["load_image"](group["image_path"]), media_path=group["image_path"])
+            waveform, rate = MEDIA["load_audio"](group["audio_path"])
+            return BACKEND.build_inputs(prompt=question, modality="spoken_audio", audio=waveform, sampling_rate=rate, media_path=group["audio_path"])
+        rows = []
+        condition_specs = (
+            ("exact_alpha1", "exact", 1.0),
+            ("zero", "exact", 0.0),
+            ("random_alpha1", "random", 1.0),
+            ("unrelated_alpha1", "unrelated", 1.0),
+            ("exact_alpha075", "exact", 0.75),
+            ("direct_answer_norm_matched", "direct", None),
+        )
+        completed = computed = reused = 0
+        for direction_source, direction_target in directions:
+            assets = direction_assets[(direction_source, direction_target)]
+            selected_groups = [
+                row for row in CONFIRM_GROUPS
+                if str(row.get("concept")) == direction_source
+            ][:CONFIRMATION_IMAGES_PER_SOURCE]
+            for group in selected_groups:
+                for modality in ("text", "image", "spoken_audio"):
+                    for kind in ("identity", "property"):
+                        inputs = build_inputs(group, modality, kind)
+                        source_answer = direction_source if kind == "identity" else answers[direction_source]
+                        target_answer = direction_target if kind == "identity" else answers[direction_target]
+                        clean_key = safe_key(
+                            "fresh-confirm-clean", direction_source,
+                            direction_target, group["group_id"], modality, kind,
+                        )
+                        clean_unit = STORE.load("capability", clean_key)
+                        if clean_unit is None:
+                            clean_unit = unrestricted_greedy_completion(
+                                BACKEND, inputs, answer=source_answer,
+                                max_new_tokens=TEXT_MAX_NEW_TOKENS,
+                            )
+                            STORE.save("capability", clean_key, clean_unit)
+                        conditions = {}
+                        for name, basis_name, alpha in condition_specs:
+                            key = safe_key(
+                                "fresh-confirm", direction_source,
+                                direction_target, group["group_id"], modality,
+                                kind, name,
+                            )
+                            trial = STORE.load("intervention", key)
+                            if trial is None:
+                                if basis_name == "direct":
+                                    trial = unrestricted_greedy_direct_answer_trial(
+                                        BACKEND, inputs, bases=assets["exact"],
+                                        answer_vectors=assets["answer_vectors"],
+                                        answer=target_answer,
+                                        position_rule=CONFIRMATION_DESIGN[
+                                            "position_rule_by_modality"
+                                        ][modality],
+                                        realization_policy=TEXT_MODEL_DTYPE_REALIZATION,
+                                    )
+                                else:
+                                    trial = unrestricted_greedy_swap_trial(
+                                        BACKEND, inputs, bases=assets[basis_name],
+                                        alpha=alpha, answer=target_answer,
+                                        max_new_tokens=TEXT_MAX_NEW_TOKENS,
+                                        position_rule=CONFIRMATION_DESIGN[
+                                            "position_rule_by_modality"
+                                        ][modality],
+                                        realization_policy=TEXT_MODEL_DTYPE_REALIZATION,
+                                    )
+                                trial = {
+                                    **trial, "patched_surface": trial["generated_text"],
+                                    "success": bool(trial["answer_match"]),
+                                }
+                                STORE.save("intervention", key, trial)
+                                computed += 1
+                                work = "computed"
+                            else:
+                                reused += 1
+                                work = "reused"
+                            conditions[name] = trial
+                            completed += 1
+                            if completed == 1 or completed % 25 == 0:
+                                print("confirmation", completed, work, direction_source, direction_target, modality, kind, name)
+                        rows.append({
+                            "group_id": group["group_id"], "image_id": group["image_id"],
+                            "source": direction_source, "target": direction_target,
+                            "direction": f"{direction_source}->{direction_target}",
+                            "modality": modality, "prompt_kind": kind,
+                            "source_answer": source_answer, "target_answer": target_answer,
+                            "output_endpoint": "unrestricted_greedy_complete_answer",
+                            "clean_surface": clean_unit["generated_text"],
+                            "clean_correct": bool(clean_unit["answer_match"]),
+                            "clean": clean_unit, "conditions": conditions,
+                        })
+        def condition_integrity(trial):
+            diagnostics = dict(trial.get("intervention_diagnostics") or {})
+            return bool(
+                diagnostics.get("all_hooks_fired")
+                and diagnostics.get("all_finite")
+                and diagnostics.get("all_model_dtype_realizations_converged", True)
+            )
+        cells = []
+        for direction_source, direction_target in directions:
+            direction_name = f"{direction_source}->{direction_target}"
+            for kind in ("identity", "property"):
+                for modality in ("text", "image", "spoken_audio"):
+                    cell = [
+                        row for row in rows
+                        if row["direction"] == direction_name
+                        and row["prompt_kind"] == kind
+                        and row["modality"] == modality
+                    ]
+                    cells.append({
+                        "direction": direction_name, "prompt_kind": kind,
+                        "modality": modality, "n": len(cell),
+                        "clean_capability": sum(row["clean_correct"] for row in cell) / len(cell),
+                        "alpha1_success": sum(row["conditions"]["exact_alpha1"]["success"] for row in cell) / len(cell),
+                        "alpha075_success": sum(row["conditions"]["exact_alpha075"]["success"] for row in cell) / len(cell),
+                        "zero_success": sum(row["conditions"]["zero"]["success"] for row in cell) / len(cell),
+                        "random_alpha1_success": sum(row["conditions"]["random_alpha1"]["success"] for row in cell) / len(cell),
+                        "unrelated_alpha1_success": sum(row["conditions"]["unrelated_alpha1"]["success"] for row in cell) / len(cell),
+                        "direct_answer_success": sum(row["conditions"]["direct_answer_norm_matched"]["success"] for row in cell) / len(cell),
+                        "all_condition_integrity": all(
+                            condition_integrity(trial)
+                            for row in cell for trial in row["conditions"].values()
+                        ),
+                    })
+        from jlens.mmpilot.workspace_replication import holm_adjust, paired_binary_superiority
+        paired, raw_p = {}, {}
+        for direction_source, direction_target in directions:
+            direction_name = f"{direction_source}->{direction_target}"
+            for kind in ("identity", "property"):
+                kind_rows = [row for row in rows if row["direction"] == direction_name and row["prompt_kind"] == kind]
+                for control in ("zero", "random_alpha1", "unrelated_alpha1"):
+                    key = f"{direction_name}_{kind}_exact_vs_{control}"
+                    paired[key] = paired_binary_superiority(
+                        [row["conditions"]["exact_alpha1"]["success"] for row in kind_rows],
+                        [row["conditions"][control]["success"] for row in kind_rows],
+                    )
+                    raw_p[key] = paired[key]["one_sided_exact_p"]
+        adjusted = holm_adjust(raw_p)
+        for key in paired:
+            paired[key]["holm_p"] = adjusted[key]
+            paired[key]["passed"] = adjusted[key] <= CONFIRMATION_FAMILYWISE_ALPHA
+        paired_text, raw_text_p = {}, {}
+        for direction_source, direction_target in directions:
+            direction_name = f"{direction_source}->{direction_target}"
+            for kind in ("identity", "property"):
+                text_rows = [
+                    row for row in rows
+                    if row["direction"] == direction_name
+                    and row["prompt_kind"] == kind
+                    and row["modality"] == "text"
+                ]
+                for control in ("zero", "random_alpha1", "unrelated_alpha1"):
+                    key = f"{direction_name}_{kind}_text_exact_vs_{control}"
+                    paired_text[key] = paired_binary_superiority(
+                        [row["conditions"]["exact_alpha1"]["success"] for row in text_rows],
+                        [row["conditions"][control]["success"] for row in text_rows],
+                    )
+                    raw_text_p[key] = paired_text[key]["one_sided_exact_p"]
+        adjusted_text = holm_adjust(raw_text_p)
+        for key in paired_text:
+            paired_text[key]["holm_p"] = adjusted_text[key]
+            paired_text[key]["passed"] = (
+                adjusted_text[key] <= CONFIRMATION_FAMILYWISE_ALPHA
+            )
+        integrity = all(cell["all_condition_integrity"] for cell in cells)
+        capability = all(cell["clean_capability"] >= 0.75 for cell in cells)
+        positive_control = all(cell["direct_answer_success"] >= 0.50 for cell in cells)
+        primary = all(
+            cell["alpha1_success"] >= MIN_CONFIRMATION_SUCCESS_RATE
+            and cell["alpha1_success"] > max(
+                cell["zero_success"], cell["random_alpha1_success"],
+                cell["unrelated_alpha1_success"],
+            ) for cell in cells
+        ) and all(row["passed"] for row in paired.values())
+        downstream = all(
+            cell["alpha1_success"] >= MIN_CONFIRMATION_SUCCESS_RATE
+            for cell in cells if cell["prompt_kind"] == "property"
+        )
+        text_cells = [cell for cell in cells if cell["modality"] == "text"]
+        text_primary = all(
+            cell["alpha1_success"] >= MIN_CONFIRMATION_SUCCESS_RATE
+            and cell["alpha1_success"] > max(
+                cell["zero_success"], cell["random_alpha1_success"],
+                cell["unrelated_alpha1_success"],
+            )
+            for cell in text_cells
+        ) and all(row["passed"] for row in paired_text.values())
+        text_verdict = (
+            "FRESH_TEXT_CAUSAL_RECOMPUTATION_GO"
+            if integrity and capability and positive_control and text_primary
+            else "FRESH_TEXT_CAUSAL_RECOMPUTATION_NO_GO"
+        )
+        verdict = (
+            "FRESH_MULTIMODAL_ENGINEERING_NO_GO" if not integrity
+            else "FRESH_MULTIMODAL_CAPABILITY_NO_GO" if not capability
+            else "FRESH_MULTIMODAL_POSITIVE_CONTROL_NO_GO" if not positive_control
+            else "FRESH_MULTIMODAL_DOWNSTREAM_RECOMPUTATION_GO"
+            if primary and downstream
+            else "FRESH_MULTIMODAL_CONFIRMATION_NO_GO"
+        )
+        CONFIRMATION_REPORT = {
+            "version": "mmpilot.fresh_multimodal_confirmation.v2",
+            "verdict": verdict, "text_only_verdict": text_verdict,
+            "design": CONFIRMATION_DESIGN, "freshness": freshness,
+            "cells": cells, "paired_tests": paired,
+            "paired_text_tests": paired_text,
+            "familywise_alpha": CONFIRMATION_FAMILYWISE_ALPHA,
+            "minimum_cell_success_rate": MIN_CONFIRMATION_SUCCESS_RATE,
+            "both_directions_tested": True,
+            "engineering_integrity_passed": integrity,
+            "clean_capability_passed": capability,
+            "positive_control_passed": positive_control,
+            "rows": rows, "teacher_forcing_used": False,
+            "candidate_list_supplied": False, "alpha1_is_primary": True,
+            "alpha075_is_sensitivity_only": True,
+            "atomic_resume_unit": "one two-token condition",
+            "maximum_completed_forward_passes_lost_on_disconnect": 0,
+        }
+        CONFIRMATION_REPORT["report_checksum"] = payload_checksum(CONFIRMATION_REPORT)
+        STORE.save("metric", "fresh_confirmation_report", CONFIRMATION_REPORT)
+        (RUN_DIR / "fresh_multimodal_confirmation_report.json").write_text(json.dumps(CONFIRMATION_REPORT, indent=2, default=str))
+        print(json.dumps({k: v for k, v in CONFIRMATION_REPORT.items() if k != "rows"}, indent=2))
+elif RUN_STAGE4_FRESH_CONFIRMATION:
+    print("Stage 4 did not spend: real mode/model/budget gate is not met.")
 '''
 )
 
@@ -1076,7 +1265,7 @@ if RUN_STAGE5_WRITE_REPORT:
     CONFIRMATION_DESIGN = CONFIRMATION_DESIGN or STORE.load("metric", "confirmation_design")
     CONFIRMATION_REPORT = CONFIRMATION_REPORT or STORE.load("metric", "fresh_confirmation_report")
     FINAL = {
-        "schema": "jlens.mmpilot.paper_first_workspace_study.v1",
+        "schema": "jlens.mmpilot.paper_first_workspace_study.v2",
         "scientific_config": SCIENTIFIC_CONFIG,
         "population_plan": POPULATION_PLAN,
         "text_replication": TEXT_VERDICT,
@@ -1085,6 +1274,18 @@ if RUN_STAGE5_WRITE_REPORT:
         "loading_localization": LOCALIZATION,
         "frozen_confirmation_design": CONFIRMATION_DESIGN,
         "fresh_confirmation": CONFIRMATION_REPORT,
+        "claims": {
+            "text_only_causal_recomputation_supported": bool(
+                CONFIRMATION_REPORT
+                and CONFIRMATION_REPORT.get("text_only_verdict")
+                == "FRESH_TEXT_CAUSAL_RECOMPUTATION_GO"
+            ),
+            "strong_multimodal_causal_recomputation_supported": bool(
+                CONFIRMATION_REPORT
+                and CONFIRMATION_REPORT.get("verdict")
+                == "FRESH_MULTIMODAL_DOWNSTREAM_RECOMPUTATION_GO"
+            ),
+        },
         "claim_boundary": (
             "A multimodal downstream-recomputation claim is licensed only by "
             "FRESH_MULTIMODAL_DOWNSTREAM_RECOMPUTATION_GO. Development loading "

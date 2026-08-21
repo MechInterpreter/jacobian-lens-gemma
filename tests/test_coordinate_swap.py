@@ -32,6 +32,7 @@ from jlens.mmpilot.coordinate_swap import (
     CoordinateSwapError,
     IllConditionedPairError,
     LayerBandError,
+    ModelDtypeRealizationPolicy,
     MultiTokenConceptError,
     RankDeficientPairError,
     StabilityPolicy,
@@ -242,6 +243,29 @@ def test_swap_preserves_dtype_and_batches(V):
         assert math.isfinite(
             record["max_post_cast_relative_coordinate_update_error"]
         )
+
+
+def test_quantization_aware_realization_corrects_the_cast_tensor() -> None:
+    generator = torch.Generator().manual_seed(7)
+    basis = torch.randn(128, 2, generator=generator, dtype=torch.float64) * 0.2
+    activation = torch.randn(12, 128, generator=generator).to(torch.bfloat16)
+    _, naive = swap_coordinates(activation, basis, alpha=1.0)
+    policy = ModelDtypeRealizationPolicy(
+        max_corrections=20,
+        relative_coordinate_tolerance=0.001,
+        relative_residual_tolerance=0.02,
+    )
+    patched, corrected = swap_coordinates(
+        activation,
+        basis,
+        alpha=1.0,
+        realization_policy=policy,
+    )
+    assert naive["max_post_cast_relative_coordinate_update_error"] > 0.001
+    assert corrected["model_dtype_realization_converged"] is True
+    assert corrected["max_post_cast_relative_coordinate_update_error"] <= 0.001
+    assert corrected["model_dtype_corrections_applied"] > 0
+    assert patched.dtype == activation.dtype
 
 
 def test_hook_retains_one_post_cast_audit_per_forward(backend, bases):

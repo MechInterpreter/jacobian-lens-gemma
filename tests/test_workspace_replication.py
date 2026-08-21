@@ -521,7 +521,7 @@ def test_text_diagnostic_refuses_a_candidate_reproduced_by_random_control() -> N
     assert report["selected_band_for_fresh_confirmation"] is None
 
 
-def test_text_diagnostic_refuses_a_control_without_hook_integrity() -> None:
+def test_one_broken_band_does_not_poison_an_independent_valid_candidate() -> None:
     layers, clean_rows, records = _diagnostic_fixture()
     broken = next(
         row
@@ -532,7 +532,20 @@ def test_text_diagnostic_refuses_a_control_without_hook_integrity() -> None:
     report = text_swap_diagnostic_report(
         records, clean_rows=clean_rows, layers=layers
     )
-    assert report["verdict"] == "TEXT_DIAGNOSTIC_AUDIT_FAILED"
+    assert report["verdict"] == "TEXT_DIAGNOSTIC_ALPHA1_CANDIDATE_FOUND"
+    assert report["selected_band_for_fresh_confirmation"] == [40]
+    assert report["bands_with_integrity_failures"] == [[33]]
+
+
+def test_every_broken_band_is_an_engineering_no_go() -> None:
+    layers, clean_rows, records = _diagnostic_fixture()
+    for row in records:
+        if row["condition"] == "unrelated_alpha1":
+            row["result"].pop("intervention_diagnostics")
+    report = text_swap_diagnostic_report(
+        records, clean_rows=clean_rows, layers=layers
+    )
+    assert report["verdict"] == "TEXT_DIAGNOSTIC_ENGINEERING_NO_GO"
     assert report["selected_band_for_fresh_confirmation"] is None
 
 
@@ -557,6 +570,45 @@ def test_confirmation_design_is_frozen_only_after_both_gates() -> None:
     with pytest.raises(WorkspaceReplicationRefused, match="text-only"):
         freeze_confirmation_design(
             text_verdict={"verdict": "TEXT_PAPER_REPLICATION_NO_GO"},
+            localization=localization,
+            pair=("bird", "cat"),
+            prompt_protocol="implicit_animal_property.v1",
+            development_population_digest="sha256:dev",
+        )
+
+
+def test_confirmation_uses_the_audited_text_band_and_multimodal_loading() -> None:
+    diagnostic = {
+        "version": "diagnostic.v2",
+        "verdict": "TEXT_DIAGNOSTIC_ALPHA1_CANDIDATE_FOUND",
+        "selected_band_for_fresh_confirmation": [35, 36],
+        "report_checksum": "sha256:text",
+    }
+    localization = {
+        "verdict": "LOADING_LOCALIZATION_GO",
+        "selected_band": [36, 37, 38],
+        "eligible_layers": [33, 34, 35, 36, 37, 38, 39, 40],
+        "position_rule": "modality_specific",
+        "position_rule_by_modality": {
+            "text": "all_prompt_positions",
+            "image": "evidence_span_only",
+            "spoken_audio": "evidence_span_only",
+        },
+    }
+    design = freeze_confirmation_design(
+        text_diagnostic=diagnostic,
+        localization=localization,
+        pair=("bird", "cat"),
+        prompt_protocol="implicit_animal_property.v1",
+        development_population_digest="sha256:dev",
+    )
+    assert design["layer_band"] == [35, 36]
+    assert design["text_causal_evidence"]["report_checksum"] == "sha256:text"
+
+    localization["eligible_layers"] = [36, 37, 38]
+    with pytest.raises(WorkspaceReplicationRefused, match="not cleanly source-loaded"):
+        freeze_confirmation_design(
+            text_diagnostic=diagnostic,
             localization=localization,
             pair=("bird", "cat"),
             prompt_protocol="implicit_animal_property.v1",

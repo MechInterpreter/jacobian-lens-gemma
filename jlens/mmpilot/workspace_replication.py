@@ -31,7 +31,9 @@ from torch import nn
 
 from jlens.hooks import ActivationRecorder
 from jlens.mmpilot.coordinate_swap import (
+    MODEL_DTYPE_REALIZATION_VERSION,
     PRIMARY_POSITION_RULE,
+    ModelDtypeRealizationPolicy,
     SwapBasis,
     coordinate_swap_band,
     read_coordinates,
@@ -41,7 +43,7 @@ from jlens.mmpilot.coordinate_swap import (
 )
 from jlens.mmpilot.store import payload_checksum
 
-PROTOCOL_VERSION = "mmpilot.paper_first_workspace_replication.v6"
+PROTOCOL_VERSION = "mmpilot.paper_first_workspace_replication.v7"
 TEXT_INPUT_PROTOCOL_VERSION = "mmpilot.assistant_prefill_completion.v1"
 TEXT_OUTPUT_ENDPOINT_VERSION = "mmpilot.unrestricted_greedy_semantic_head_answer.v2"
 TEXT_MAX_NEW_TOKENS = 2
@@ -70,8 +72,8 @@ _NUMBER_WORDS = {
 _NEGATION_MARKERS = frozenset({"not", "no", "non", "never", "except", "outside"})
 LOADING_VERSION = "mmpilot.clean_source_loading.v1"
 LOCALIZATION_VERSION = "mmpilot.loading_only_localization.v1"
-CONFIRMATION_VERSION = "mmpilot.fresh_multimodal_confirmation.v1"
-TEXT_DIAGNOSTIC_VERSION = "mmpilot.paper_first_text_swap_diagnostic.v1"
+CONFIRMATION_VERSION = "mmpilot.fresh_multimodal_confirmation.v2"
+TEXT_DIAGNOSTIC_VERSION = "mmpilot.paper_first_text_swap_diagnostic.v2"
 TEXT_DIAGNOSTIC_CONDITIONS = (
     "exact_alpha1",
     "zero",
@@ -80,6 +82,12 @@ TEXT_DIAGNOSTIC_CONDITIONS = (
     "direct_answer_norm_matched",
 )
 TEXT_POST_CAST_MAX_RELATIVE_ERROR = 0.02
+TEXT_MODEL_DTYPE_REALIZATION = ModelDtypeRealizationPolicy(
+    max_corrections=8,
+    relative_coordinate_tolerance=TEXT_POST_CAST_MAX_RELATIVE_ERROR,
+    relative_residual_tolerance=TEXT_POST_CAST_MAX_RELATIVE_ERROR,
+    minimum_scale=1.0,
+)
 
 
 class WorkspaceReplicationRefused(RuntimeError):
@@ -451,6 +459,7 @@ def unrestricted_greedy_swap_trial(
     max_new_tokens: int = TEXT_MAX_NEW_TOKENS,
     position_rule: str = "all_prompt_positions",
     diagnostic_token_ids: Mapping[str, int] | None = None,
+    realization_policy: ModelDtypeRealizationPolicy | None = None,
 ) -> dict:
     """Run the paper's swap and freely generate the complete answer.
 
@@ -467,6 +476,7 @@ def unrestricted_greedy_swap_trial(
         position_rule=str(position_rule),
         evidence_span=getattr(inputs, "modality_token_range", None),
         record_coordinates=False,
+        realization_policy=realization_policy,
     ) as stats:
         generated = unrestricted_greedy_completion(
             backend,
@@ -545,6 +555,18 @@ def summarize_swap_diagnostics(stats: Mapping[int, Mapping]) -> dict:
             "all_finite": bool(history) and all(_finite_numbers(record) for record in history),
             "all_alpha_one_exact_before_cast": bool(history)
             and all(bool(record.get("alpha_one_is_exact_exchange")) for record in history),
+            "all_model_dtype_realizations_converged": bool(history)
+            and all(
+                bool(record.get("model_dtype_realization_converged", True))
+                for record in history
+            ),
+            "max_model_dtype_corrections_applied": max(
+                (
+                    int(record.get("model_dtype_corrections_applied") or 0)
+                    for record in history
+                ),
+                default=0,
+            ),
             "max_ideal_coordinate_error": max(
                 (float(record["max_coordinate_update_error"]) for record in history),
                 default=None,
@@ -601,6 +623,9 @@ def summarize_swap_diagnostics(stats: Mapping[int, Mapping]) -> dict:
         "all_finite": bool(layers) and all(row["all_finite"] for row in layers),
         "all_layers_are_exact_alpha_one_exchange_before_cast": bool(layers)
         and all(row["all_alpha_one_exact_before_cast"] for row in layers),
+        "all_model_dtype_realizations_converged": bool(layers)
+        and all(row["all_model_dtype_realizations_converged"] for row in layers),
+        "model_dtype_realization_version": MODEL_DTYPE_REALIZATION_VERSION,
         "max_post_cast_relative_coordinate_error": max(
             relative_errors, default=None
         ),
@@ -629,6 +654,7 @@ def _norm_matched_direct_answer_band(
     prompt_len: int,
     position_rule: str = PRIMARY_POSITION_RULE,
     evidence_span: Sequence[int] | None = None,
+    realization_policy: ModelDtypeRealizationPolicy | None = None,
 ):
     """Add the answer direction with each position's exact-swap update norm.
 
@@ -694,7 +720,10 @@ def _norm_matched_direct_answer_band(
                     )
                     selected = hidden[0, positions]
                     exact_after_cast, _ = swap_coordinates(
-                        selected, layer_basis.V, alpha=1.0
+                        selected,
+                        layer_basis.V,
+                        alpha=1.0,
+                        realization_policy=realization_policy,
                     )
                     matched_norm = (
                         exact_after_cast.detach().float() - selected.detach().float()
@@ -702,15 +731,35 @@ def _norm_matched_direct_answer_band(
                     direction = layer_unit_answer.to(
                         device=hidden.device, dtype=torch.float32
                     )
-                    proposed = selected.detach().float() + matched_norm[:, None] * direction
-                    patched = proposed.to(hidden.dtype)
-                    actual_norm = (
-                        patched.detach().float() - selected.detach().float()
-                    ).norm(dim=-1)
-                    relative_match_error = (
-                        (actual_norm - matched_norm).abs()
-                        / matched_norm.clamp_min(1.0)
+                    requested_norm = matched_norm.clone()
+                    correction_history = []
+                    max_corrections = (
+                        0
+                        if realization_policy is None
+                        else int(realization_policy.max_corrections)
                     )
+                    for _correction_index in range(max_corrections + 1):
+                        proposed = (
+                            selected.detach().float()
+                            + requested_norm[:, None] * direction
+                        )
+                        patched = proposed.to(hidden.dtype)
+                        actual_norm = (
+                            patched.detach().float() - selected.detach().float()
+                        ).norm(dim=-1)
+                        relative_match_error = (
+                            (actual_norm - matched_norm).abs()
+                            / matched_norm.clamp_min(1.0)
+                        )
+                        error_max = float(relative_match_error.max())
+                        correction_history.append(error_max)
+                        if realization_policy is None or error_max <= float(
+                            realization_policy.relative_coordinate_tolerance
+                        ):
+                            break
+                        requested_norm = requested_norm * (
+                            matched_norm / actual_norm.clamp_min(1e-12)
+                        )
                     new_hidden = hidden.clone()
                     new_hidden[0, positions] = patched
                     layer_row["n_forward_passes"] += 1
@@ -724,6 +773,16 @@ def _norm_matched_direct_answer_band(
                             ),
                             "max_relative_norm_match_error": float(
                                 relative_match_error.max()
+                            ),
+                            "model_dtype_realization_converged": bool(
+                                realization_policy is None
+                                or float(relative_match_error.max())
+                                <= float(
+                                    realization_policy.relative_coordinate_tolerance
+                                )
+                            ),
+                            "model_dtype_corrections_applied": (
+                                len(correction_history) - 1
                             ),
                             "max_update_to_activation_ratio": float(
                                 (
@@ -763,6 +822,18 @@ def summarize_direct_answer_diagnostics(stats: Mapping[int, Mapping]) -> dict:
                 ),
                 default=None,
             ),
+            "all_model_dtype_realizations_converged": bool(history)
+            and all(
+                bool(record.get("model_dtype_realization_converged", True))
+                for record in history
+            ),
+            "max_model_dtype_corrections_applied": max(
+                (
+                    int(record.get("model_dtype_corrections_applied") or 0)
+                    for record in history
+                ),
+                default=0,
+            ),
             "max_update_to_activation_ratio": max(
                 (
                     float(record["max_update_to_activation_ratio"])
@@ -783,6 +854,11 @@ def summarize_direct_answer_diagnostics(stats: Mapping[int, Mapping]) -> dict:
         ),
         "all_finite": bool(by_layer)
         and all(row["all_finite"] for row in by_layer.values()),
+        "all_model_dtype_realizations_converged": bool(by_layer)
+        and all(
+            row["all_model_dtype_realizations_converged"]
+            for row in by_layer.values()
+        ),
     }
     return {**payload, "diagnostic_checksum": payload_checksum(payload)}
 
@@ -798,6 +874,7 @@ def unrestricted_greedy_direct_answer_trial(
     max_new_tokens: int = TEXT_MAX_NEW_TOKENS,
     position_rule: str = PRIMARY_POSITION_RULE,
     diagnostic_token_ids: Mapping[str, int] | None = None,
+    realization_policy: ModelDtypeRealizationPolicy | None = None,
 ) -> dict:
     with _norm_matched_direct_answer_band(
         backend.blocks,
@@ -806,6 +883,7 @@ def unrestricted_greedy_direct_answer_trial(
         prompt_len=int(inputs.prompt_len),
         position_rule=str(position_rule),
         evidence_span=getattr(inputs, "modality_token_range", None),
+        realization_policy=realization_policy,
     ) as stats:
         generated = unrestricted_greedy_completion(
             backend,
@@ -1300,7 +1378,10 @@ def text_swap_diagnostic_report(
         implicit_success = False
         direct_successes = 0
         control_successes = {name: 0 for name in ("zero", "random_alpha1", "unrelated_alpha1")}
-        audit_passes = []
+        coordinate_audit_passes = []
+        direct_integrity_passes = []
+        control_integrity_passes = []
+        all_integrity_passes = []
         task_rows = []
         for task_id, task in tasks.items():
             cell = {
@@ -1342,6 +1423,9 @@ def text_swap_diagnostic_report(
             direct_integrity = bool(
                 direct_diagnostics.get("all_hooks_fired")
                 and direct_diagnostics.get("all_finite")
+                and direct_diagnostics.get(
+                    "all_model_dtype_realizations_converged", True
+                )
                 and direct_layer_rows
                 and max(
                     float(row.get("max_relative_norm_match_error", math.inf))
@@ -1356,6 +1440,9 @@ def text_swap_diagnostic_report(
                 and diagnostics.get(
                     "all_layers_are_exact_alpha_one_exchange_before_cast"
                 )
+                and diagnostics.get(
+                    "all_model_dtype_realizations_converged", True
+                )
                 and diagnostics.get("post_cast_audit_passed")
             )
             all_condition_integrity = bool(
@@ -1363,7 +1450,10 @@ def text_swap_diagnostic_report(
                 and direct_integrity
                 and all(control_integrity.values())
             )
-            audit_passes.append(all_condition_integrity)
+            coordinate_audit_passes.append(audit_pass)
+            direct_integrity_passes.append(direct_integrity)
+            control_integrity_passes.append(all(control_integrity.values()))
+            all_integrity_passes.append(all_condition_integrity)
             clean_result = dict((clean_by_task.get(task_id) or {}).get("clean") or {})
             clean_logprob = _best_diagnostic_logprob(
                 clean_result, "swapped_answer_head"
@@ -1398,11 +1488,22 @@ def text_swap_diagnostic_report(
         )
         flexible_rate = flexible_successes / 6.0
         controls_pass = all(count == 0 for count in control_successes.values())
-        audits_pass = bool(audit_passes) and all(audit_passes)
+        coordinate_audits_pass = bool(coordinate_audit_passes) and all(
+            coordinate_audit_passes
+        )
+        direct_answer_integrity_pass = bool(direct_integrity_passes) and all(
+            direct_integrity_passes
+        )
+        control_integrity_pass = bool(control_integrity_passes) and all(
+            control_integrity_passes
+        )
+        all_condition_integrity_pass = bool(all_integrity_passes) and all(
+            all_integrity_passes
+        )
         positive_control_rate = direct_successes / len(tasks)
         eligible = bool(
             complete
-            and audits_pass
+            and all_condition_integrity_pass
             and controls_pass
             and implicit_success
             and flexible_rate >= 0.5
@@ -1412,7 +1513,10 @@ def text_swap_diagnostic_report(
             {
                 "band": list(band),
                 "complete": complete,
-                "coordinate_audits_pass": audits_pass,
+                "coordinate_audits_pass": coordinate_audits_pass,
+                "direct_answer_integrity_pass": direct_answer_integrity_pass,
+                "control_integrity_pass": control_integrity_pass,
+                "all_condition_integrity_pass": all_condition_integrity_pass,
                 "implicit_two_hop_success": implicit_success,
                 "flexible_function_success_rate": flexible_rate,
                 "exact_successes": exact_successes,
@@ -1432,21 +1536,19 @@ def text_swap_diagnostic_report(
             -int(row["band"][0]),
         )
     )
-    any_audit_failure = any(
-        row["complete"] and not row["coordinate_audits_pass"] for row in band_rows
-    )
-    selected = (
-        candidates[0]["band"]
-        if candidates and not missing and not any_audit_failure
-        else None
-    )
+    bands_with_integrity_failures = [
+        row["band"]
+        for row in band_rows
+        if row["complete"] and not row["all_condition_integrity_pass"]
+    ]
+    selected = candidates[0]["band"] if candidates and not missing else None
     verdict = (
         "TEXT_DIAGNOSTIC_INCOMPLETE"
         if missing
-        else "TEXT_DIAGNOSTIC_AUDIT_FAILED"
-        if any_audit_failure
         else "TEXT_DIAGNOSTIC_ALPHA1_CANDIDATE_FOUND"
         if selected
+        else "TEXT_DIAGNOSTIC_ENGINEERING_NO_GO"
+        if len(bands_with_integrity_failures) == len(band_rows)
         else "TEXT_DIAGNOSTIC_NO_ALPHA1_CANDIDATE"
     )
     payload = {
@@ -1461,6 +1563,8 @@ def text_swap_diagnostic_report(
         "conditions": list(TEXT_DIAGNOSTIC_CONDITIONS),
         "post_cast_relative_error_threshold": TEXT_POST_CAST_MAX_RELATIVE_ERROR,
         "missing_units": missing,
+        "bands_with_integrity_failures": bands_with_integrity_failures,
+        "band_integrity_is_evaluated_independently": True,
         "bands": band_rows,
         "selected_band_for_fresh_confirmation": selected,
         "selection_rule": (
@@ -1477,7 +1581,8 @@ def text_swap_diagnostic_report(
 
 def freeze_confirmation_design(
     *,
-    text_verdict: Mapping,
+    text_verdict: Mapping | None = None,
+    text_diagnostic: Mapping | None = None,
     localization: Mapping,
     pair: Sequence[str],
     alpha: float = 1.0,
@@ -1487,13 +1592,55 @@ def freeze_confirmation_design(
 ) -> dict:
     """Freeze the confirmatory design before any fresh media are opened."""
 
-    if text_verdict.get("verdict") != "TEXT_PAPER_REPLICATION_GO":
-        raise WorkspaceReplicationRefused(
-            "the text-only paper replication did not pass; multimodal confirmation is blocked"
+    if text_diagnostic is not None:
+        if text_diagnostic.get("verdict") != "TEXT_DIAGNOSTIC_ALPHA1_CANDIDATE_FOUND":
+            raise WorkspaceReplicationRefused(
+                "the audited text-only alpha=1 localization found no candidate; "
+                "multimodal confirmation is blocked"
+            )
+        text_band = tuple(
+            map(int, text_diagnostic.get("selected_band_for_fresh_confirmation") or ())
         )
+        if not text_band:
+            raise WorkspaceReplicationRefused(
+                "the text diagnostic names no band for fresh confirmation"
+            )
+        text_evidence = {
+            "version": text_diagnostic.get("version"),
+            "verdict": text_diagnostic.get("verdict"),
+            "report_checksum": text_diagnostic.get("report_checksum"),
+            "selected_band": list(text_band),
+        }
+    else:
+        if not text_verdict or text_verdict.get("verdict") != "TEXT_PAPER_REPLICATION_GO":
+            raise WorkspaceReplicationRefused(
+                "the text-only paper replication did not pass; multimodal "
+                "confirmation is blocked"
+            )
+        text_band = tuple(map(int, localization.get("selected_band") or ()))
+        text_evidence = {
+            "version": text_verdict.get("version"),
+            "verdict": text_verdict.get("verdict"),
+            "report_checksum": text_verdict.get("report_checksum"),
+            "selected_band": list(text_band),
+        }
     if localization.get("verdict") != "LOADING_LOCALIZATION_GO":
         raise WorkspaceReplicationRefused(
             "clean source loading did not license a layer band"
+        )
+    eligible_layers = set(
+        map(
+            int,
+            localization.get("eligible_layers")
+            or localization.get("selected_band")
+            or (),
+        )
+    )
+    if not set(text_band).issubset(eligible_layers):
+        raise WorkspaceReplicationRefused(
+            "the text-selected band is not cleanly source-loaded in every "
+            f"required modality: band={list(text_band)}, eligible="
+            f"{sorted(eligible_layers)}"
         )
     names = tuple(map(str, pair))
     if len(names) != 2 or names[0] == names[1]:
@@ -1507,7 +1654,8 @@ def freeze_confirmation_design(
             float(sensitivity_alpha) if sensitivity_alpha is not None else None
         ),
         "sensitivity_alpha_role": "interpolation_not_primary",
-        "layer_band": list(localization["selected_band"]),
+        "layer_band": list(text_band),
+        "text_causal_evidence": text_evidence,
         "position_rule": str(localization["position_rule"]),
         "position_rule_by_modality": dict(
             localization.get("position_rule_by_modality")
@@ -1607,6 +1755,7 @@ __all__ = [
     "TEXT_DIAGNOSTIC_CONDITIONS",
     "TEXT_DIAGNOSTIC_VERSION",
     "TEXT_POST_CAST_MAX_RELATIVE_ERROR",
+    "TEXT_MODEL_DTYPE_REALIZATION",
     "TextReplicationTask",
     "WorkspaceReplicationRefused",
     "anthropic_text_tasks",
