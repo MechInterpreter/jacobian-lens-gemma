@@ -418,6 +418,24 @@ def test_text_replication_gate_requires_two_hop_flexible_and_controls() -> None:
     assert text_replication_verdict(rows)["verdict"] == "TEXT_PAPER_REPLICATION_NO_GO"
 
 
+def test_text_replication_accepts_paper_alpha2_primary_with_matched_controls() -> None:
+    rows = []
+    for task in anthropic_text_tasks():
+        rows.append(
+            {
+                "task_id": task.task_id,
+                "clean_correct": True,
+                "exact_primary_swapped_answer_generated": True,
+                "random_primary_swapped_answer_generated": False,
+                "unrelated_primary_swapped_answer_generated": False,
+            }
+        )
+    result = text_replication_verdict(rows, primary_alpha=2.0)
+    assert result["verdict"] == "TEXT_PAPER_REPLICATION_GO"
+    assert result["primary_alpha"] == 2.0
+    assert result["primary_alpha_role"] == "double_strength_coordinate_exchange"
+
+
 def test_text_capability_gate_precedes_and_licenses_causal_spending() -> None:
     rows = [
         {"task_id": task.task_id, "clean_correct": True}
@@ -593,6 +611,26 @@ def test_confirmation_design_is_frozen_only_after_both_gates() -> None:
             prompt_protocol="implicit_animal_property.v1",
             development_population_digest="sha256:dev",
         )
+
+
+def test_confirmation_design_records_paper_double_strength_primary() -> None:
+    design = freeze_confirmation_design(
+        text_verdict={"verdict": "TEXT_PAPER_REPLICATION_GO"},
+        localization={
+            "verdict": "LOADING_LOCALIZATION_GO",
+            "selected_band": [27, 28, 29],
+            "position_rule": "all_prompt_positions",
+        },
+        pair=("bird", "cat"),
+        alpha=2.0,
+        sensitivity_alpha=1.0,
+        prompt_protocol="implicit_animal_property.v1",
+        development_population_digest="sha256:dev",
+    )
+    assert design["primary_alpha"] == 2.0
+    assert design["primary_alpha_role"] == "double_strength_coordinate_exchange"
+    assert design["sensitivity_alpha"] == 1.0
+    assert design["sensitivity_alpha_role"] == "exact_coordinate_exchange_sensitivity"
 
 
 def test_confirmation_uses_the_audited_text_band_and_multimodal_loading() -> None:

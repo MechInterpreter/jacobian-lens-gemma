@@ -1272,7 +1272,9 @@ def text_capability_verdict(rows: Sequence[Mapping]) -> dict:
     return {**payload, "report_checksum": payload_checksum(payload)}
 
 
-def text_replication_verdict(rows: Sequence[Mapping]) -> dict:
+def text_replication_verdict(
+    rows: Sequence[Mapping], *, primary_alpha: float = 1.0
+) -> dict:
     """Gate later stages on the paper task, not a multimodal hope."""
 
     tasks = {task.task_id: task for task in anthropic_text_tasks()}
@@ -1281,8 +1283,13 @@ def text_replication_verdict(rows: Sequence[Mapping]) -> dict:
     clean = not missing and all(bool(by_task[name].get("clean_correct")) for name in tasks)
     implicit = bool(
         by_task.get("spider_to_ant_legs", {}).get(
-            "exact_alpha1_swapped_answer_generated",
-            by_task.get("spider_to_ant_legs", {}).get("exact_alpha1_target_top1"),
+            "exact_primary_swapped_answer_generated",
+            by_task.get("spider_to_ant_legs", {}).get(
+                "exact_alpha1_swapped_answer_generated",
+                by_task.get("spider_to_ant_legs", {}).get(
+                    "exact_alpha1_target_top1"
+                ),
+            ),
         )
     )
     flexible_rows = [
@@ -1292,8 +1299,11 @@ def text_replication_verdict(rows: Sequence[Mapping]) -> dict:
         sum(
             bool(
                 row.get(
-                    "exact_alpha1_swapped_answer_generated",
-                    row.get("exact_alpha1_target_top1"),
+                    "exact_primary_swapped_answer_generated",
+                    row.get(
+                        "exact_alpha1_swapped_answer_generated",
+                        row.get("exact_alpha1_target_top1"),
+                    ),
                 )
             )
             for row in flexible_rows
@@ -1305,13 +1315,20 @@ def text_replication_verdict(rows: Sequence[Mapping]) -> dict:
     controls = not missing and all(
         not bool(
             row.get(
-                "random_swapped_answer_generated", row.get("random_target_top1")
+                "random_primary_swapped_answer_generated",
+                row.get(
+                    "random_swapped_answer_generated",
+                    row.get("random_target_top1"),
+                ),
             )
         )
         and not bool(
             row.get(
-                "unrelated_swapped_answer_generated",
-                row.get("unrelated_target_top1"),
+                "unrelated_primary_swapped_answer_generated",
+                row.get(
+                    "unrelated_swapped_answer_generated",
+                    row.get("unrelated_target_top1"),
+                ),
             )
         )
         for row in by_task.values()
@@ -1320,6 +1337,14 @@ def text_replication_verdict(rows: Sequence[Mapping]) -> dict:
     payload = {
         "version": PROTOCOL_VERSION,
         "verdict": "TEXT_PAPER_REPLICATION_GO" if passed else "TEXT_PAPER_REPLICATION_NO_GO",
+        "primary_alpha": float(primary_alpha),
+        "primary_alpha_role": (
+            "exact_coordinate_exchange"
+            if float(primary_alpha) == 1.0
+            else "double_strength_coordinate_exchange"
+            if float(primary_alpha) == 2.0
+            else "amplified_coordinate_exchange"
+        ),
         "all_clean_answers_correct": clean,
         "output_endpoint": "unrestricted_greedy_complete_answer",
         "implicit_two_hop_swapped_answer_rate": 1.0 if implicit else 0.0,
@@ -1673,11 +1698,25 @@ def freeze_confirmation_design(
         "version": CONFIRMATION_VERSION,
         "pair": list(names),
         "primary_alpha": float(alpha),
-        "primary_alpha_role": "exact_exchange" if float(alpha) == 1.0 else "nonexact",
+        "primary_alpha_role": (
+            "exact_coordinate_exchange"
+            if float(alpha) == 1.0
+            else "double_strength_coordinate_exchange"
+            if float(alpha) == 2.0
+            else "amplified_coordinate_exchange"
+        ),
         "sensitivity_alpha": (
             float(sensitivity_alpha) if sensitivity_alpha is not None else None
         ),
-        "sensitivity_alpha_role": "interpolation_not_primary",
+        "sensitivity_alpha_role": (
+            None
+            if sensitivity_alpha is None
+            else "exact_coordinate_exchange_sensitivity"
+            if float(sensitivity_alpha) == 1.0
+            else "interpolation_not_primary"
+            if 0.0 < float(sensitivity_alpha) < 1.0
+            else "amplified_sensitivity_not_primary"
+        ),
         "layer_band": list(text_band),
         "text_causal_evidence": text_evidence,
         "position_rule": str(localization["position_rule"]),

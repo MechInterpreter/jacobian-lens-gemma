@@ -11,6 +11,7 @@ import math
 import statistics
 from collections.abc import Mapping, Sequence
 
+from jlens.lens import JacobianLens
 from jlens.mmpilot.store import payload_checksum
 
 LOADING_FIRST_VERSION = "mmpilot.loading_first_instrument_selection.v1"
@@ -18,6 +19,55 @@ LOADING_FIRST_VERSION = "mmpilot.loading_first_instrument_selection.v1"
 
 class LoadingFirstRefused(RuntimeError):
     """The clean measurements cannot license a causal instrument."""
+
+
+def combine_disjoint_layer_lenses(
+    lenses: Sequence[JacobianLens],
+    *,
+    expected_layers: Sequence[int],
+) -> JacobianLens:
+    """Join identically fitted lens shards that cover disjoint layer ranges.
+
+    This is deliberately *not* :meth:`JacobianLens.merge`: ``merge`` averages
+    lenses fitted on disjoint prompt populations but the same layers.  Here the
+    prompt population and estimator must be identical and the layer sets must
+    be disjoint.  The result only concatenates their per-layer matrices so a
+    paper-style clamp can span the complete contiguous range.
+    """
+
+    supplied = tuple(lenses)
+    wanted = tuple(map(int, expected_layers))
+    if not supplied:
+        raise LoadingFirstRefused("at least one lens shard is required")
+    if not wanted or tuple(range(wanted[0], wanted[-1] + 1)) != wanted:
+        raise LoadingFirstRefused(
+            f"expected_layers must be one sorted contiguous band, got {wanted}"
+        )
+    first = supplied[0]
+    jacobians = {}
+    for lens in supplied:
+        if lens.d_model != first.d_model or lens.n_prompts != first.n_prompts:
+            raise LoadingFirstRefused(
+                "layer shards disagree on d_model or fitted-prompt count"
+            )
+        overlap = sorted(set(jacobians) & set(lens.source_layers))
+        if overlap:
+            raise LoadingFirstRefused(
+                f"layer shards overlap at {overlap}; concatenation is ambiguous"
+            )
+        jacobians.update(lens.jacobians)
+    if tuple(sorted(jacobians)) != wanted:
+        missing = sorted(set(wanted) - set(jacobians))
+        extra = sorted(set(jacobians) - set(wanted))
+        raise LoadingFirstRefused(
+            f"layer shards do not exactly cover the declared band; "
+            f"missing={missing}, extra={extra}"
+        )
+    return JacobianLens(
+        jacobians=jacobians,
+        n_prompts=first.n_prompts,
+        d_model=first.d_model,
+    )
 
 
 def select_loading_instrument(

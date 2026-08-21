@@ -28,18 +28,21 @@ exchange in `jlens.mmpilot.coordinate_swap`.
 
 The order is mandatory:
 
-0. **Matched R-lens fit.** Reuse the original frozen 99-example text and pooled
-   multimodal fit plans, but repeat their backward accumulation with the audited
-   dense R-lens relevance rules. The forward values and processor inputs are
-   unchanged. Text and pooled R arms have separate atomic checkpoints and can
-   never resume a J accumulator.
+0. **Matched R-lens fit or verified reuse.** The early and late studies used the
+   same frozen 99-example text and pooled multimodal fit plans with the same
+   audited dense R-lens rules. In `combined_r_l27_l40` mode, their disjoint
+   L27-L32 and L33-L40 matrices are checksum-verified and concatenated into one
+   contiguous L27-L40 lens without fitting or averaging. Other modes retain the
+   original resumable fitting path.
 1. **Clean text loading, then text replication.** Compare the published text
    J-lens, matched text/pooled J-lenses, and matched text/pooled R-lenses on the
    same clean task activations. Select the instrument and contiguous band using
    final-prompt-token source loading only, before a causal hook exists. Then
    reproduce the paper's text-only implicit two-hop task
    (`spider → ant`, expected downstream answer `8 → 6`) and its France/China
-   flexible-function family with the validated text lens and exact `alpha=1`.
+   flexible-function family. The default modes use exact `alpha=1`; the
+   prospective combined-band mode uses the paper's reported double-strength
+   `alpha=2` intervention as primary and keeps `alpha=1` as sensitivity.
    Because this checkpoint is instruction-tuned, a generic answer-free user
    instruction is followed by the literal fragment as an assistant prefill
    with `continue_final_message=True`. Clean capability is measured for every
@@ -49,7 +52,7 @@ The order is mandatory:
    Gemma tokenizes the paper's digit outputs as whitespace + digit, so success
    is the complete answer from unrestricted two-token greedy generation—not a
    one-token prefix, candidate score, or teacher-forced likelihood.
-1b. **Audited text test on the loading-selected band.** Audit the actual
+1b. **Legacy alpha=1 diagnostic.** In alpha=1 modes, audit the actual
    post-cast exchange and iteratively correct only its two-coordinate component
    until the BF16 tensor consumed by Gemma meets the frozen 2% tolerance. Then
    test exactly the already selected clean-loading band at exact `alpha=1`
@@ -62,8 +65,8 @@ The order is mandatory:
    no multimodal causal outcome is consulted.
 3. **Freeze the design.** Require the clean-loading-selected multimodal
    instrument and band to remain available, and freeze their artifact identity,
-   pair, and modality-specific position rule. `alpha=1` remains primary;
-   `alpha=.75` is a labelled interpolation sensitivity.
+   pair, and modality-specific position rule. Alpha roles are fixed by the
+   study mode before clean or causal outcomes are opened.
 4. **Fresh confirmation.** Open new photographs/recordings, prove zero overlap,
    and test both swap directions with unrestricted identity and downstream
    property outputs against zero, random, unrelated, and norm-matched
@@ -71,7 +74,8 @@ The order is mandatory:
 
 If the text replication or clean-loading gate fails, later causal spending is
 blocked. No threshold, pair, layer, position, or alpha may be changed after its
-gate has seen results.
+gate has seen results. R-Lens changes how each per-layer map is fitted; it does
+not change Anthropic's later two-coordinate, all-position, contiguous-band clamp.
 """
 )
 
@@ -147,15 +151,20 @@ if STUDY_LAYER_WINDOW == "late_jr_l33_l40":
 elif STUDY_LAYER_WINDOW == "early_r_l27_l32":
     LAYERS = tuple(range(27, 33))
     SCIENTIFIC_IMPLEMENTATION_ID = "loading-first-early-r-l27-l32.v1"
+elif STUDY_LAYER_WINDOW == "combined_r_l27_l40":
+    LAYERS = tuple(range(27, 41))
+    SCIENTIFIC_IMPLEMENTATION_ID = "paper-band-combined-r-l27-l40-alpha2.v1"
 else:
     raise ValueError(
-        "STUDY_LAYER_WINDOW must be 'late_jr_l33_l40' or "
-        "'early_r_l27_l32'"
+        "STUDY_LAYER_WINDOW must be 'late_jr_l33_l40', "
+        "'early_r_l27_l32', or 'combined_r_l27_l40'"
     )
-TEXT_PRIMARY_ALPHA = 1.0
+TEXT_PRIMARY_ALPHA = 2.0 if STUDY_LAYER_WINDOW == "combined_r_l27_l40" else 1.0
 TEXT_DIAGNOSTIC_RANDOM_SEED = 20260820
-MULTIMODAL_PRIMARY_ALPHA = 1.0
-MULTIMODAL_SENSITIVITY_ALPHA = 0.75
+MULTIMODAL_PRIMARY_ALPHA = TEXT_PRIMARY_ALPHA
+MULTIMODAL_SENSITIVITY_ALPHA = (
+    1.0 if STUDY_LAYER_WINDOW == "combined_r_l27_l40" else 0.75
+)
 CANDIDATE_PAIRS = (("bird", "cat"), ("bird", "zebra"), ("bird", "giraffe"))
 CONTROL_CONCEPTS = ("microwave", "toilet")
 DEVELOPMENT_IMAGES_PER_SOURCE = 8
@@ -188,6 +197,14 @@ if RUN_STAGE2_MULTIMODAL_LOADING_DEVELOPMENT and not CONFIRM_DEVELOPMENT_BUDGET:
     print("DEVELOPMENT BLOCKED: set CONFIRM_DEVELOPMENT_BUDGET")
 if RUN_STAGE4_FRESH_CONFIRMATION and not CONFIRM_CONFIRMATION_BUDGET:
     print("CONFIRMATION BLOCKED: set CONFIRM_CONFIRMATION_BUDGET")
+if (
+    STUDY_LAYER_WINDOW == "combined_r_l27_l40"
+    and RUN_STAGE0_FIT_MATCHED_R_LENSES
+):
+    raise RuntimeError(
+        "combined_r_l27_l40 reuses the two completed R-lens shards; "
+        "RUN_STAGE0_FIT_MATCHED_R_LENSES must remain False"
+    )
 '''
 )
 
@@ -200,6 +217,12 @@ if REAL_MODE:
     RUNS_ROOT = Path("/content/drive/MyDrive/jacobian-lens-gemma/runs")
     CORRECTED_RUN_DIR = RUNS_ROOT / "mmband" / "bandcorr_real_eb5b00f135e4"
     MATCHED_LENS_RUN_DIR = RUNS_ROOT / "mmjlens4" / "mmjlens4_real_1d3b1afbd019"
+    EARLY_R_LENS_RUN_DIR = (
+        RUNS_ROOT / "mmworkspace" / "mmworkspace_real_62ef81c904c5"
+    )
+    LATE_R_LENS_RUN_DIR = (
+        RUNS_ROOT / "mmworkspace" / "mmworkspace_real_711a374adc77"
+    )
     EXPANDED_MANIFEST_CACHE = (
         RUNS_ROOT / "mml32_l32_followup_20260808T182717" / "expanded_manifest.json"
     )
@@ -208,6 +231,7 @@ else:
     RUNS_ROOT = Path(tempfile.gettempdir()) / "workspace_replication_mock"
     CORRECTED_RUN_DIR = MATCHED_LENS_RUN_DIR = EXPANDED_MANIFEST_CACHE = None
     MATCHED_FIT_PLAN_PATH = None
+    EARLY_R_LENS_RUN_DIR = LATE_R_LENS_RUN_DIR = None
 
 TEXT_TASKS = __import__(
     "jlens.mmpilot.workspace_replication", fromlist=["anthropic_text_tasks"]
@@ -252,11 +276,94 @@ print("  arms text + pooled; layers", list(LAYERS))
 print("  each arm 99 processor examples, one forward + 320 backward passes/example")
 print("  atomic checkpoint every", R_LENS_CHECKPOINT_EVERY, "examples")
 print("  disconnect loses at most one incomplete checkpoint batch")
+if STUDY_LAYER_WINDOW == "combined_r_l27_l40":
+    print("COMBINED PAPER BAND")
+    print("  reuses completed R-lens shards; fitting passes 0")
+    print("  contiguous clamp", list(LAYERS), "at every original prompt position")
+    print("  primary alpha", TEXT_PRIMARY_ALPHA, "(paper's double-strength swap)")
+    print("  sensitivity alpha", MULTIMODAL_SENSITIVITY_ALPHA)
 
 if REAL_MODE:
-    missing = [path for path in (CORRECTED_RUN_DIR, MATCHED_LENS_RUN_DIR, EXPANDED_MANIFEST_CACHE, MATCHED_FIT_PLAN_PATH) if not path.exists()]
+    _required_paths = [
+        CORRECTED_RUN_DIR, MATCHED_LENS_RUN_DIR,
+        EXPANDED_MANIFEST_CACHE, MATCHED_FIT_PLAN_PATH,
+    ]
+    if STUDY_LAYER_WINDOW == "combined_r_l27_l40":
+        _required_paths.extend((EARLY_R_LENS_RUN_DIR, LATE_R_LENS_RUN_DIR))
+    missing = [path for path in _required_paths if not path.exists()]
     if missing:
         raise FileNotFoundError("configured artifact(s) missing:\n  " + "\n  ".join(map(str, missing)))
+
+COMBINED_R_SOURCE_PROVENANCE = None
+if REAL_MODE and STUDY_LAYER_WINDOW == "combined_r_l27_l40":
+    from jlens.metadata import file_sha256
+    from jlens.mmpilot.store import payload_checksum
+    from jlens.relprop import R_LENS_METHOD
+
+    _source_rows = []
+    _plan_digests = set()
+    for _role, _root, _expected_layers in (
+        ("early", EARLY_R_LENS_RUN_DIR, list(range(27, 33))),
+        ("late", LATE_R_LENS_RUN_DIR, list(range(33, 41))),
+    ):
+        _config = json.loads((_root / "scientific_config.json").read_text())
+        _inventory = json.loads((_root / "r_lens_inventory.json").read_text())
+        if _config.get("model_repo_id") != MODEL_REPO_ID:
+            raise RuntimeError(f"{_role} R-lens model repo does not match")
+        if _config.get("model_revision") != MODEL_REVISION:
+            raise RuntimeError(f"{_role} R-lens model revision does not match")
+        if _config.get("r_lens_method_digest") != R_LENS_METHOD.digest:
+            raise RuntimeError(f"{_role} R-lens method digest does not match")
+        if list(map(int, _config.get("layers") or ())) != _expected_layers:
+            raise RuntimeError(
+                f"{_role} R-lens layers are {_config.get('layers')}, "
+                f"not {_expected_layers}"
+            )
+        _plan_digests.add(str(_config.get("population_plan_digest")))
+        _arms = {}
+        for _arm in ("text", "pooled"):
+            _record = dict(_inventory["lenses"][_arm])
+            _path = Path(_record["path"])
+            if not _path.is_file():
+                raise FileNotFoundError(f"missing {_role} {_arm} R-lens: {_path}")
+            _actual = file_sha256(str(_path))
+            if _actual != _record["checksum"]:
+                raise RuntimeError(
+                    f"{_role} {_arm} R-lens checksum changed: "
+                    f"{_actual} != {_record['checksum']}"
+                )
+            if int(_record["n_prompts"]) != 99:
+                raise RuntimeError(
+                    f"{_role} {_arm} R-lens used {_record['n_prompts']} prompts, not 99"
+                )
+            _arms[_arm] = {
+                "path": str(_path), "checksum": _actual,
+                "n_prompts": int(_record["n_prompts"]),
+            }
+        _source_rows.append({
+            "role": _role, "run_dir": str(_root),
+            "layers": _expected_layers,
+            "population_plan_digest": _config.get("population_plan_digest"),
+            "method_digest": _config.get("r_lens_method_digest"),
+            "arms": _arms,
+        })
+    if len(_plan_digests) != 1:
+        raise RuntimeError(
+            "early and late R-lens shards were not fitted on the same frozen plan"
+        )
+    _combined_payload = {
+        "version": "mmpilot.combined_r_lens_band.v1",
+        "layers": list(LAYERS),
+        "same_frozen_fit_plan": True,
+        "same_method": True,
+        "no_refitting": True,
+        "sources": _source_rows,
+    }
+    COMBINED_R_SOURCE_PROVENANCE = {
+        **_combined_payload,
+        "source_digest": payload_checksum(_combined_payload),
+    }
+    print(json.dumps(COMBINED_R_SOURCE_PROVENANCE, indent=2))
 '''
 )
 
@@ -287,6 +394,42 @@ if REAL_MODE:
         },
     )
     PRIOR_EXCLUDED_IMAGES |= set(prior["excluded_image_ids"])
+    _workspace_plan_sources = []
+    _workspace_roots_to_exclude = (
+        (EARLY_R_LENS_RUN_DIR, LATE_R_LENS_RUN_DIR)
+        if STUDY_LAYER_WINDOW == "combined_r_l27_l40"
+        else ()
+    )
+    for _workspace_root in _workspace_roots_to_exclude:
+        if _workspace_root is None:
+            continue
+        _workspace_plan_path = _workspace_root / "population_plan.json"
+        if not _workspace_plan_path.is_file():
+            if STUDY_LAYER_WINDOW == "combined_r_l27_l40":
+                raise FileNotFoundError(
+                    "the combined-band source run has no population_plan.json: "
+                    f"{_workspace_plan_path}"
+                )
+            continue
+        _workspace_plan = json.loads(_workspace_plan_path.read_text())
+        _spent_rows = [
+            *(_workspace_plan.get("development") or ()),
+            *(_workspace_plan.get("confirmation") or ()),
+        ]
+        _spent_images = {
+            str(row["image_id"]) for row in _spent_rows if row.get("image_id")
+        }
+        _spent_groups = {
+            str(row["group_id"]) for row in _spent_rows if row.get("group_id")
+        }
+        PRIOR_EXCLUDED_IMAGES |= _spent_images
+        PRIOR_EXCLUDED_GROUPS |= _spent_groups
+        _workspace_plan_sources.append({
+            "run_dir": str(_workspace_root),
+            "plan_digest": _workspace_plan.get("plan_digest"),
+            "excluded_images": len(_spent_images),
+            "excluded_groups": len(_spent_groups),
+        })
     source_names = sorted({name for pair in CANDIDATE_PAIRS for name in pair})
     DEV_POOL = select_causal_groups(
         GROUPS, concepts=source_names,
@@ -311,6 +454,9 @@ if REAL_MODE:
     )
     POPULATION_PLAN = {
         "manifest_checksum": MANIFEST_CHECKSUM,
+        "prior_workspace_population_sources": _workspace_plan_sources,
+        "prior_workspace_excluded_image_ids": sorted(PRIOR_EXCLUDED_IMAGES),
+        "prior_workspace_excluded_group_ids": sorted(PRIOR_EXCLUDED_GROUPS),
         "development": [{"group_id": r["group_id"], "image_id": r["image_id"], "concept": r.get("concept")} for r in DEV_GROUPS],
         "confirmation": [{"group_id": r["group_id"], "image_id": r["image_id"], "concept": r.get("concept")} for r in CONFIRM_GROUPS],
         "freshness": FRESHNESS,
@@ -356,7 +502,7 @@ SCIENTIFIC_CONFIG = {
         "bands": "exactly_one_clean_loading_selected_contiguous_band",
         "causal_outcome_may_select_band": False,
         "conditions": list(TEXT_DIAGNOSTIC_CONDITIONS),
-        "alpha": 1.0,
+        "alpha": TEXT_PRIMARY_ALPHA,
         "random_seed": TEXT_DIAGNOSTIC_RANDOM_SEED,
         "post_cast_max_relative_coordinate_error": TEXT_POST_CAST_MAX_RELATIVE_ERROR,
         "model_dtype_realization": TEXT_MODEL_DTYPE_REALIZATION.to_dict(),
@@ -367,7 +513,8 @@ SCIENTIFIC_CONFIG = {
     },
     "candidate_pairs": [list(pair) for pair in CANDIDATE_PAIRS],
     "control_concepts": list(CONTROL_CONCEPTS),
-    "primary_alpha": 1.0, "sensitivity_alpha": 0.75,
+    "primary_alpha": TEXT_PRIMARY_ALPHA,
+    "sensitivity_alpha": MULTIMODAL_SENSITIVITY_ALPHA,
     "population_plan_digest": POPULATION_PLAN["plan_digest"],
     "min_source_advantage": MIN_SOURCE_ADVANTAGE,
     "min_source_cosine": MIN_SOURCE_COSINE,
@@ -376,6 +523,7 @@ SCIENTIFIC_CONFIG = {
     "r_lens_method_digest": R_LENS_METHOD.digest,
     "r_lens_fit_arms": ["text", "pooled"],
     "r_lens_checkpoint_every": R_LENS_CHECKPOINT_EVERY,
+    "combined_r_source_provenance": COMBINED_R_SOURCE_PROVENANCE,
     "evidence_position_margin": EVIDENCE_POSITION_MARGIN,
     "minimum_confirmation_success_rate": MIN_CONFIRMATION_SUCCESS_RATE,
     "confirmation_familywise_alpha": CONFIRMATION_FAMILYWISE_ALPHA,
@@ -496,11 +644,31 @@ if REAL_MODE and MODEL_STAGE and CONFIRM_MODEL_LOAD:
                 INSTRUMENT_VECTORS[f"matched_{_arm}_j"] = _vectors_for(
                     MATCHED_LENSES[_arm]
                 )
-    else:
+    elif STUDY_LAYER_WINDOW == "early_r_l27_l32":
         print(
             "early R-lens mode: late J-lens artifacts are historical controls "
             "only and are not applied outside their fitted layer grid"
         )
+    else:
+        print(
+            "combined R-lens mode: joining the completed L27-L32 and L33-L40 "
+            "R-lens shards into one contiguous L27-L40 intervention band"
+        )
+        from jlens.mmpilot.loading_first import combine_disjoint_layer_lenses
+
+        for _arm in ("text", "pooled"):
+            _shards = []
+            for _source in COMBINED_R_SOURCE_PROVENANCE["sources"]:
+                _shards.append(
+                    JacobianLens.load(_source["arms"][_arm]["path"])
+                )
+            R_LENSES[_arm] = combine_disjoint_layer_lenses(
+                _shards, expected_layers=LAYERS
+            )
+            print(
+                "R-lens", _arm, "combined without refitting",
+                R_LENSES[_arm].source_layers,
+            )
 
     _fit_plan = json.loads(MATCHED_FIT_PLAN_PATH.read_text())
     from jlens.mmpilot.media_io import RetryJournal, drive_media_loaders
@@ -527,7 +695,9 @@ if REAL_MODE and MODEL_STAGE and CONFIRM_MODEL_LOAD:
     )
     for _arm in ("text", "pooled"):
         _path = RUN_DIR / "r_lenses" / f"lens.{_arm}.pt"
-        if _path.is_file():
+        if STUDY_LAYER_WINDOW == "combined_r_l27_l40":
+            pass
+        elif _path.is_file():
             R_LENSES[_arm] = JacobianLens.load(str(_path))
             print("R-lens", _arm, "reused", _path)
         elif RUN_STAGE0_FIT_MATCHED_R_LENSES and CONFIRM_R_LENS_FIT_BUDGET:
@@ -563,22 +733,45 @@ if REAL_MODE and MODEL_STAGE and CONFIRM_MODEL_LOAD:
             INSTRUMENT_VECTORS[f"matched_{_arm}_r"] = _vectors_for(R_LENSES[_arm])
     if R_LENSES:
         from jlens.metadata import file_sha256
-        _inventory = {
-            "method_digest": R_LENS_METHOD.digest,
-            "architecture_audit_checksum": R_LENS_ARCHITECTURE_AUDIT[
-                "audit_checksum"
-            ],
-            "lenses": {
-                arm: {
-                    "path": str(RUN_DIR / "r_lenses" / f"lens.{arm}.pt"),
-                    "checksum": file_sha256(
-                        str(RUN_DIR / "r_lenses" / f"lens.{arm}.pt")
-                    ),
-                    "n_prompts": lens.n_prompts,
-                }
-                for arm, lens in sorted(R_LENSES.items())
-            },
-        }
+        if STUDY_LAYER_WINDOW == "combined_r_l27_l40":
+            _inventory = {
+                "method_digest": R_LENS_METHOD.digest,
+                "architecture_audit_checksum": R_LENS_ARCHITECTURE_AUDIT[
+                    "audit_checksum"
+                ],
+                "combined_without_refitting": True,
+                "combined_source_digest": COMBINED_R_SOURCE_PROVENANCE[
+                    "source_digest"
+                ],
+                "layers": list(LAYERS),
+                "lenses": {
+                    arm: {
+                        "n_prompts": lens.n_prompts,
+                        "source_artifacts": [
+                            source["arms"][arm]
+                            for source in COMBINED_R_SOURCE_PROVENANCE["sources"]
+                        ],
+                    }
+                    for arm, lens in sorted(R_LENSES.items())
+                },
+            }
+        else:
+            _inventory = {
+                "method_digest": R_LENS_METHOD.digest,
+                "architecture_audit_checksum": R_LENS_ARCHITECTURE_AUDIT[
+                    "audit_checksum"
+                ],
+                "lenses": {
+                    arm: {
+                        "path": str(RUN_DIR / "r_lenses" / f"lens.{arm}.pt"),
+                        "checksum": file_sha256(
+                            str(RUN_DIR / "r_lenses" / f"lens.{arm}.pt")
+                        ),
+                        "n_prompts": lens.n_prompts,
+                    }
+                    for arm, lens in sorted(R_LENSES.items())
+                },
+            }
         _inventory["inventory_checksum"] = payload_checksum(_inventory)
         _inventory_path = RUN_DIR / "r_lens_inventory.json"
         if _inventory_path.is_file():
@@ -736,7 +929,13 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
             stored = STORE.load("intervention", key)
             if stored is not None:
                 text_rows.append(stored)
-                print(task.task_id, "reused", "swapped answer generated", stored["exact_alpha1_swapped_answer_generated"])
+                print(
+                    task.task_id, "reused", "swapped answer generated",
+                    stored.get(
+                        "exact_primary_swapped_answer_generated",
+                        stored.get("exact_alpha1_swapped_answer_generated"),
+                    ),
+                )
                 continue
 
             clean_record = next(
@@ -758,7 +957,7 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
                 ) for layer in ACTIVE_TEXT_LAYERS
             }
             exact = unrestricted_greedy_swap_trial(
-                BACKEND, inputs, bases=bases, alpha=1.0,
+                BACKEND, inputs, bases=bases, alpha=TEXT_PRIMARY_ALPHA,
                 answer=task.swapped_answer,
                 max_new_tokens=TEXT_MAX_NEW_TOKENS,
                 diagnostic_token_ids={
@@ -769,7 +968,7 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
                 realization_policy=TEXT_MODEL_DTYPE_REALIZATION,
             )
             random = unrestricted_greedy_swap_trial(
-                BACKEND, inputs, bases=random_bases, alpha=1.0,
+                BACKEND, inputs, bases=random_bases, alpha=TEXT_PRIMARY_ALPHA,
                 answer=task.swapped_answer,
                 max_new_tokens=TEXT_MAX_NEW_TOKENS,
                 diagnostic_token_ids={
@@ -780,7 +979,7 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
                 realization_policy=TEXT_MODEL_DTYPE_REALIZATION,
             )
             unrelated_result = unrestricted_greedy_swap_trial(
-                BACKEND, inputs, bases=unrelated, alpha=1.0,
+                BACKEND, inputs, bases=unrelated, alpha=TEXT_PRIMARY_ALPHA,
                 answer=task.swapped_answer,
                 max_new_tokens=TEXT_MAX_NEW_TOKENS,
                 diagnostic_token_ids={
@@ -788,15 +987,19 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
                         semantic_answer_concept(task.swapped_answer)
                     ].token_id
                 },
+                realization_policy=TEXT_MODEL_DTYPE_REALIZATION,
             )
             stored = {
                 "task_id": task.task_id, "task": task.to_dict(),
                 "input_route": dict(inputs.route),
                 "output_endpoint": "unrestricted_greedy_complete_answer",
                 "clean_correct": bool(clean_record["clean_correct"]),
-                "exact_alpha1_swapped_answer_generated": bool(exact["answer_match"]),
-                "random_swapped_answer_generated": bool(random["answer_match"]),
-                "unrelated_swapped_answer_generated": bool(unrelated_result["answer_match"]),
+                "primary_alpha": TEXT_PRIMARY_ALPHA,
+                "exact_primary_swapped_answer_generated": bool(exact["answer_match"]),
+                "random_primary_swapped_answer_generated": bool(random["answer_match"]),
+                "unrelated_primary_swapped_answer_generated": bool(
+                    unrelated_result["answer_match"]
+                ),
                 "clean": clean_record["clean"],
                 "exact": exact, "random": random, "unrelated": unrelated_result,
                 "loading_rows": [
@@ -807,14 +1010,28 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
                 "selected_instrument": SELECTED_INSTRUMENT,
                 "selected_band": list(ACTIVE_TEXT_LAYERS),
             }
+            if TEXT_PRIMARY_ALPHA == 1.0:
+                stored.update({
+                    "exact_alpha1_swapped_answer_generated": bool(
+                        exact["answer_match"]
+                    ),
+                    "random_swapped_answer_generated": bool(
+                        random["answer_match"]
+                    ),
+                    "unrelated_swapped_answer_generated": bool(
+                        unrelated_result["answer_match"]
+                    ),
+                })
             STORE.save("intervention", key, stored)
             text_rows.append(stored)
             print(
                 task.task_id, "computed",
                 "swapped answer generated",
-                stored["exact_alpha1_swapped_answer_generated"],
+                stored["exact_primary_swapped_answer_generated"],
             )
-        TEXT_VERDICT = text_replication_verdict(text_rows)
+        TEXT_VERDICT = text_replication_verdict(
+            text_rows, primary_alpha=TEXT_PRIMARY_ALPHA
+        )
     else:
         _blocked_verdict = (
             "TEXT_LOADING_FIRST_NO_GO"
@@ -849,6 +1066,7 @@ if (
     and RUN_STAGE1B_TEXT_DIAGNOSTIC
     and CONFIRM_MODEL_LOAD
     and CONFIRM_TEXT_DIAGNOSTIC_BUDGET
+    and TEXT_PRIMARY_ALPHA == 1.0
 ):
     from jlens.mmpilot.coordinate_swap import (
         build_swap_basis_from_vectors, random_two_direction_basis,
@@ -1057,8 +1275,8 @@ if (
     print("resume", STORE.status_report())
 elif RUN_STAGE1B_TEXT_DIAGNOSTIC:
     print(
-        "skipped: Stage 6b requires real mode, model confirmation, and "
-        "CONFIRM_TEXT_DIAGNOSTIC_BUDGET"
+        "skipped: Stage 6b is the legacy alpha=1 localization and requires "
+        "alpha=1, real mode, model confirmation, and its budget gate"
     )
 '''
 )
@@ -1071,14 +1289,20 @@ PAIR_SELECTION = STORE.load("metric", "loading_pair_selection")
 MULTIMODAL_INSTRUMENT_SELECTION = STORE.load(
     "metric", "multimodal_instrument_selection"
 )
+TEXT_CAUSAL_GATE_MET = bool(
+    TEXT_VERDICT is not None
+    and TEXT_VERDICT.get("verdict") == "TEXT_PAPER_REPLICATION_GO"
+) or bool(
+    TEXT_DIAGNOSTIC_REPORT is not None
+    and TEXT_DIAGNOSTIC_REPORT.get("verdict")
+    == "TEXT_DIAGNOSTIC_ALPHA1_CANDIDATE_FOUND"
+)
 if (
     REAL_MODE
     and RUN_STAGE2_MULTIMODAL_LOADING_DEVELOPMENT
     and CONFIRM_MODEL_LOAD
     and CONFIRM_DEVELOPMENT_BUDGET
-    and TEXT_DIAGNOSTIC_REPORT is not None
-    and TEXT_DIAGNOSTIC_REPORT.get("verdict")
-    == "TEXT_DIAGNOSTIC_ALPHA1_CANDIDATE_FOUND"
+    and TEXT_CAUSAL_GATE_MET
 ):
     from jlens.mmpilot.coordinate_swap import resolve_concept_token
     from jlens.mmpilot.media_io import RetryJournal, drive_media_loaders
@@ -1216,8 +1440,8 @@ if (
     print(json.dumps(LOCALIZATION, indent=2))
 elif RUN_STAGE2_MULTIMODAL_LOADING_DEVELOPMENT:
     print(
-        "Stage 2 did not spend: it requires an audited alpha=1 text candidate "
-        "plus the model and development-budget confirmations."
+        "Stage 2 did not spend: it requires a passing predeclared text swap "
+        "or audited alpha=1 diagnostic candidate, plus the model and budget gates."
     )
 '''
 )
@@ -1238,23 +1462,29 @@ if RUN_STAGE3_FREEZE_DESIGN:
         "metric", "text_swap_diagnostic_report"
     )
     if (
-        TEXT_DIAGNOSTIC_REPORT is None
-        or TEXT_DIAGNOSTIC_REPORT.get("verdict")
-        != "TEXT_DIAGNOSTIC_ALPHA1_CANDIDATE_FOUND"
+        not TEXT_CAUSAL_GATE_MET
         or LOCALIZATION is None
         or PAIR_SELECTION is None
     ):
         print("Stage 3 did not freeze: its text/loading gates are not met.")
     else:
-        CONFIRMATION_DESIGN = freeze_confirmation_design(
-            text_diagnostic=TEXT_DIAGNOSTIC_REPORT,
-            localization=LOCALIZATION,
-            pair=PAIR_SELECTION["selected_pair"],
-            alpha=MULTIMODAL_PRIMARY_ALPHA,
-            sensitivity_alpha=MULTIMODAL_SENSITIVITY_ALPHA,
-            prompt_protocol=PROMPT_PROTOCOL,
-            development_population_digest=POPULATION_PLAN["plan_digest"],
-        )
+        _design_kwargs = {
+            "localization": LOCALIZATION,
+            "pair": PAIR_SELECTION["selected_pair"],
+            "alpha": MULTIMODAL_PRIMARY_ALPHA,
+            "sensitivity_alpha": MULTIMODAL_SENSITIVITY_ALPHA,
+            "prompt_protocol": PROMPT_PROTOCOL,
+            "development_population_digest": POPULATION_PLAN["plan_digest"],
+        }
+        if (
+            TEXT_DIAGNOSTIC_REPORT is not None
+            and TEXT_DIAGNOSTIC_REPORT.get("verdict")
+            == "TEXT_DIAGNOSTIC_ALPHA1_CANDIDATE_FOUND"
+        ):
+            _design_kwargs["text_diagnostic"] = TEXT_DIAGNOSTIC_REPORT
+        else:
+            _design_kwargs["text_verdict"] = TEXT_VERDICT
+        CONFIRMATION_DESIGN = freeze_confirmation_design(**_design_kwargs)
         CONFIRMATION_DESIGN["forbidden_development_image_ids"] = sorted(DEV_IMAGE_IDS)
         CONFIRMATION_DESIGN["forbidden_development_group_ids"] = sorted(DEV_GROUP_IDS)
         CONFIRMATION_DESIGN["forbidden_prior_image_ids"] = sorted(PRIOR_EXCLUDED_IMAGES)
@@ -1374,12 +1604,28 @@ if REAL_MODE and RUN_STAGE4_FRESH_CONFIRMATION and CONFIRM_MODEL_LOAD and CONFIR
             waveform, rate = MEDIA["load_audio"](group["audio_path"])
             return BACKEND.build_inputs(prompt=question, modality="spoken_audio", audio=waveform, sampling_rate=rate, media_path=group["audio_path"])
         rows = []
+        _primary_alpha = float(CONFIRMATION_DESIGN["primary_alpha"])
+        _sensitivity_alpha = CONFIRMATION_DESIGN.get("sensitivity_alpha")
+        _primary_tag = (
+            "alpha1" if _primary_alpha == 1.0
+            else "alpha2" if _primary_alpha == 2.0
+            else "primary"
+        )
+        _sensitivity_tag = (
+            "alpha075" if _sensitivity_alpha == 0.75
+            else "alpha1" if _sensitivity_alpha == 1.0
+            else "sensitivity"
+        )
+        _exact_key = f"exact_{_primary_tag}"
+        _random_key = f"random_{_primary_tag}"
+        _unrelated_key = f"unrelated_{_primary_tag}"
+        _sensitivity_key = f"exact_{_sensitivity_tag}"
         condition_specs = (
-            ("exact_alpha1", "exact", 1.0),
+            (_exact_key, "exact", _primary_alpha),
             ("zero", "exact", 0.0),
-            ("random_alpha1", "random", 1.0),
-            ("unrelated_alpha1", "unrelated", 1.0),
-            ("exact_alpha075", "exact", 0.75),
+            (_random_key, "random", _primary_alpha),
+            (_unrelated_key, "unrelated", _primary_alpha),
+            (_sensitivity_key, "exact", _sensitivity_alpha),
             ("direct_answer_norm_matched", "direct", None),
         )
         completed = computed = reused = 0
@@ -1478,31 +1724,48 @@ if REAL_MODE and RUN_STAGE4_FRESH_CONFIRMATION and CONFIRM_MODEL_LOAD and CONFIR
                         and row["prompt_kind"] == kind
                         and row["modality"] == modality
                     ]
-                    cells.append({
+                    _cell_payload = {
                         "direction": direction_name, "prompt_kind": kind,
                         "modality": modality, "n": len(cell),
                         "clean_capability": sum(row["clean_correct"] for row in cell) / len(cell),
-                        "alpha1_success": sum(row["conditions"]["exact_alpha1"]["success"] for row in cell) / len(cell),
-                        "alpha075_success": sum(row["conditions"]["exact_alpha075"]["success"] for row in cell) / len(cell),
+                        "primary_alpha": _primary_alpha,
+                        "primary_success": sum(row["conditions"][_exact_key]["success"] for row in cell) / len(cell),
+                        "sensitivity_alpha": _sensitivity_alpha,
+                        "sensitivity_success": sum(row["conditions"][_sensitivity_key]["success"] for row in cell) / len(cell),
                         "zero_success": sum(row["conditions"]["zero"]["success"] for row in cell) / len(cell),
-                        "random_alpha1_success": sum(row["conditions"]["random_alpha1"]["success"] for row in cell) / len(cell),
-                        "unrelated_alpha1_success": sum(row["conditions"]["unrelated_alpha1"]["success"] for row in cell) / len(cell),
+                        "random_primary_success": sum(row["conditions"][_random_key]["success"] for row in cell) / len(cell),
+                        "unrelated_primary_success": sum(row["conditions"][_unrelated_key]["success"] for row in cell) / len(cell),
                         "direct_answer_success": sum(row["conditions"]["direct_answer_norm_matched"]["success"] for row in cell) / len(cell),
                         "all_condition_integrity": all(
                             condition_integrity(trial)
                             for row in cell for trial in row["conditions"].values()
                         ),
-                    })
+                    }
+                    if _primary_alpha == 1.0:
+                        _cell_payload["alpha1_success"] = _cell_payload[
+                            "primary_success"
+                        ]
+                        _cell_payload["random_alpha1_success"] = _cell_payload[
+                            "random_primary_success"
+                        ]
+                        _cell_payload["unrelated_alpha1_success"] = _cell_payload[
+                            "unrelated_primary_success"
+                        ]
+                    if _sensitivity_alpha == 0.75:
+                        _cell_payload["alpha075_success"] = _cell_payload[
+                            "sensitivity_success"
+                        ]
+                    cells.append(_cell_payload)
         from jlens.mmpilot.workspace_replication import holm_adjust, paired_binary_superiority
         paired, raw_p = {}, {}
         for direction_source, direction_target in directions:
             direction_name = f"{direction_source}->{direction_target}"
             for kind in ("identity", "property"):
                 kind_rows = [row for row in rows if row["direction"] == direction_name and row["prompt_kind"] == kind]
-                for control in ("zero", "random_alpha1", "unrelated_alpha1"):
+                for control in ("zero", _random_key, _unrelated_key):
                     key = f"{direction_name}_{kind}_exact_vs_{control}"
                     paired[key] = paired_binary_superiority(
-                        [row["conditions"]["exact_alpha1"]["success"] for row in kind_rows],
+                        [row["conditions"][_exact_key]["success"] for row in kind_rows],
                         [row["conditions"][control]["success"] for row in kind_rows],
                     )
                     raw_p[key] = paired[key]["one_sided_exact_p"]
@@ -1520,10 +1783,10 @@ if REAL_MODE and RUN_STAGE4_FRESH_CONFIRMATION and CONFIRM_MODEL_LOAD and CONFIR
                     and row["prompt_kind"] == kind
                     and row["modality"] == "text"
                 ]
-                for control in ("zero", "random_alpha1", "unrelated_alpha1"):
+                for control in ("zero", _random_key, _unrelated_key):
                     key = f"{direction_name}_{kind}_text_exact_vs_{control}"
                     paired_text[key] = paired_binary_superiority(
-                        [row["conditions"]["exact_alpha1"]["success"] for row in text_rows],
+                        [row["conditions"][_exact_key]["success"] for row in text_rows],
                         [row["conditions"][control]["success"] for row in text_rows],
                     )
                     raw_text_p[key] = paired_text[key]["one_sided_exact_p"]
@@ -1537,22 +1800,22 @@ if REAL_MODE and RUN_STAGE4_FRESH_CONFIRMATION and CONFIRM_MODEL_LOAD and CONFIR
         capability = all(cell["clean_capability"] >= 0.75 for cell in cells)
         positive_control = all(cell["direct_answer_success"] >= 0.50 for cell in cells)
         primary = all(
-            cell["alpha1_success"] >= MIN_CONFIRMATION_SUCCESS_RATE
-            and cell["alpha1_success"] > max(
-                cell["zero_success"], cell["random_alpha1_success"],
-                cell["unrelated_alpha1_success"],
+            cell["primary_success"] >= MIN_CONFIRMATION_SUCCESS_RATE
+            and cell["primary_success"] > max(
+                cell["zero_success"], cell["random_primary_success"],
+                cell["unrelated_primary_success"],
             ) for cell in cells
         ) and all(row["passed"] for row in paired.values())
         downstream = all(
-            cell["alpha1_success"] >= MIN_CONFIRMATION_SUCCESS_RATE
+            cell["primary_success"] >= MIN_CONFIRMATION_SUCCESS_RATE
             for cell in cells if cell["prompt_kind"] == "property"
         )
         text_cells = [cell for cell in cells if cell["modality"] == "text"]
         text_primary = all(
-            cell["alpha1_success"] >= MIN_CONFIRMATION_SUCCESS_RATE
-            and cell["alpha1_success"] > max(
-                cell["zero_success"], cell["random_alpha1_success"],
-                cell["unrelated_alpha1_success"],
+            cell["primary_success"] >= MIN_CONFIRMATION_SUCCESS_RATE
+            and cell["primary_success"] > max(
+                cell["zero_success"], cell["random_primary_success"],
+                cell["unrelated_primary_success"],
             )
             for cell in text_cells
         ) and all(row["passed"] for row in paired_text.values())
@@ -1582,8 +1845,11 @@ if REAL_MODE and RUN_STAGE4_FRESH_CONFIRMATION and CONFIRM_MODEL_LOAD and CONFIR
             "clean_capability_passed": capability,
             "positive_control_passed": positive_control,
             "rows": rows, "teacher_forcing_used": False,
-            "candidate_list_supplied": False, "alpha1_is_primary": True,
-            "alpha075_is_sensitivity_only": True,
+            "candidate_list_supplied": False,
+            "primary_alpha": _primary_alpha,
+            "primary_alpha_is_paper_double_strength": _primary_alpha == 2.0,
+            "alpha1_is_primary": _primary_alpha == 1.0,
+            "sensitivity_alpha": _sensitivity_alpha,
             "atomic_resume_unit": "one two-token condition",
             "maximum_completed_forward_passes_lost_on_disconnect": 0,
         }

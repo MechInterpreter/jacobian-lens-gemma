@@ -56,8 +56,8 @@ def test_notebook_enforces_the_paper_first_order() -> None:
         "freeze_loading_localization",
         "freeze_confirmation_design",
         "assert_fresh_population",
-        "MULTIMODAL_PRIMARY_ALPHA = 1.0",
-        "MULTIMODAL_SENSITIVITY_ALPHA = 0.75",
+        "MULTIMODAL_PRIMARY_ALPHA = TEXT_PRIMARY_ALPHA",
+        "else 0.75",
         '"teacher_forcing_used": False',
         '"candidate_list_supplied": False',
         "random_two_direction_basis",
@@ -90,8 +90,17 @@ def test_notebook_enforces_the_paper_first_order() -> None:
     assert 'STUDY_LAYER_WINDOW == "early_r_l27_l32"' in source
     assert "LAYERS = tuple(range(27, 33))" in source
     assert "late J-lens artifacts are historical controls" in source
+    assert 'STUDY_LAYER_WINDOW == "combined_r_l27_l40"' in source
+    assert "LAYERS = tuple(range(27, 41))" in source
+    assert "combine_disjoint_layer_lenses" in source
+    assert "combined_without_refitting" in source
+    assert "fitting passes 0" in source
+    assert "TEXT_PRIMARY_ALPHA = 2.0" in source
+    assert '"exact_primary_swapped_answer_generated"' in source
+    assert '"primary_alpha_is_paper_double_strength"' in source
     assert 'STORE.save("intervention", key, trial)' in source
-    assert 'text_diagnostic=TEXT_DIAGNOSTIC_REPORT' in source
+    assert '_design_kwargs["text_diagnostic"] = TEXT_DIAGNOSTIC_REPORT' in source
+    assert '_design_kwargs["text_verdict"] = TEXT_VERDICT' in source
 
 
 def test_all_result_switches_default_false() -> None:
