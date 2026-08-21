@@ -1345,11 +1345,35 @@ def text_swap_diagnostic_report(
     *,
     clean_rows: Sequence[Mapping],
     layers: Sequence[int],
+    bands: Sequence[Sequence[int]] | None = None,
 ) -> dict:
     """Summarize the predeclared layer/band diagnostic without claiming confirmation."""
 
     tasks = {task.task_id: task for task in anthropic_text_tasks()}
-    bands = text_diagnostic_bands(layers)
+    layer_set = set(map(int, layers))
+    if bands is None:
+        normalized_bands = text_diagnostic_bands(layers)
+    else:
+        normalized_bands = tuple(tuple(map(int, band)) for band in bands)
+        if (
+            not normalized_bands
+            or any(not band for band in normalized_bands)
+            or len(set(normalized_bands)) != len(normalized_bands)
+            or any(not set(band).issubset(layer_set) for band in normalized_bands)
+            or any(tuple(sorted(set(band))) != band for band in normalized_bands)
+            or any(
+                any(
+                    right != left + 1
+                    for left, right in zip(band, band[1:], strict=False)
+                )
+                for band in normalized_bands
+            )
+        ):
+            raise WorkspaceReplicationRefused(
+                "diagnostic bands must be unique, nonempty, contiguous, "
+                "sorted subsets of the declared layers"
+            )
+    bands = normalized_bands
     expected = {
         (task_id, tuple(band), condition)
         for task_id in tasks

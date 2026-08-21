@@ -84,6 +84,8 @@ def test_notebook_enforces_the_paper_first_order() -> None:
     assert "matched_pooled_r" in source
     assert '"causal_outcome_may_select_band": False' in source
     assert "TEXT_DIAGNOSTIC_BANDS = (tuple(ACTIVE_TEXT_LAYERS),)" in source
+    assert "SCIENTIFIC_IMPLEMENTATION_COMMIT" in source
+    assert '"c6b5dc144051a13ae163c89d2bfb5a0f955e9288"' in source
     assert 'STORE.save("intervention", key, trial)' in source
     assert 'text_diagnostic=TEXT_DIAGNOSTIC_REPORT' in source
 

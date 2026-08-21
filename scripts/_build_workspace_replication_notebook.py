@@ -133,6 +133,9 @@ CONFIRM_CONFIRMATION_BUDGET = False
 
 MODEL_REPO_ID = "google/gemma-4-E4B-it"
 MODEL_REVISION = "fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd"
+SCIENTIFIC_IMPLEMENTATION_COMMIT = (
+    "c6b5dc144051a13ae163c89d2bfb5a0f955e9288"
+)
 EXPECT_N_LAYERS, EXPECT_D_MODEL, EXPECT_VOCAB = 42, 2560, 262144
 AUDIO_PROTOCOL_FINGERPRINT = (
     "sha256:9ad8bcc9420a7983f6e3b75d5d7080c0e2fcf0a94a76431917fcde73ba777920"
@@ -364,7 +367,10 @@ SCIENTIFIC_CONFIG = {
     "evidence_position_margin": EVIDENCE_POSITION_MARGIN,
     "minimum_confirmation_success_rate": MIN_CONFIRMATION_SUCCESS_RATE,
     "confirmation_familywise_alpha": CONFIRMATION_FAMILYWISE_ALPHA,
-    "commit": COMMIT,
+    # Reporting-only amendments must not strand expensive checksum-valid
+    # scientific units in a new run namespace. This is the exact commit whose
+    # model-facing implementation generated the existing run.
+    "commit": SCIENTIFIC_IMPLEMENTATION_COMMIT,
 }
 FINGERPRINT_DIGEST = payload_checksum(SCIENTIFIC_CONFIG)
 RUN_DIR = RUNS_ROOT / "mmworkspace" / f"mmworkspace_{'real' if REAL_MODE else 'mock'}_{FINGERPRINT_DIGEST.split(':')[-1][:12]}"
@@ -992,6 +998,7 @@ if (
         diagnostic_records,
         clean_rows=diagnostic_clean_rows,
         layers=ACTIVE_TEXT_LAYERS,
+        bands=TEXT_DIAGNOSTIC_BANDS,
     )
     STORE.save("metric", "text_swap_diagnostic_report", TEXT_DIAGNOSTIC_REPORT)
     diagnostic_path = RUN_DIR / "text_swap_diagnostic_report.json"

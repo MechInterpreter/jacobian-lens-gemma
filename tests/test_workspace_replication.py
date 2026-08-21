@@ -512,6 +512,24 @@ def test_text_diagnostic_selects_only_an_audited_specific_development_band() -> 
     assert all(row["matched_controls_pass"] for row in report["bands"])
 
 
+def test_text_diagnostic_can_report_only_a_preselected_clean_loading_band() -> None:
+    layers, clean_rows, records = _diagnostic_fixture()
+    selected = (tuple(layers),)
+    selected_records = [
+        row for row in records if tuple(row["band"]) == tuple(layers)
+    ]
+    report = text_swap_diagnostic_report(
+        selected_records,
+        clean_rows=clean_rows,
+        layers=layers,
+        bands=selected,
+    )
+    assert report["verdict"] == "TEXT_DIAGNOSTIC_ALPHA1_CANDIDATE_FOUND"
+    assert report["tested_bands"] == [list(layers)]
+    assert report["missing_units"] == []
+    assert len(report["bands"]) == 1
+
+
 def test_text_diagnostic_refuses_a_candidate_reproduced_by_random_control() -> None:
     layers, clean_rows, records = _diagnostic_fixture(random_success=True)
     report = text_swap_diagnostic_report(
