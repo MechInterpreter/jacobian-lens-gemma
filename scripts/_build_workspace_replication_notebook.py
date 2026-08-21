@@ -144,7 +144,9 @@ MODEL_REPO_ID = "google/gemma-4-E4B-it"
 MODEL_REVISION = "fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd"
 STUDY_LAYER_WINDOW = "late_jr_l33_l40"
 # "frozen_v1" reproduces the completed runs byte for byte. "expanded_v1"
-# adds the implicit-two-hop rows (n=1 -> n=14); it changes text_task_digest
+# adds the implicit-two-hop rows (n=1 -> n=14). "expanded_v2" drops the three
+# rows that failed the clean-capability gate (n=1 -> n=11) and is the one to
+# use. Either changes text_task_digest
 # and therefore the fingerprint, so it can never resume into a frozen run.
 TEXT_TASK_SET = "frozen_v1"
 SCIENTIFIC_IMPLEMENTATION_COMMIT = (
@@ -176,6 +178,17 @@ MULTIMODAL_SENSITIVITY_ALPHA = (
 )
 CANDIDATE_PAIRS = (("bird", "cat"), ("bird", "zebra"), ("bird", "giraffe"))
 CONTROL_CONCEPTS = ("microwave", "toilet")
+# The unrelated comparison for implicit_two_hop, used by BOTH the clean loading
+# capture (source_advantage) and the intervention's unrelated basis. They must
+# agree, and every name here must reach TEXT_CONCEPT_TOKENS or
+# capture_source_loading refuses for a missing lens vector.
+# (zebra, giraffe) cannot serve the expanded set: zebra is a source concept
+# there, giraffe reads as yellow/orange -- two swapped color answers -- and both
+# are African, which contaminates the continent rows. frozen_v1 keeps the
+# original pair so the completed runs stay re-derivable.
+IMPLICIT_UNRELATED_CONCEPTS = (
+    ("zebra", "giraffe") if TEXT_TASK_SET == "frozen_v1" else CONTROL_CONCEPTS
+)
 DEVELOPMENT_IMAGES_PER_SOURCE = 8
 CONFIRMATION_IMAGES_PER_SOURCE = 8
 MIN_SOURCE_ADVANTAGE = 0.0
@@ -242,17 +255,21 @@ else:
     MATCHED_FIT_PLAN_PATH = None
     EARLY_R_LENS_RUN_DIR = LATE_R_LENS_RUN_DIR = None
 
-if TEXT_TASK_SET not in ("frozen_v1", "expanded_v1"):
+if TEXT_TASK_SET not in ("frozen_v1", "expanded_v1", "expanded_v2"):
     raise ValueError(f"unknown TEXT_TASK_SET {TEXT_TASK_SET!r}")
 _wr = __import__(
     "jlens.mmpilot.workspace_replication",
-    fromlist=["anthropic_text_tasks", "anthropic_text_tasks_expanded_v1"],
+    fromlist=[
+        "anthropic_text_tasks",
+        "anthropic_text_tasks_expanded_v1",
+        "anthropic_text_tasks_expanded_v2",
+    ],
 )
-TEXT_TASKS = (
-    _wr.anthropic_text_tasks()
-    if TEXT_TASK_SET == "frozen_v1"
-    else _wr.anthropic_text_tasks_expanded_v1()
-)
+TEXT_TASKS = {
+    "frozen_v1": _wr.anthropic_text_tasks,
+    "expanded_v1": _wr.anthropic_text_tasks_expanded_v1,
+    "expanded_v2": _wr.anthropic_text_tasks_expanded_v2,
+}[TEXT_TASK_SET]()
 print("TEXT TASK SET", TEXT_TASK_SET, "digest", _wr.text_task_digest(TEXT_TASKS))
 TEXT_DIAGNOSTIC_BANDS = __import__(
     "jlens.mmpilot.workspace_replication", fromlist=["text_diagnostic_bands"]
@@ -576,6 +593,8 @@ SCIENTIFIC_CONFIG = {
     },
     "candidate_pairs": [list(pair) for pair in CANDIDATE_PAIRS],
     "control_concepts": list(CONTROL_CONCEPTS),
+    "implicit_unrelated_concepts": list(IMPLICIT_UNRELATED_CONCEPTS),
+    "text_task_set": TEXT_TASK_SET,
     "primary_alpha": TEXT_PRIMARY_ALPHA,
     "sensitivity_alpha": MULTIMODAL_SENSITIVITY_ALPHA,
     "population_plan_digest": POPULATION_PLAN["plan_digest"],
@@ -655,6 +674,7 @@ if REAL_MODE and MODEL_STAGE and CONFIRM_MODEL_LOAD:
         | {semantic_answer_concept(task.swapped_answer) for task in TEXT_TASKS}
         | {"Japan", "Brazil"}
         | set(CONTROL_CONCEPTS)
+        | set(IMPLICIT_UNRELATED_CONCEPTS)
     )
     from jlens.mmpilot.coordinate_swap import resolve_concept_token
     TEXT_CONCEPT_TOKENS = {name: resolve_concept_token(BACKEND.encode_candidate, name) for name in names}
@@ -922,7 +942,7 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
             "pass", stored["clean_correct"],
         )
 
-    TEXT_CAPABILITY = text_capability_verdict(capability_rows)
+    TEXT_CAPABILITY = text_capability_verdict(capability_rows, tasks=TEXT_TASKS)
     STORE.save("metric", "text_capability_verdict", TEXT_CAPABILITY)
     print(json.dumps(TEXT_CAPABILITY, indent=2))
 
@@ -941,7 +961,7 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
                     BACKEND, task.prompt
                 )
                 controls = (
-                    ("zebra", "giraffe")
+                    IMPLICIT_UNRELATED_CONCEPTS
                     if task.family == "implicit_two_hop"
                     else ("Japan", "Brazil")
                 )
@@ -1020,7 +1040,7 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
             # a source concept in the expanded set. CONTROL_CONCEPTS is the
             # study's own declared control_concepts, inert for legs/color/continent.
             controls = (
-                CONTROL_CONCEPTS
+                IMPLICIT_UNRELATED_CONCEPTS
                 if task.family == "implicit_two_hop"
                 else ("Japan", "Brazil")
             )
@@ -1104,7 +1124,7 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
                 stored["exact_primary_swapped_answer_generated"],
             )
         TEXT_VERDICT = text_replication_verdict(
-            text_rows, primary_alpha=TEXT_PRIMARY_ALPHA
+            text_rows, primary_alpha=TEXT_PRIMARY_ALPHA, task_set=TEXT_TASKS
         )
     else:
         _blocked_verdict = (
@@ -1166,7 +1186,9 @@ if (
                 "Enable RUN_STAGE1_TEXT_REPLICATION and rerun from the top."
             )
         diagnostic_clean_rows.append(stored)
-    diagnostic_capability = text_capability_verdict(diagnostic_clean_rows)
+    diagnostic_capability = text_capability_verdict(
+        diagnostic_clean_rows, tasks=TEXT_TASKS
+    )
     if not diagnostic_capability["causal_spending_licensed"]:
         raise RuntimeError("text capability did not license the diagnostic")
 
@@ -1321,6 +1343,7 @@ if (
         clean_rows=diagnostic_clean_rows,
         layers=ACTIVE_TEXT_LAYERS,
         bands=TEXT_DIAGNOSTIC_BANDS,
+        task_set=TEXT_TASKS,
     )
     STORE.save("metric", "text_swap_diagnostic_report", TEXT_DIAGNOSTIC_REPORT)
     diagnostic_path = RUN_DIR / "text_swap_diagnostic_report.json"

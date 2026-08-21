@@ -298,6 +298,57 @@ def implicit_two_hop_expansion_v1() -> tuple[TextReplicationTask, ...]:
     )
 
 
+#: Rows dropped from v1 after the clean-capability gate, with the reason.
+#:
+#: This is a revision made *after* seeing data, and it is recorded rather than
+#: quietly applied.  What it was made on is clean capability -- whether Gemma
+#: answers the un-intervened prompt correctly -- which is **not** the causal
+#: outcome, so it does not select on the result being tested.  An item the model
+#: cannot answer clean cannot test recomputation: there is no first hop to swap.
+#:
+#: All three failed the same way.  Gemma spends its first token on " typically",
+#: and ``TEXT_MAX_NEW_TOKENS`` is 2, so only one content token is ever observed --
+#: and that token is independently wrong.  Raising the token budget is not the
+#: fix: it is part of the endpoint protocol
+#: (``mmpilot.unrestricted_greedy_semantic_head_answer.v2``) and every completed
+#: run is comparable only at 2.
+CLEAN_CAPABILITY_EXCLUSIONS_V2: dict[str, str] = {
+    "cat_to_spider_legs": (
+        'generated " typically nine" -- "the animal that purrs" pulls the '
+        "nine-lives association rather than a leg count"
+    ),
+    "elephant_to_ant_legs": (
+        'generated " typically eight" -- the continuation is a height, not a '
+        "leg count"
+    ),
+    "grape_to_banana_color": (
+        'generated " typically red" -- red grapes are common, so the expected '
+        '"purple" was contestable and the row is not a clean two-hop item'
+    ),
+}
+
+
+def implicit_two_hop_expansion_v2() -> tuple[TextReplicationTask, ...]:
+    """:func:`implicit_two_hop_expansion_v1` minus the rows that fail clean.
+
+    v1 is left intact so the excluded rows stay inspectable and the reason for
+    each is auditable next to it.  Ten rows survive, taking implicit_two_hop
+    from n = 1 to n = 11.
+    """
+
+    return tuple(
+        task
+        for task in implicit_two_hop_expansion_v1()
+        if task.task_id not in CLEAN_CAPABILITY_EXCLUSIONS_V2
+    )
+
+
+def anthropic_text_tasks_expanded_v2() -> tuple[TextReplicationTask, ...]:
+    """The frozen paper set plus :func:`implicit_two_hop_expansion_v2`."""
+
+    return anthropic_text_tasks() + implicit_two_hop_expansion_v2()
+
+
 def anthropic_text_tasks_expanded_v1() -> tuple[TextReplicationTask, ...]:
     """The frozen paper set plus :func:`implicit_two_hop_expansion_v1`.
 
@@ -1469,10 +1520,19 @@ def select_pair_from_loading(
     return {**payload, "selection_digest": payload_checksum(payload)}
 
 
-def text_capability_verdict(rows: Sequence[Mapping]) -> dict:
-    """Decide whether causal spending is licensed for the text tasks."""
+def text_capability_verdict(
+    rows: Sequence[Mapping], *, tasks: Sequence[TextReplicationTask] | None = None
+) -> dict:
+    """Decide whether causal spending is licensed for the text tasks.
 
-    expected = {task.task_id for task in anthropic_text_tasks()}
+    ``tasks`` defaults to :func:`anthropic_text_tasks` so the frozen runs stay
+    re-derivable.  It **must** be passed when the run uses a different set:
+    verdicts computed over a hardcoded set silently ignore every extra row, so
+    a task Gemma cannot answer would never block causal spending.
+    """
+
+    selected = anthropic_text_tasks() if tasks is None else tuple(tasks)
+    expected = {task.task_id for task in selected}
     by_task = {str(row["task_id"]): dict(row) for row in rows}
     missing = sorted(expected - set(by_task))
     passed = not missing and all(
@@ -1492,24 +1552,48 @@ def text_capability_verdict(rows: Sequence[Mapping]) -> dict:
 
 
 def text_replication_verdict(
-    rows: Sequence[Mapping], *, primary_alpha: float = 1.0
+    rows: Sequence[Mapping],
+    *,
+    primary_alpha: float = 1.0,
+    task_set: Sequence[TextReplicationTask] | None = None,
 ) -> dict:
-    """Gate later stages on the paper task, not a multimodal hope."""
+    """Gate later stages on the paper task, not a multimodal hope.
 
-    tasks = {task.task_id: task for task in anthropic_text_tasks()}
+    ``task_set`` defaults to :func:`anthropic_text_tasks`.  Pass the run's own
+    set whenever it differs, or every added row is silently dropped from both
+    rates.
+
+    The implicit family is scored as a **rate** over its members rather than by
+    reading ``spider_to_ant_legs`` alone.  With the frozen set that family has
+    exactly one member, so ``rate >= 0.5`` reduces to the previous "the single
+    implicit task must swap" and the frozen verdicts are unchanged.
+    """
+
+    selected = anthropic_text_tasks() if task_set is None else tuple(task_set)
+    tasks = {task.task_id: task for task in selected}
     by_task = {str(row["task_id"]): dict(row) for row in rows}
     missing = sorted(set(tasks) - set(by_task))
     clean = not missing and all(bool(by_task[name].get("clean_correct")) for name in tasks)
-    implicit = bool(
-        by_task.get("spider_to_ant_legs", {}).get(
-            "exact_primary_swapped_answer_generated",
-            by_task.get("spider_to_ant_legs", {}).get(
-                "exact_alpha1_swapped_answer_generated",
-                by_task.get("spider_to_ant_legs", {}).get(
-                    "exact_alpha1_target_top1"
+    def _swapped(row: Mapping) -> bool:
+        return bool(
+            row.get(
+                "exact_primary_swapped_answer_generated",
+                row.get(
+                    "exact_alpha1_swapped_answer_generated",
+                    row.get("exact_alpha1_target_top1"),
                 ),
-            ),
+            )
         )
+
+    implicit_rows = [
+        by_task[name]
+        for name, task in tasks.items()
+        if task.family == "implicit_two_hop" and name in by_task
+    ]
+    implicit_rate = (
+        sum(_swapped(row) for row in implicit_rows) / len(implicit_rows)
+        if implicit_rows
+        else 0.0
     )
     flexible_rows = [
         by_task[name] for name, task in tasks.items() if task.family == "flexible_function"
@@ -1552,7 +1636,9 @@ def text_replication_verdict(
         )
         for row in by_task.values()
     )
-    passed = clean and implicit and flexible_rate >= 0.5 and controls
+    passed = (
+        clean and implicit_rate >= 0.5 and flexible_rate >= 0.5 and controls
+    )
     payload = {
         "version": PROTOCOL_VERSION,
         "verdict": "TEXT_PAPER_REPLICATION_GO" if passed else "TEXT_PAPER_REPLICATION_NO_GO",
@@ -1566,7 +1652,9 @@ def text_replication_verdict(
         ),
         "all_clean_answers_correct": clean,
         "output_endpoint": "unrestricted_greedy_complete_answer",
-        "implicit_two_hop_swapped_answer_rate": 1.0 if implicit else 0.0,
+        "implicit_two_hop_swapped_answer_rate": implicit_rate,
+        "n_implicit_two_hop_tasks": len(implicit_rows),
+        "n_flexible_function_tasks": len(flexible_rows),
         "flexible_function_swapped_answer_rate": flexible_rate,
         "matched_controls_pass": controls,
         "missing_tasks": missing,
@@ -1590,10 +1678,16 @@ def text_swap_diagnostic_report(
     clean_rows: Sequence[Mapping],
     layers: Sequence[int],
     bands: Sequence[Sequence[int]] | None = None,
+    task_set: Sequence[TextReplicationTask] | None = None,
 ) -> dict:
-    """Summarize the predeclared layer/band diagnostic without claiming confirmation."""
+    """Summarize the predeclared layer/band diagnostic without claiming confirmation.
 
-    tasks = {task.task_id: task for task in anthropic_text_tasks()}
+    ``task_set`` defaults to :func:`anthropic_text_tasks`; pass the run's own set
+    or the diagnostic silently reports on a subset of what was measured.
+    """
+
+    selected_tasks = anthropic_text_tasks() if task_set is None else tuple(task_set)
+    tasks = {task.task_id: task for task in selected_tasks}
     layer_set = set(map(int, layers))
     if bands is None:
         normalized_bands = text_diagnostic_bands(layers)
