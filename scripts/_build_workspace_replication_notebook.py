@@ -129,6 +129,11 @@ RUN_STAGE3_FREEZE_DESIGN = False
 RUN_STAGE4_FRESH_CONFIRMATION = False
 RUN_STAGE5_WRITE_REPORT = False
 
+# Tokenizer only: no weights, no GPU, ~a few MB. Run this before any paid
+# session -- TEXT_CONCEPT_TOKENS is otherwise built after the model is
+# resident, so one multi-token concept wastes the whole session.
+RUN_TASK_TOKEN_PREFLIGHT = False
+
 CONFIRM_MODEL_LOAD = False
 CONFIRM_R_LENS_FIT_BUDGET = False
 CONFIRM_TEXT_DIAGNOSTIC_BUDGET = False
@@ -138,6 +143,10 @@ CONFIRM_CONFIRMATION_BUDGET = False
 MODEL_REPO_ID = "google/gemma-4-E4B-it"
 MODEL_REVISION = "fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd"
 STUDY_LAYER_WINDOW = "late_jr_l33_l40"
+# "frozen_v1" reproduces the completed runs byte for byte. "expanded_v1"
+# adds the implicit-two-hop rows (n=1 -> n=14); it changes text_task_digest
+# and therefore the fingerprint, so it can never resume into a frozen run.
+TEXT_TASK_SET = "frozen_v1"
 SCIENTIFIC_IMPLEMENTATION_COMMIT = (
     "c6b5dc144051a13ae163c89d2bfb5a0f955e9288"
 )
@@ -233,9 +242,18 @@ else:
     MATCHED_FIT_PLAN_PATH = None
     EARLY_R_LENS_RUN_DIR = LATE_R_LENS_RUN_DIR = None
 
-TEXT_TASKS = __import__(
-    "jlens.mmpilot.workspace_replication", fromlist=["anthropic_text_tasks"]
-).anthropic_text_tasks()
+if TEXT_TASK_SET not in ("frozen_v1", "expanded_v1"):
+    raise ValueError(f"unknown TEXT_TASK_SET {TEXT_TASK_SET!r}")
+_wr = __import__(
+    "jlens.mmpilot.workspace_replication",
+    fromlist=["anthropic_text_tasks", "anthropic_text_tasks_expanded_v1"],
+)
+TEXT_TASKS = (
+    _wr.anthropic_text_tasks()
+    if TEXT_TASK_SET == "frozen_v1"
+    else _wr.anthropic_text_tasks_expanded_v1()
+)
+print("TEXT TASK SET", TEXT_TASK_SET, "digest", _wr.text_task_digest(TEXT_TASKS))
 TEXT_DIAGNOSTIC_BANDS = __import__(
     "jlens.mmpilot.workspace_replication", fromlist=["text_diagnostic_bands"]
 ).text_diagnostic_bands(LAYERS)
@@ -364,6 +382,51 @@ if REAL_MODE and STUDY_LAYER_WINDOW == "combined_r_l27_l40":
         "source_digest": payload_checksum(_combined_payload),
     }
     print(json.dumps(COMBINED_R_SOURCE_PROVENANCE, indent=2))
+'''
+)
+
+markdown("## 2b. Task-set token preflight — tokenizer only, no weights, no GPU")
+code(
+    r'''
+if RUN_TASK_TOKEN_PREFLIGHT:
+    from transformers import AutoTokenizer
+
+    from jlens.mmpilot.workspace_replication import (
+        assert_task_set_resolvable, task_set_token_preflight,
+    )
+
+    # Tokenizer alone at the pinned revision. This is the same encoder the
+    # backend exposes as encode_candidate, so a concept that resolves here
+    # resolves in Stage 1 too.
+    _tok = AutoTokenizer.from_pretrained(MODEL_REPO_ID, revision=MODEL_REVISION)
+
+    def _encode(text):
+        return _tok.encode(text, add_special_tokens=False)
+
+    TASK_TOKEN_PREFLIGHT = task_set_token_preflight(
+        TEXT_TASKS, _encode,
+        extra_concepts=("Japan", "Brazil", *CONTROL_CONCEPTS),
+    )
+    print("task set", TEXT_TASK_SET, "digest", TASK_TOKEN_PREFLIGHT["task_digest"])
+    print("tasks", TASK_TOKEN_PREFLIGHT["n_tasks"],
+          TASK_TOKEN_PREFLIGHT["tasks_by_family"])
+    print("concepts", TASK_TOKEN_PREFLIGHT["n_concepts"],
+          "single-token", TASK_TOKEN_PREFLIGHT["all_single_token"],
+          "collision-free", TASK_TOKEN_PREFLIGHT["no_collisions"])
+    for _name, _why in sorted(TASK_TOKEN_PREFLIGHT["unresolvable"].items()):
+        print("  UNRESOLVABLE", _name, "--", _why.splitlines()[0])
+    for _row in TASK_TOKEN_PREFLIGHT["collisions"]:
+        print("  COLLISION", _row)
+    print("checksum", TASK_TOKEN_PREFLIGHT["preflight_checksum"])
+
+    # Refuses here, on CPU, rather than after the 16 GB download.
+    assert_task_set_resolvable(TASK_TOKEN_PREFLIGHT)
+    print("PREFLIGHT PASSED — every concept is one token; no role collides")
+    print("Still unproven: whether Gemma answers each clean prompt correctly.")
+    print("That is Stage 1's capability gate, and it needs the model.")
+else:
+    TASK_TOKEN_PREFLIGHT = None
+    print("token preflight skipped: set RUN_TASK_TOKEN_PREFLIGHT to check the task set")
 '''
 )
 
@@ -590,7 +653,8 @@ if REAL_MODE and MODEL_STAGE and CONFIRM_MODEL_LOAD:
         | {task.target for task in TEXT_TASKS}
         | {semantic_answer_concept(task.clean_answer) for task in TEXT_TASKS}
         | {semantic_answer_concept(task.swapped_answer) for task in TEXT_TASKS}
-        | {"zebra", "giraffe", "Japan", "Brazil"}
+        | {"Japan", "Brazil"}
+        | set(CONTROL_CONCEPTS)
     )
     from jlens.mmpilot.coordinate_swap import resolve_concept_token
     TEXT_CONCEPT_TOKENS = {name: resolve_concept_token(BACKEND.encode_candidate, name) for name in names}
@@ -949,7 +1013,17 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
                 ) for layer in ACTIVE_TEXT_LAYERS
             }
             random_bases = {layer: random_two_direction_basis(basis, seed=20260820 + layer) for layer, basis in bases.items()}
-            controls = ("zebra", "giraffe") if task.family == "implicit_two_hop" else ("Japan", "Brazil")
+            # The unrelated basis must be inert for the queried property.
+            # (zebra, giraffe) is not: giraffe reads as yellow/orange and both
+            # are African, so it could produce a color or continent swapped
+            # answer by itself and fail the control spuriously -- and zebra is
+            # a source concept in the expanded set. CONTROL_CONCEPTS is the
+            # study's own declared control_concepts, inert for legs/color/continent.
+            controls = (
+                CONTROL_CONCEPTS
+                if task.family == "implicit_two_hop"
+                else ("Japan", "Brazil")
+            )
             unrelated = {
                 layer: build_swap_basis_from_vectors(
                     TEXT_TOKEN_VECTORS[layer][controls[0]], TEXT_TOKEN_VECTORS[layer][controls[1]],

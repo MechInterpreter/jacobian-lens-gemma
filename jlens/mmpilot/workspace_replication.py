@@ -22,7 +22,7 @@ from __future__ import annotations
 import math
 import re
 import statistics
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import asdict, dataclass
 
@@ -192,6 +192,225 @@ def anthropic_text_tasks() -> tuple[TextReplicationTask, ...]:
             False,
         ),
     )
+
+
+IMPLICIT_TWO_HOP_EXPANSION_VERSION = "mmpilot.implicit_two_hop_expansion.v1"
+
+
+def implicit_two_hop_expansion_v1() -> tuple[TextReplicationTask, ...]:
+    """Additional downstream-recomputation tasks, defined before any Gemma result.
+
+    :func:`anthropic_text_tasks` contains exactly **one** ``implicit_two_hop``
+    row, and its own docstring says the country rows "do not by themselves
+    establish recomputation".  A downstream-recomputation claim therefore rested
+    on ``n = 1``.  These rows raise that denominator.
+
+    Every row obeys the same three rules as ``spider_to_ant_legs``:
+
+    * the source is named **nowhere** in the prompt -- it is reachable only
+      through a description, so answering at all requires the intermediate;
+    * source and target have *different* values of the queried property, so a
+      successful swap is visible in the answer rather than in a tie;
+    * both concepts and both answers are single common words, because
+      :func:`jlens.mmpilot.coordinate_swap.resolve_concept_token` refuses a
+      multi-token concept and the endpoint decodes only
+      ``TEXT_MAX_NEW_TOKENS`` tokens.
+
+    Three answer families are used on purpose.  A set made only of leg counts
+    could be passed by an intervention that merely perturbs a number, which is
+    weaker than recomputation; colour and continent answers cannot be reached
+    that way.
+
+    Nothing here is admissible until it survives the clean-capability gate --
+    :func:`text_capability_verdict` drops any row Gemma does not already answer
+    correctly, and that check must run before this set is frozen.
+    """
+
+    return (
+        # --- leg counts -------------------------------------------------
+        TextReplicationTask(
+            "bee_to_spider_legs", "implicit_two_hop",
+            "The number of legs on the insect that makes honey is",
+            "bee", "spider", "6", "8", True,
+        ),
+        TextReplicationTask(
+            "dog_to_bird_legs", "implicit_two_hop",
+            "The number of legs on the animal that barks is",
+            "dog", "bird", "4", "2", True,
+        ),
+        TextReplicationTask(
+            "cat_to_spider_legs", "implicit_two_hop",
+            "The number of legs on the animal that purrs is",
+            "cat", "spider", "4", "8", True,
+        ),
+        TextReplicationTask(
+            "elephant_to_ant_legs", "implicit_two_hop",
+            "The number of legs on the animal with a trunk is",
+            "elephant", "ant", "4", "6", True,
+        ),
+        TextReplicationTask(
+            "bird_to_cow_legs", "implicit_two_hop",
+            "The number of legs on the animal covered in feathers is",
+            "bird", "cow", "2", "4", True,
+        ),
+        TextReplicationTask(
+            "cow_to_bee_legs", "implicit_two_hop",
+            "The number of legs on the farm animal that produces milk is",
+            "cow", "bee", "4", "6", True,
+        ),
+        TextReplicationTask(
+            "horse_to_bird_legs", "implicit_two_hop",
+            "The number of legs on the animal that neighs is",
+            "horse", "bird", "4", "2", True,
+        ),
+        # --- colors -----------------------------------------------------
+        TextReplicationTask(
+            "apple_to_banana_color", "implicit_two_hop",
+            "The color of the fruit that keeps the doctor away is",
+            "apple", "banana", "red", "yellow", True,
+        ),
+        TextReplicationTask(
+            "banana_to_apple_color", "implicit_two_hop",
+            "The color of the fruit that monkeys are said to love is",
+            "banana", "apple", "yellow", "red", True,
+        ),
+        TextReplicationTask(
+            "carrot_to_tomato_color", "implicit_two_hop",
+            "The color of the vegetable that rabbits are said to love is",
+            "carrot", "tomato", "orange", "red", True,
+        ),
+        TextReplicationTask(
+            "grape_to_banana_color", "implicit_two_hop",
+            "The color of the fruit that is pressed to make wine is",
+            "grape", "banana", "purple", "yellow", True,
+        ),
+        # --- continents -------------------------------------------------
+        TextReplicationTask(
+            "zebra_to_panda_continent", "implicit_two_hop",
+            "The continent home to the animal with black and white stripes is",
+            "zebra", "panda", "Africa", "Asia", True,
+        ),
+        TextReplicationTask(
+            "lion_to_panda_continent", "implicit_two_hop",
+            "The continent home to the large cat with a mane is",
+            "lion", "panda", "Africa", "Asia", True,
+        ),
+    )
+
+
+def anthropic_text_tasks_expanded_v1() -> tuple[TextReplicationTask, ...]:
+    """The frozen paper set plus :func:`implicit_two_hop_expansion_v1`.
+
+    ``anthropic_text_tasks`` is deliberately **not** modified: the completed
+    alpha=2 run must stay byte-for-byte re-derivable, and its
+    :func:`text_task_digest` is bound into that run's fingerprint.  Using this
+    function instead changes the digest, so a run over the expanded set gets its
+    own run directory and can never resume into the completed one.
+    """
+
+    return anthropic_text_tasks() + implicit_two_hop_expansion_v1()
+
+
+def task_set_token_preflight(
+    tasks: Sequence[TextReplicationTask],
+    encode: Callable[[str], Sequence[int]],
+    *,
+    extra_concepts: Sequence[str] = ("zebra", "giraffe", "Japan", "Brazil"),
+) -> dict:
+    """Check every concept a task set needs resolves to one token. CPU only.
+
+    The notebook builds ``TEXT_CONCEPT_TOKENS`` *after* the model is on the GPU,
+    so one multi-token concept currently fails a paid session.  This runs the
+    same resolution against a tokenizer alone and reports **every** failure at
+    once rather than raising on the first, so a single pass fixes the whole set.
+
+    Returns a report; it never raises for an unresolvable concept.  Call
+    :func:`assert_task_set_resolvable` to turn the report into a refusal.
+    """
+
+    from jlens.mmpilot.coordinate_swap import (
+        MultiTokenConceptError,
+        resolve_concept_token,
+    )
+
+    selected = tuple(tasks)
+    names = sorted(
+        {task.source for task in selected}
+        | {task.target for task in selected}
+        | {semantic_answer_concept(task.clean_answer) for task in selected}
+        | {semantic_answer_concept(task.swapped_answer) for task in selected}
+        | set(map(str, extra_concepts))
+    )
+    resolved: dict[str, dict] = {}
+    unresolvable: dict[str, str] = {}
+    for name in names:
+        try:
+            resolved[name] = resolve_concept_token(encode, name).to_dict()
+        except MultiTokenConceptError as error:
+            unresolvable[name] = str(error)
+
+    collisions = []
+    for task in selected:
+        pairs = (
+            ("source_target", task.source, task.target),
+            (
+                "clean_swapped_answer",
+                semantic_answer_concept(task.clean_answer),
+                semantic_answer_concept(task.swapped_answer),
+            ),
+        )
+        for kind, left, right in pairs:
+            if left in resolved and right in resolved:
+                if resolved[left]["token_id"] == resolved[right]["token_id"]:
+                    collisions.append(
+                        {
+                            "task_id": task.task_id,
+                            "kind": kind,
+                            "left": left,
+                            "right": right,
+                            "token_id": resolved[left]["token_id"],
+                        }
+                    )
+
+    families: dict[str, int] = {}
+    for task in selected:
+        families[task.family] = families.get(task.family, 0) + 1
+
+    payload = {
+        "version": IMPLICIT_TWO_HOP_EXPANSION_VERSION,
+        "n_tasks": len(selected),
+        "tasks_by_family": families,
+        "n_concepts": len(names),
+        "unresolvable": unresolvable,
+        "collisions": collisions,
+        "all_single_token": not unresolvable,
+        "no_collisions": not collisions,
+        "passed": not unresolvable and not collisions,
+        "task_digest": text_task_digest(selected),
+        "resolved": resolved,
+    }
+    return {**payload, "preflight_checksum": payload_checksum(payload)}
+
+
+def assert_task_set_resolvable(report) -> None:
+    """Refuse a task set whose concepts cannot be intervened on."""
+
+    if report.get("unresolvable"):
+        listed = ", ".join(sorted(report["unresolvable"]))
+        raise WorkspaceReplicationRefused(
+            f"these concepts are not single tokens and cannot be swapped: {listed}. "
+            "Replace the task rows that use them; truncating a multi-token concept "
+            "would intervene on a different concept."
+        )
+    if report.get("collisions"):
+        listed = ", ".join(
+            f"{row['task_id']}:{row['kind']}({row['left']}/{row['right']})"
+            for row in report["collisions"]
+        )
+        raise WorkspaceReplicationRefused(
+            f"these rows resolve two distinct roles to one token: {listed}. "
+            "There is nothing to exchange and no visible answer change."
+        )
 
 
 def text_task_digest(tasks: Sequence[TextReplicationTask] | None = None) -> str:
