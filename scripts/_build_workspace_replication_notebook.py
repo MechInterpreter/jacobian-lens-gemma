@@ -1356,7 +1356,7 @@ if (
     print("=" * 78)
     for row in TEXT_DIAGNOSTIC_REPORT["bands"]:
         print(
-            f"  {row['band']} exact={row['exact_successes']}/7 "
+            f"  {row['band']} exact={row['exact_successes']}/{len(TEXT_TASKS)} "
             f"implicit={row['implicit_two_hop_success']} "
             f"flexible={row['flexible_function_success_rate']:.3f} "
             f"direct={row['direct_answer_positive_control_rate']:.3f} "
