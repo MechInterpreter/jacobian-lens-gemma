@@ -97,3 +97,25 @@ def test_all_result_switches_default_false() -> None:
         "CONFIRM_CONFIRMATION_BUDGET",
     ):
         assert f"{name} = False" in source
+
+
+def test_clean_completion_is_not_given_an_intervention_policy() -> None:
+    """The realization policy belongs only to calls that install swap hooks."""
+
+    calls = []
+    for cell in _notebook()["cells"]:
+        if cell["cell_type"] != "code":
+            continue
+        tree = ast.parse("".join(cell["source"]))
+        calls.extend(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "unrestricted_greedy_completion"
+        )
+    assert calls
+    for call in calls:
+        assert "realization_policy" not in {
+            keyword.arg for keyword in call.keywords if keyword.arg is not None
+        }

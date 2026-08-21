@@ -459,7 +459,6 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
                         semantic_answer_concept(task.swapped_answer)
                     ].token_id
                 },
-                realization_policy=TEXT_MODEL_DTYPE_REALIZATION,
             )
             stored = {
                 "task_id": task.task_id,
