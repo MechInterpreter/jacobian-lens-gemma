@@ -76,7 +76,14 @@ def test_notebook_enforces_the_paper_first_order() -> None:
     assert "answer_token_table(BACKEND" not in source
     assert 'BACKEND.build_inputs(prompt=task.prompt, modality="text")' not in source
     assert 'STORE.save("capability"' in source
-    assert 'if TEXT_CAPABILITY["causal_spending_licensed"]:' in source
+    assert 'TEXT_CAPABILITY["causal_spending_licensed"]' in source
+    assert '== "LOADING_FIRST_INSTRUMENT_GO"' in source
+    assert "select_loading_instrument" in source
+    assert "RUN_STAGE0_FIT_MATCHED_R_LENSES" in source
+    assert "dense_relprop_backward" in source
+    assert "matched_pooled_r" in source
+    assert '"causal_outcome_may_select_band": False' in source
+    assert "TEXT_DIAGNOSTIC_BANDS = (tuple(ACTIVE_TEXT_LAYERS),)" in source
     assert 'STORE.save("intervention", key, trial)' in source
     assert 'text_diagnostic=TEXT_DIAGNOSTIC_REPORT' in source
 

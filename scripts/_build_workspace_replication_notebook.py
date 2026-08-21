@@ -20,7 +20,7 @@ def code(value: str) -> None:
 
 markdown(
     r"""
-# Paper-first J-lens replication, source loading, and fresh multimodal confirmation
+# Loading-first matched J/R-lens replication and multimodal confirmation
 
 This is the shortest fail-closed path from the completed work to an interpretable
 result. It uses **one causal implementation only**: Anthropic's two-coordinate
@@ -28,7 +28,16 @@ exchange in `jlens.mmpilot.coordinate_swap`.
 
 The order is mandatory:
 
-1. **Text replication.** Reproduce the paper's text-only implicit two-hop task
+0. **Matched R-lens fit.** Reuse the original frozen 99-example text and pooled
+   multimodal fit plans, but repeat their backward accumulation with the audited
+   dense R-lens relevance rules. The forward values and processor inputs are
+   unchanged. Text and pooled R arms have separate atomic checkpoints and can
+   never resume a J accumulator.
+1. **Clean text loading, then text replication.** Compare the published text
+   J-lens, matched text/pooled J-lenses, and matched text/pooled R-lenses on the
+   same clean task activations. Select the instrument and contiguous band using
+   final-prompt-token source loading only, before a causal hook exists. Then
+   reproduce the paper's text-only implicit two-hop task
    (`spider → ant`, expected downstream answer `8 → 6`) and its France/China
    flexible-function family with the validated text lens and exact `alpha=1`.
    Because this checkpoint is instruction-tuned, a generic answer-free user
@@ -40,22 +49,21 @@ The order is mandatory:
    Gemma tokenizes the paper's digit outputs as whitespace + digit, so success
    is the complete answer from unrestricted two-token greedy generation—not a
    one-token prefix, candidate score, or teacher-forced likelihood.
-1b. **Bounded text diagnostic if the full band is null.** Audit the actual
+1b. **Audited text test on the loading-selected band.** Audit the actual
    post-cast exchange and iteratively correct only its two-coordinate component
    until the BF16 tensor consumed by Gemma meets the frozen 2% tolerance. Then
-   test every L33--L40 singleton and suffix band at
-   exact `alpha=1` against zero, random, unrelated, and norm-matched
-   direct-answer controls. This is development-only localization; any selected
-   band still requires a fresh confirmation and cannot retroactively change the
-   completed full-band null.
-2. **Clean source loading.** On development media, measure whether the source
-   concept is actually visible through the matched pooled lens at each layer and
-   prompt position. Causal outcomes do not exist yet.
-3. **Freeze the design.** Keep the band selected by the audited text causal
-   diagnostic, require that every layer in it carries clean source loading in
-   all three modalities, and choose only the concept pair and modality-specific
-   position rule from clean loading. `alpha=1` remains primary; `alpha=.75` is
-   a labelled interpolation sensitivity.
+   test exactly the already selected clean-loading band at exact `alpha=1`
+   against zero, random, unrelated, and norm-matched direct-answer controls.
+   Causal outcomes are therefore unable to select a different layer or band.
+   A passing development result still requires fresh confirmation.
+2. **Clean multimodal source loading.** On development media, compare the
+   matched pooled J and pooled R instruments at each layer and prompt position.
+   The instrument, pair, and position rule are selected from these clean rows;
+   no multimodal causal outcome is consulted.
+3. **Freeze the design.** Require the clean-loading-selected multimodal
+   instrument and band to remain available, and freeze their artifact identity,
+   pair, and modality-specific position rule. `alpha=1` remains primary;
+   `alpha=.75` is a labelled interpolation sensitivity.
 4. **Fresh confirmation.** Open new photographs/recordings, prove zero overlap,
    and test both swap directions with unrestricted identity and downstream
    property outputs against zero, random, unrelated, and norm-matched
@@ -109,6 +117,7 @@ markdown("## 1. Configuration — change switches, not scientific constants")
 code(
     r'''
 RUN_REAL_WORKSPACE_REPLICATION = False
+RUN_STAGE0_FIT_MATCHED_R_LENSES = False
 RUN_STAGE1_TEXT_REPLICATION = False
 RUN_STAGE1B_TEXT_DIAGNOSTIC = False
 RUN_STAGE2_MULTIMODAL_LOADING_DEVELOPMENT = False
@@ -117,6 +126,7 @@ RUN_STAGE4_FRESH_CONFIRMATION = False
 RUN_STAGE5_WRITE_REPORT = False
 
 CONFIRM_MODEL_LOAD = False
+CONFIRM_R_LENS_FIT_BUDGET = False
 CONFIRM_TEXT_DIAGNOSTIC_BUDGET = False
 CONFIRM_DEVELOPMENT_BUDGET = False
 CONFIRM_CONFIRMATION_BUDGET = False
@@ -137,6 +147,8 @@ CONTROL_CONCEPTS = ("microwave", "toilet")
 DEVELOPMENT_IMAGES_PER_SOURCE = 8
 CONFIRMATION_IMAGES_PER_SOURCE = 8
 MIN_SOURCE_ADVANTAGE = 0.0
+MIN_SOURCE_COSINE = 0.0
+R_LENS_CHECKPOINT_EVERY = 5
 EVIDENCE_POSITION_MARGIN = 0.0
 MIN_CONFIRMATION_SUCCESS_RATE = 0.50
 CONFIRMATION_FAMILYWISE_ALPHA = 0.05
@@ -146,11 +158,14 @@ PROMPT_PROTOCOL = "mmpilot.implicit_animal_property_open_output.v1"
 
 REAL_MODE = bool(RUN_REAL_WORKSPACE_REPLICATION)
 MODEL_STAGE = any((
+    RUN_STAGE0_FIT_MATCHED_R_LENSES,
     RUN_STAGE1_TEXT_REPLICATION,
     RUN_STAGE1B_TEXT_DIAGNOSTIC,
     RUN_STAGE2_MULTIMODAL_LOADING_DEVELOPMENT,
     RUN_STAGE4_FRESH_CONFIRMATION,
 ))
+if RUN_STAGE0_FIT_MATCHED_R_LENSES and not CONFIRM_R_LENS_FIT_BUDGET:
+    print("R-LENS FIT BLOCKED: set CONFIRM_R_LENS_FIT_BUDGET after reading the budget")
 if MODEL_STAGE and not CONFIRM_MODEL_LOAD:
     print("MODEL STAGES BLOCKED: set CONFIRM_MODEL_LOAD after reading the budget")
 if RUN_STAGE1B_TEXT_DIAGNOSTIC and not CONFIRM_TEXT_DIAGNOSTIC_BUDGET:
@@ -174,9 +189,11 @@ if REAL_MODE:
     EXPANDED_MANIFEST_CACHE = (
         RUNS_ROOT / "mml32_l32_followup_20260808T182717" / "expanded_manifest.json"
     )
+    MATCHED_FIT_PLAN_PATH = MATCHED_LENS_RUN_DIR / "matched_population_plan.json"
 else:
     RUNS_ROOT = Path(tempfile.gettempdir()) / "workspace_replication_mock"
     CORRECTED_RUN_DIR = MATCHED_LENS_RUN_DIR = EXPANDED_MANIFEST_CACHE = None
+    MATCHED_FIT_PLAN_PATH = None
 
 TEXT_TASKS = __import__(
     "jlens.mmpilot.workspace_replication", fromlist=["anthropic_text_tasks"]
@@ -192,9 +209,9 @@ print("TEXT TASKS", len(TEXT_TASKS))
 print("  unrestricted generation passes", len(TEXT_TASKS) * 2 * 4)
 print("  clean source-loading passes", len(TEXT_TASKS))
 print("  Stage-1 total passes", len(TEXT_TASKS) * 2 * 4 + len(TEXT_TASKS))
-print("TEXT DIAGNOSTIC — development only, no fitting")
-print("  singleton and suffix bands", len(TEXT_DIAGNOSTIC_BANDS),
-      [list(band) for band in TEXT_DIAGNOSTIC_BANDS])
+print("TEXT DIAGNOSTIC UPPER BOUND — actual run uses exactly one clean-loading-selected band")
+print("  old singleton/suffix grid shown only as a strict cost ceiling",
+      len(TEXT_DIAGNOSTIC_BANDS), [list(band) for band in TEXT_DIAGNOSTIC_BANDS])
 print("  conditions per task/band", list(TEXT_DIAGNOSTIC_CONDITIONS))
 print("  unrestricted forward passes",
       len(TEXT_TASKS) * len(TEXT_DIAGNOSTIC_BANDS)
@@ -216,9 +233,14 @@ print("  clean generation forwards",
 print("  six causal/control conditions, two directions, two-token generation",
       CONFIRMATION_IMAGES_PER_SOURCE * 3 * 2 * 2 * 6 * 2)
 print("RESUME UNIT: one two-token condition JSON; completed work lost = 0")
+print("MATCHED R-LENS FIT — same frozen 99 examples as each J-Lens arm")
+print("  arms text + pooled; layers", list(LAYERS))
+print("  each arm 99 processor examples, one forward + 320 backward passes/example")
+print("  atomic checkpoint every", R_LENS_CHECKPOINT_EVERY, "examples")
+print("  disconnect loses at most one incomplete checkpoint batch")
 
 if REAL_MODE:
-    missing = [path for path in (CORRECTED_RUN_DIR, MATCHED_LENS_RUN_DIR, EXPANDED_MANIFEST_CACHE) if not path.exists()]
+    missing = [path for path in (CORRECTED_RUN_DIR, MATCHED_LENS_RUN_DIR, EXPANDED_MANIFEST_CACHE, MATCHED_FIT_PLAN_PATH) if not path.exists()]
     if missing:
         raise FileNotFoundError("configured artifact(s) missing:\n  " + "\n  ".join(map(str, missing)))
 '''
@@ -302,6 +324,7 @@ from jlens.mmpilot.workspace_replication import (
     TEXT_MODEL_DTYPE_REALIZATION,
     text_task_digest,
 )
+from jlens.relprop import R_LENS_METHOD
 
 SCIENTIFIC_CONFIG = {
     "protocol": PROTOCOL_VERSION,
@@ -315,7 +338,8 @@ SCIENTIFIC_CONFIG = {
     "layers": list(LAYERS), "text_task_digest": text_task_digest(TEXT_TASKS),
     "text_diagnostic": {
         "version": TEXT_DIAGNOSTIC_VERSION,
-        "bands": [list(band) for band in TEXT_DIAGNOSTIC_BANDS],
+        "bands": "exactly_one_clean_loading_selected_contiguous_band",
+        "causal_outcome_may_select_band": False,
         "conditions": list(TEXT_DIAGNOSTIC_CONDITIONS),
         "alpha": 1.0,
         "random_seed": TEXT_DIAGNOSTIC_RANDOM_SEED,
@@ -331,6 +355,12 @@ SCIENTIFIC_CONFIG = {
     "primary_alpha": 1.0, "sensitivity_alpha": 0.75,
     "population_plan_digest": POPULATION_PLAN["plan_digest"],
     "min_source_advantage": MIN_SOURCE_ADVANTAGE,
+    "min_source_cosine": MIN_SOURCE_COSINE,
+    "loading_first_selection": "mmpilot.loading_first_instrument_selection.v1",
+    "r_lens_method": R_LENS_METHOD.to_dict(),
+    "r_lens_method_digest": R_LENS_METHOD.digest,
+    "r_lens_fit_arms": ["text", "pooled"],
+    "r_lens_checkpoint_every": R_LENS_CHECKPOINT_EVERY,
     "evidence_position_margin": EVIDENCE_POSITION_MARGIN,
     "minimum_confirmation_success_rate": MIN_CONFIRMATION_SUCCESS_RATE,
     "confirmation_familywise_alpha": CONFIRMATION_FAMILYWISE_ALPHA,
@@ -366,6 +396,8 @@ code(
 BACKEND = None
 TEXT_TOKEN_VECTORS = {}
 MATCHED_LENSES = {}
+R_LENSES = {}
+INSTRUMENT_VECTORS = {}
 if REAL_MODE and MODEL_STAGE and CONFIRM_MODEL_LOAD:
     import getpass, torch
     from jlens.lens import JacobianLens
@@ -414,8 +446,117 @@ if REAL_MODE and MODEL_STAGE and CONFIRM_MODEL_LOAD:
     del loaded, rows, unembedding
     for arm in ("text", "image", "spoken_audio", "pooled"):
         MATCHED_LENSES[arm] = JacobianLens.load(str(MATCHED_LENS_RUN_DIR / "lenses" / f"lens.{arm}.pt"))
+    INSTRUMENT_VECTORS["published_text_j"] = TEXT_TOKEN_VECTORS
+    from jlens.mmpilot.multimodal_lens import (
+        fit_arm, plan_units, selected_lens_vector,
+    )
+
+    def _vectors_for(lens):
+        return {
+            layer: {
+                name: selected_lens_vector(
+                    lens, BACKEND.unembedding_weight(),
+                    layer=layer, token_id=token.token_id,
+                )
+                for name, token in TEXT_CONCEPT_TOKENS.items()
+            }
+            for layer in LAYERS
+        }
+
+    INSTRUMENT_VECTORS["matched_text_j"] = _vectors_for(MATCHED_LENSES["text"])
+    INSTRUMENT_VECTORS["matched_pooled_j"] = _vectors_for(MATCHED_LENSES["pooled"])
+
+    _fit_plan = json.loads(MATCHED_FIT_PLAN_PATH.read_text())
+    from jlens.mmpilot.media_io import RetryJournal, drive_media_loaders
+    _fit_media = drive_media_loaders(journal=RetryJournal())
+
+    def _build_r_fit_inputs(unit):
+        if unit.modality == "text":
+            return BACKEND.build_inputs(prompt=unit.prompt, modality="text")
+        if unit.modality == "image":
+            return BACKEND.build_inputs(
+                prompt=unit.prompt, modality="image",
+                image=_fit_media["load_image"](unit.image_path),
+                media_path=unit.image_path,
+            )
+        waveform, rate = _fit_media["load_audio"](unit.audio_path)
+        return BACKEND.build_inputs(
+            prompt=unit.prompt, modality="spoken_audio", audio=waveform,
+            sampling_rate=rate, media_path=unit.audio_path,
+        )
+
+    from jlens.relprop import audit_dense_relprop_architecture, dense_relprop_backward
+    R_LENS_ARCHITECTURE_AUDIT = audit_dense_relprop_architecture(
+        BACKEND.hf_model.model.language_model
+    )
+    for _arm in ("text", "pooled"):
+        _path = RUN_DIR / "r_lenses" / f"lens.{_arm}.pt"
+        if _path.is_file():
+            R_LENSES[_arm] = JacobianLens.load(str(_path))
+            print("R-lens", _arm, "reused", _path)
+        elif RUN_STAGE0_FIT_MATCHED_R_LENSES and CONFIRM_R_LENS_FIT_BUDGET:
+            _units = plan_units(_fit_plan, _arm)
+            R_LENSES[_arm] = fit_arm(
+                BACKEND, _units, build_inputs=_build_r_fit_inputs,
+                source_layers=LAYERS, target_layer=41,
+                checkpoint_path=(
+                    RUN_DIR / "r_lenses" / "checkpoints" /
+                    f"{_arm}.jacobian_sum.pt"
+                ),
+                arm=_arm,
+                scientific_fingerprint=FINGERPRINT_DIGEST + ":r_lens:" + _arm,
+                dim_batch=8, skip_first=16,
+                checkpoint_every=R_LENS_CHECKPOINT_EVERY,
+                backward_context=lambda: dense_relprop_backward(
+                    BACKEND.hf_model.model.language_model
+                ),
+                progress=lambda row: print(
+                    f"R-lens {row['arm']} {row['index']}/{row['total']} "
+                    f"checkpoint={row['checkpoint_written']}"
+                ) if (
+                    row["index"] == 1 or row["checkpoint_written"]
+                    or row["index"] == row["total"]
+                ) else None,
+            )
+            _path.parent.mkdir(parents=True, exist_ok=True)
+            _tmp = _path.with_suffix(".tmp.pt")
+            R_LENSES[_arm].save(str(_tmp))
+            os.replace(_tmp, _path)
+            print("R-lens", _arm, "completed", _path)
+        if _arm in R_LENSES:
+            INSTRUMENT_VECTORS[f"matched_{_arm}_r"] = _vectors_for(R_LENSES[_arm])
+    if R_LENSES:
+        from jlens.metadata import file_sha256
+        _inventory = {
+            "method_digest": R_LENS_METHOD.digest,
+            "architecture_audit_checksum": R_LENS_ARCHITECTURE_AUDIT[
+                "audit_checksum"
+            ],
+            "lenses": {
+                arm: {
+                    "path": str(RUN_DIR / "r_lenses" / f"lens.{arm}.pt"),
+                    "checksum": file_sha256(
+                        str(RUN_DIR / "r_lenses" / f"lens.{arm}.pt")
+                    ),
+                    "n_prompts": lens.n_prompts,
+                }
+                for arm, lens in sorted(R_LENSES.items())
+            },
+        }
+        _inventory["inventory_checksum"] = payload_checksum(_inventory)
+        _inventory_path = RUN_DIR / "r_lens_inventory.json"
+        if _inventory_path.is_file():
+            _recorded = json.loads(_inventory_path.read_text())
+            if _recorded != _inventory:
+                raise RuntimeError(
+                    "R-lens artifacts changed after this run was opened; "
+                    "refusing to reuse loading or intervention units"
+                )
+        else:
+            _inventory_path.write_text(json.dumps(_inventory, indent=2))
     print("validated text layers", sorted(TEXT_TOKEN_VECTORS))
     print("matched lenses", sorted(MATCHED_LENSES))
+    print("loading-first instruments", sorted(INSTRUMENT_VECTORS))
 elif MODEL_STAGE:
     print("skipped: model load is not confirmed")
 '''
@@ -425,6 +566,14 @@ markdown("## 6. Stage 1 — paper-task text replication and source-loading audit
 code(
     r'''
 TEXT_VERDICT = STORE.load("metric", "text_replication_verdict")
+LOADING_FIRST_SELECTION = STORE.load("metric", "loading_first_selection")
+ACTIVE_TEXT_LAYERS = tuple(LAYERS)
+SELECTED_INSTRUMENT = None
+if LOADING_FIRST_SELECTION is not None:
+    SELECTED_INSTRUMENT = LOADING_FIRST_SELECTION.get("selected_instrument")
+    ACTIVE_TEXT_LAYERS = tuple(LOADING_FIRST_SELECTION.get("selected_band") or LAYERS)
+    if SELECTED_INSTRUMENT in INSTRUMENT_VECTORS:
+        TEXT_TOKEN_VECTORS = INSTRUMENT_VECTORS[SELECTED_INSTRUMENT]
 if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
     from jlens.mmpilot.coordinate_swap import (
         build_swap_basis_from_vectors, random_two_direction_basis,
@@ -484,8 +633,68 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
     STORE.save("metric", "text_capability_verdict", TEXT_CAPABILITY)
     print(json.dumps(TEXT_CAPABILITY, indent=2))
 
+    # This is intentionally before the first causal hook.  Every candidate
+    # instrument is judged on the same clean assistant-prefill activations;
+    # intervention outcomes cannot influence the instrument or band.
+    from jlens.mmpilot.loading_first import select_loading_instrument
+    loading_by_instrument = {}
+    for instrument, vectors in sorted(INSTRUMENT_VECTORS.items()):
+        instrument_rows = []
+        for task in TEXT_TASKS:
+            key = safe_key("loading-first", instrument, task.task_id)
+            stored = STORE.load("activation", key)
+            if stored is None:
+                inputs = build_assistant_prefill_completion_inputs(
+                    BACKEND, task.prompt
+                )
+                controls = (
+                    ("zebra", "giraffe")
+                    if task.family == "implicit_two_hop"
+                    else ("Japan", "Brazil")
+                )
+                stored = {
+                    "instrument": instrument,
+                    "task_id": task.task_id,
+                    "rows": capture_source_loading(
+                        BACKEND, inputs, vectors_by_layer=vectors,
+                        source=task.source, target=task.target,
+                        unrelated=controls, sample_id=task.task_id,
+                        modality="text",
+                    ),
+                    "causal_result_consulted": False,
+                }
+                STORE.save("activation", key, stored)
+                work = "computed"
+            else:
+                work = "reused"
+            instrument_rows.extend(stored["rows"])
+            print("clean loading", instrument, task.task_id, work)
+        loading_by_instrument[instrument] = instrument_rows
+
+    LOADING_FIRST_SELECTION = select_loading_instrument(
+        loading_by_instrument,
+        tasks=[task.task_id for task in TEXT_TASKS],
+        layers=LAYERS,
+        position_class="final_prompt_token",
+        min_source_cosine=MIN_SOURCE_COSINE,
+        min_source_advantage=MIN_SOURCE_ADVANTAGE,
+    )
+    STORE.save("metric", "loading_first_selection", LOADING_FIRST_SELECTION)
+    (RUN_DIR / "loading_first_selection.json").write_text(
+        json.dumps(LOADING_FIRST_SELECTION, indent=2, default=str)
+    )
+    SELECTED_INSTRUMENT = LOADING_FIRST_SELECTION["selected_instrument"]
+    ACTIVE_TEXT_LAYERS = tuple(LOADING_FIRST_SELECTION["selected_band"])
+    if SELECTED_INSTRUMENT is not None:
+        TEXT_TOKEN_VECTORS = INSTRUMENT_VECTORS[SELECTED_INSTRUMENT]
+    print(json.dumps(LOADING_FIRST_SELECTION, indent=2))
+
     text_rows = []
-    if TEXT_CAPABILITY["causal_spending_licensed"]:
+    if (
+        TEXT_CAPABILITY["causal_spending_licensed"]
+        and LOADING_FIRST_SELECTION["verdict"]
+        == "LOADING_FIRST_INSTRUMENT_GO"
+    ):
         for task in TEXT_TASKS:
             key = safe_key("text-paper", task.task_id)
             stored = STORE.load("intervention", key)
@@ -502,7 +711,7 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
                 layer: build_swap_basis_from_vectors(
                     TEXT_TOKEN_VECTORS[layer][task.source], TEXT_TOKEN_VECTORS[layer][task.target],
                     layer=layer, source=TEXT_CONCEPT_TOKENS[task.source], target=TEXT_CONCEPT_TOKENS[task.target],
-                ) for layer in LAYERS
+                ) for layer in ACTIVE_TEXT_LAYERS
             }
             random_bases = {layer: random_two_direction_basis(basis, seed=20260820 + layer) for layer, basis in bases.items()}
             controls = ("zebra", "giraffe") if task.family == "implicit_two_hop" else ("Japan", "Brazil")
@@ -510,7 +719,7 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
                 layer: build_swap_basis_from_vectors(
                     TEXT_TOKEN_VECTORS[layer][controls[0]], TEXT_TOKEN_VECTORS[layer][controls[1]],
                     layer=layer, source=TEXT_CONCEPT_TOKENS[controls[0]], target=TEXT_CONCEPT_TOKENS[controls[1]],
-                ) for layer in LAYERS
+                ) for layer in ACTIVE_TEXT_LAYERS
             }
             exact = unrestricted_greedy_swap_trial(
                 BACKEND, inputs, bases=bases, alpha=1.0,
@@ -544,11 +753,6 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
                     ].token_id
                 },
             )
-            loading = capture_source_loading(
-                BACKEND, inputs, vectors_by_layer=TEXT_TOKEN_VECTORS,
-                source=task.source, target=task.target, unrelated=controls,
-                sample_id=task.task_id, modality="text",
-            )
             stored = {
                 "task_id": task.task_id, "task": task.to_dict(),
                 "input_route": dict(inputs.route),
@@ -559,7 +763,13 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
                 "unrelated_swapped_answer_generated": bool(unrelated_result["answer_match"]),
                 "clean": clean_record["clean"],
                 "exact": exact, "random": random, "unrelated": unrelated_result,
-                "loading_rows": loading,
+                "loading_rows": [
+                    row
+                    for row in loading_by_instrument[SELECTED_INSTRUMENT]
+                    if row["sample_id"] == task.task_id
+                ],
+                "selected_instrument": SELECTED_INSTRUMENT,
+                "selected_band": list(ACTIVE_TEXT_LAYERS),
             }
             STORE.save("intervention", key, stored)
             text_rows.append(stored)
@@ -570,15 +780,21 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
             )
         TEXT_VERDICT = text_replication_verdict(text_rows)
     else:
+        _blocked_verdict = (
+            "TEXT_LOADING_FIRST_NO_GO"
+            if TEXT_CAPABILITY["causal_spending_licensed"]
+            else "TEXT_PAPER_CAPABILITY_NO_GO"
+        )
         TEXT_VERDICT = {
             **{
                 key: value
                 for key, value in TEXT_CAPABILITY.items()
                 if key != "report_checksum"
             },
-            "verdict": "TEXT_PAPER_CAPABILITY_NO_GO",
+            "verdict": _blocked_verdict,
             "multimodal_stage_licensed": False,
             "interventions_run": False,
+            "loading_first_selection": LOADING_FIRST_SELECTION,
         }
         TEXT_VERDICT["report_checksum"] = payload_checksum(TEXT_VERDICT)
     STORE.save("metric", "text_replication_verdict", TEXT_VERDICT)
@@ -628,6 +844,7 @@ if (
 
     diagnostic_records = []
     computed = reused = derived = 0
+    TEXT_DIAGNOSTIC_BANDS = (tuple(ACTIVE_TEXT_LAYERS),)
     total = (
         len(TEXT_TASKS) * len(TEXT_DIAGNOSTIC_BANDS)
         * len(TEXT_DIAGNOSTIC_CONDITIONS)
@@ -654,7 +871,7 @@ if (
                 source=TEXT_CONCEPT_TOKENS[task.source],
                 target=TEXT_CONCEPT_TOKENS[task.target],
             )
-            for layer in LAYERS
+            for layer in ACTIVE_TEXT_LAYERS
         }
         random_all = {
             layer: random_two_direction_basis(
@@ -675,10 +892,11 @@ if (
                 source=TEXT_CONCEPT_TOKENS[control_names[0]],
                 target=TEXT_CONCEPT_TOKENS[control_names[1]],
             )
-            for layer in LAYERS
+            for layer in ACTIVE_TEXT_LAYERS
         }
         answer_vectors_all = {
-            layer: TEXT_TOKEN_VECTORS[layer][answer_name] for layer in LAYERS
+            layer: TEXT_TOKEN_VECTORS[layer][answer_name]
+            for layer in ACTIVE_TEXT_LAYERS
         }
 
         for band in TEXT_DIAGNOSTIC_BANDS:
@@ -699,7 +917,10 @@ if (
                         "random_alpha1": "random",
                         "unrelated_alpha1": "unrelated",
                     }.get(condition)
-                    if tuple(band) == tuple(LAYERS) and baseline_field is not None:
+                    if (
+                        tuple(band) == tuple(ACTIVE_TEXT_LAYERS)
+                        and baseline_field is not None
+                    ):
                         result = dict(baseline[baseline_field])
                         derived += 1
                         work = "derived_from_stage1"
@@ -770,7 +991,7 @@ if (
     TEXT_DIAGNOSTIC_REPORT = text_swap_diagnostic_report(
         diagnostic_records,
         clean_rows=diagnostic_clean_rows,
-        layers=LAYERS,
+        layers=ACTIVE_TEXT_LAYERS,
     )
     STORE.save("metric", "text_swap_diagnostic_report", TEXT_DIAGNOSTIC_REPORT)
     diagnostic_path = RUN_DIR / "text_swap_diagnostic_report.json"
@@ -810,6 +1031,9 @@ code(
     r'''
 LOCALIZATION = STORE.load("metric", "loading_localization")
 PAIR_SELECTION = STORE.load("metric", "loading_pair_selection")
+MULTIMODAL_INSTRUMENT_SELECTION = STORE.load(
+    "metric", "multimodal_instrument_selection"
+)
 if (
     REAL_MODE
     and RUN_STAGE2_MULTIMODAL_LOADING_DEVELOPMENT
@@ -830,13 +1054,19 @@ if (
     MEDIA = drive_media_loaders(journal=RetryJournal())
     names = sorted({name for pair in CANDIDATE_PAIRS for name in pair} | set(CONTROL_CONCEPTS))
     TOKENS = {name: resolve_concept_token(BACKEND.encode_candidate, name) for name in names}
-    MATCHED_VECTORS = {
-        layer: {
-            name: selected_lens_vector(
-                MATCHED_LENSES["pooled"], BACKEND.unembedding_weight(),
-                layer=layer, token_id=token.token_id,
-            ) for name, token in TOKENS.items()
-        } for layer in LAYERS
+    _pooled_candidates = {"matched_pooled_j": MATCHED_LENSES["pooled"]}
+    if "pooled" in R_LENSES:
+        _pooled_candidates["matched_pooled_r"] = R_LENSES["pooled"]
+    MULTIMODAL_VECTORS = {
+        instrument: {
+            layer: {
+                name: selected_lens_vector(
+                    lens, BACKEND.unembedding_weight(),
+                    layer=layer, token_id=token.token_id,
+                ) for name, token in TOKENS.items()
+            } for layer in LAYERS
+        }
+        for instrument, lens in _pooled_candidates.items()
     }
     def build_inputs(group, modality):
         question = "Identify the animal from the evidence internally, then answer: How many legs does that animal typically have? Answer with one digit:\nAnswer:"
@@ -846,14 +1076,18 @@ if (
             return BACKEND.build_inputs(prompt=question, modality="image", image=MEDIA["load_image"](group["image_path"]), media_path=group["image_path"])
         waveform, rate = MEDIA["load_audio"](group["audio_path"])
         return BACKEND.build_inputs(prompt=question, modality="spoken_audio", audio=waveform, sampling_rate=rate, media_path=group["audio_path"])
-    loading_rows = []
+    loading_by_instrument = {name: [] for name in MULTIMODAL_VECTORS}
     by_concept = {}
     for group in DEV_GROUPS:
         by_concept.setdefault(str(group.get("concept")), []).append(group)
-    for source, target in CANDIDATE_PAIRS:
+    for instrument, vectors in sorted(MULTIMODAL_VECTORS.items()):
+      for source, target in CANDIDATE_PAIRS:
         for group in by_concept.get(source, []):
             for modality in ("text", "image", "spoken_audio"):
-                key = safe_key("loading", source, target, group["group_id"], modality)
+                key = safe_key(
+                    "loading", instrument, source, target,
+                    group["group_id"], modality,
+                )
                 stored = STORE.load("activation", key)
                 if stored is None:
                     inputs = build_inputs(group, modality)
@@ -862,7 +1096,7 @@ if (
                         "group_id": group["group_id"], "image_id": group["image_id"],
                         "modality": modality,
                         "rows": capture_source_loading(
-                            BACKEND, inputs, vectors_by_layer=MATCHED_VECTORS,
+                            BACKEND, inputs, vectors_by_layer=vectors,
                             source=source, target=target, unrelated=CONTROL_CONCEPTS,
                             sample_id=f"{group['group_id']}:{modality}", modality=modality,
                         ),
@@ -871,23 +1105,70 @@ if (
                     work = "computed"
                 else:
                     work = "reused"
-                loading_rows.extend(stored["rows"])
-                print("loading", source, target, group["group_id"], modality, work)
-    LOADING_REPORT = summarize_loading(loading_rows)
-    PAIR_SELECTION = select_pair_from_loading(
-        loading_rows, candidate_pairs=CANDIDATE_PAIRS,
-        required_modalities=("text", "image", "spoken_audio"),
+                loading_by_instrument[instrument].extend(stored["rows"])
+                print("loading", instrument, source, target, group["group_id"], modality, work)
+    _instrument_rows = []
+    for instrument, loading_rows in sorted(loading_by_instrument.items()):
+        pair_selection = select_pair_from_loading(
+            loading_rows, candidate_pairs=CANDIDATE_PAIRS,
+            required_modalities=("text", "image", "spoken_audio"),
+        )
+        selected_source, selected_target = pair_selection["selected_pair"]
+        selected_rows = [
+            row for row in loading_rows
+            if row["source"] == selected_source
+            and row["target"] == selected_target
+        ]
+        localization = freeze_loading_localization(
+            selected_rows,
+            required_modalities=("text", "image", "spoken_audio"),
+            candidate_layers=LAYERS,
+            min_source_advantage=MIN_SOURCE_ADVANTAGE,
+            evidence_position_margin=EVIDENCE_POSITION_MARGIN,
+        )
+        _instrument_rows.append({
+            "instrument": instrument,
+            "loading_report": summarize_loading(loading_rows),
+            "pair_selection": pair_selection,
+            "localization": localization,
+            "band_length": len(localization["selected_band"]),
+            "pair_score": next(
+                row["weakest_modality_score"]
+                for row in pair_selection["ranking"]
+                if [row["source"], row["target"]]
+                == pair_selection["selected_pair"]
+            ),
+            "causal_result_consulted": False,
+        })
+    _instrument_rows.sort(
+        key=lambda row: (
+            -row["band_length"], -row["pair_score"], row["instrument"]
+        )
     )
-    selected_source, selected_target = PAIR_SELECTION["selected_pair"]
-    selected_rows = [row for row in loading_rows if row["source"] == selected_source and row["target"] == selected_target]
-    LOCALIZATION = freeze_loading_localization(
-        selected_rows, required_modalities=("text", "image", "spoken_audio"),
-        candidate_layers=LAYERS, min_source_advantage=MIN_SOURCE_ADVANTAGE,
-        evidence_position_margin=EVIDENCE_POSITION_MARGIN,
+    _selected = next(
+        (row for row in _instrument_rows if row["band_length"] > 0), None
     )
+    MULTIMODAL_INSTRUMENT_SELECTION = {
+        "version": "mmpilot.loading_first_multimodal_instrument.v1",
+        "ranking": _instrument_rows,
+        "selected_instrument": _selected["instrument"] if _selected else None,
+        "verdict": "MULTIMODAL_INSTRUMENT_GO" if _selected else "MULTIMODAL_INSTRUMENT_NO_GO",
+        "causal_result_consulted": False,
+    }
+    MULTIMODAL_INSTRUMENT_SELECTION["selection_digest"] = payload_checksum(
+        MULTIMODAL_INSTRUMENT_SELECTION
+    )
+    LOADING_REPORT = _selected["loading_report"] if _selected else None
+    PAIR_SELECTION = _selected["pair_selection"] if _selected else None
+    LOCALIZATION = _selected["localization"] if _selected else None
     STORE.save("metric", "loading_report", LOADING_REPORT)
     STORE.save("metric", "loading_pair_selection", PAIR_SELECTION)
     STORE.save("metric", "loading_localization", LOCALIZATION)
+    STORE.save(
+        "metric", "multimodal_instrument_selection",
+        MULTIMODAL_INSTRUMENT_SELECTION,
+    )
+    print(json.dumps(MULTIMODAL_INSTRUMENT_SELECTION, indent=2))
     print(json.dumps(PAIR_SELECTION, indent=2))
     print(json.dumps(LOCALIZATION, indent=2))
 elif RUN_STAGE2_MULTIMODAL_LOADING_DEVELOPMENT:
@@ -934,6 +1215,12 @@ if RUN_STAGE3_FREEZE_DESIGN:
         CONFIRMATION_DESIGN["forbidden_development_image_ids"] = sorted(DEV_IMAGE_IDS)
         CONFIRMATION_DESIGN["forbidden_development_group_ids"] = sorted(DEV_GROUP_IDS)
         CONFIRMATION_DESIGN["forbidden_prior_image_ids"] = sorted(PRIOR_EXCLUDED_IMAGES)
+        CONFIRMATION_DESIGN["multimodal_instrument"] = (
+            MULTIMODAL_INSTRUMENT_SELECTION["selected_instrument"]
+        )
+        CONFIRMATION_DESIGN["multimodal_instrument_selection_digest"] = (
+            MULTIMODAL_INSTRUMENT_SELECTION["selection_digest"]
+        )
         CONFIRMATION_DESIGN["design_digest"] = payload_checksum(
             {k: v for k, v in CONFIRMATION_DESIGN.items() if k != "design_digest"}
         )
@@ -967,6 +1254,21 @@ if REAL_MODE and RUN_STAGE4_FRESH_CONFIRMATION and CONFIRM_MODEL_LOAD and CONFIR
     if CONFIRMATION_DESIGN is None:
         print("Stage 4 did not spend: Stage 3 produced no frozen design.")
     else:
+        if MULTIMODAL_INSTRUMENT_SELECTION is None:
+            MULTIMODAL_INSTRUMENT_SELECTION = STORE.load(
+                "metric", "multimodal_instrument_selection"
+            )
+        _selected_multimodal = MULTIMODAL_INSTRUMENT_SELECTION[
+            "selected_instrument"
+        ]
+        if _selected_multimodal == "matched_pooled_j":
+            SELECTED_MULTIMODAL_LENS = MATCHED_LENSES["pooled"]
+        elif _selected_multimodal == "matched_pooled_r" and "pooled" in R_LENSES:
+            SELECTED_MULTIMODAL_LENS = R_LENSES["pooled"]
+        else:
+            raise RuntimeError(
+                "the frozen multimodal instrument is unavailable in this session"
+            )
         source, target = CONFIRMATION_DESIGN["pair"]
         directions = ((source, target), (target, source))
         freshness = assert_fresh_population(
@@ -993,7 +1295,7 @@ if REAL_MODE and RUN_STAGE4_FRESH_CONFIRMATION and CONFIRM_MODEL_LOAD and CONFIR
         direction_assets = {}
         for direction_index, (direction_source, direction_target) in enumerate(directions):
             exact_bases = build_swap_bases_for_lens(
-                MATCHED_LENSES["pooled"], BACKEND.unembedding_weight(), layers=band,
+                SELECTED_MULTIMODAL_LENS, BACKEND.unembedding_weight(), layers=band,
                 source=TOKENS[direction_source], target=TOKENS[direction_target],
             )
             direction_assets[(direction_source, direction_target)] = {
@@ -1004,13 +1306,13 @@ if REAL_MODE and RUN_STAGE4_FRESH_CONFIRMATION and CONFIRM_MODEL_LOAD and CONFIR
                     ) for layer, basis in exact_bases.items()
                 },
                 "unrelated": build_swap_bases_for_lens(
-                    MATCHED_LENSES["pooled"], BACKEND.unembedding_weight(),
+                    SELECTED_MULTIMODAL_LENS, BACKEND.unembedding_weight(),
                     layers=band, source=TOKENS[CONTROL_CONCEPTS[0]],
                     target=TOKENS[CONTROL_CONCEPTS[1]],
                 ),
                 "answer_vectors": {
                     layer: selected_lens_vector(
-                        MATCHED_LENSES["pooled"], BACKEND.unembedding_weight(),
+                        SELECTED_MULTIMODAL_LENS, BACKEND.unembedding_weight(),
                         layer=layer,
                         token_id=TOKENS[
                             semantic_answer_concept(answers[direction_target])
@@ -1263,12 +1565,26 @@ if RUN_STAGE5_WRITE_REPORT:
     LOCALIZATION = LOCALIZATION or STORE.load("metric", "loading_localization")
     CONFIRMATION_DESIGN = CONFIRMATION_DESIGN or STORE.load("metric", "confirmation_design")
     CONFIRMATION_REPORT = CONFIRMATION_REPORT or STORE.load("metric", "fresh_confirmation_report")
+    LOADING_FIRST_SELECTION = LOADING_FIRST_SELECTION or STORE.load(
+        "metric", "loading_first_selection"
+    )
+    MULTIMODAL_INSTRUMENT_SELECTION = (
+        MULTIMODAL_INSTRUMENT_SELECTION
+        or STORE.load("metric", "multimodal_instrument_selection")
+    )
     FINAL = {
-        "schema": "jlens.mmpilot.paper_first_workspace_study.v2",
+        "schema": "jlens.mmpilot.paper_first_workspace_study.v3",
         "scientific_config": SCIENTIFIC_CONFIG,
         "population_plan": POPULATION_PLAN,
         "text_replication": TEXT_VERDICT,
         "text_swap_diagnostic": TEXT_DIAGNOSTIC_REPORT,
+        "text_loading_first_instrument": LOADING_FIRST_SELECTION,
+        "multimodal_loading_first_instrument": MULTIMODAL_INSTRUMENT_SELECTION,
+        "r_lens_inventory": (
+            json.loads((RUN_DIR / "r_lens_inventory.json").read_text())
+            if (RUN_DIR / "r_lens_inventory.json").is_file()
+            else None
+        ),
         "loading_pair_selection": PAIR_SELECTION,
         "loading_localization": LOCALIZATION,
         "frozen_confirmation_design": CONFIRMATION_DESIGN,
