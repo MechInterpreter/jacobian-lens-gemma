@@ -1359,6 +1359,7 @@ if (
                             answer=task.swapped_answer,
                             diagnostic_token_ids=diagnostic_tokens,
                             realization_policy=TEXT_MODEL_DTYPE_REALIZATION,
+                            alpha=TEXT_PRIMARY_ALPHA,
                         )
                     else:
                         raise RuntimeError(f"unknown diagnostic condition {condition}")

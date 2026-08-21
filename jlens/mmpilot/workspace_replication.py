@@ -925,13 +925,19 @@ def _norm_matched_direct_answer_band(
     position_rule: str = PRIMARY_POSITION_RULE,
     evidence_span: Sequence[int] | None = None,
     realization_policy: ModelDtypeRealizationPolicy | None = None,
+    alpha: float = 1.0,
 ):
     """Add the answer direction with each position's exact-swap update norm.
 
     This is a positive control, not a coordinate swap.  Its update has the
-    same post-cast L2 norm as the exact exchange would have had at that layer
-    and position, so a failure cannot be dismissed as comparing interventions
-    of unrelated intensity.
+    same post-cast L2 norm as the exchange would have had **at ``alpha``** at
+    that layer and position, so a failure cannot be dismissed as comparing
+    interventions of unrelated intensity.
+
+    ``alpha`` must be the same strength the swap arm uses.  It was previously
+    pinned to 1.0, which silently unmatched the control whenever the swap ran
+    at any other strength -- an alpha=2 run then compared a doubled swap
+    against an alpha=1 control and its pass rate measured nothing.
     """
 
     if set(map(int, bases)) != set(map(int, answer_vectors)):
@@ -992,7 +998,7 @@ def _norm_matched_direct_answer_band(
                     exact_after_cast, _ = swap_coordinates(
                         selected,
                         layer_basis.V,
-                        alpha=1.0,
+                        alpha=float(alpha),
                         realization_policy=realization_policy,
                     )
                     matched_norm = (
@@ -1145,6 +1151,7 @@ def unrestricted_greedy_direct_answer_trial(
     position_rule: str = PRIMARY_POSITION_RULE,
     diagnostic_token_ids: Mapping[str, int] | None = None,
     realization_policy: ModelDtypeRealizationPolicy | None = None,
+    alpha: float = 1.0,
 ) -> dict:
     with _norm_matched_direct_answer_band(
         backend.blocks,
@@ -1154,6 +1161,7 @@ def unrestricted_greedy_direct_answer_trial(
         position_rule=str(position_rule),
         evidence_span=getattr(inputs, "modality_token_range", None),
         realization_policy=realization_policy,
+        alpha=float(alpha),
     ) as stats:
         generated = unrestricted_greedy_completion(
             backend,
