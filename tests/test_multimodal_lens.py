@@ -178,6 +178,35 @@ def test_causal_population_reads_expanded_manifest_annotations():
     assert len(selected["bird"]) == 3
 
 
+def test_causal_population_rejects_target_evidence_in_labels_or_caption():
+    rows = []
+    for index, (caption, labels) in enumerate((
+        ("A bird flying over water", ["bird", "water"]),
+        ("A bird beside a cat", ["bird", "cat"]),
+        ("A bird on a branch", ["bird", "cat"]),
+        ("A bird above a field", ["bird", "field"]),
+    )):
+        rows.append({
+            "group_id": f"isolated_g{index}",
+            "image_id": f"isolated_i{index}",
+            "caption": caption,
+            "image_path": f"/images/{index}.jpg",
+            "audio_path": f"/audio/{index}.wav",
+            "concept_annotations": labels,
+        })
+    selected = select_causal_groups(
+        rows,
+        concepts=("bird",),
+        n_per_concept=2,
+        excluded_image_ids=(),
+        seed="target-isolation",
+        forbidden_concepts={"bird": ("cat",)},
+    )
+    assert {row["image_id"] for row in selected["bird"]} == {
+        "isolated_i0", "isolated_i3"
+    }
+
+
 def test_exact_swap_trial_is_unrestricted():
     backend = MockPilotBackend(MockWorld(), n_layers=4)
     identity = torch.eye(backend.d_model)

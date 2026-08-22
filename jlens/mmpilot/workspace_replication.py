@@ -2058,7 +2058,10 @@ def freeze_confirmation_design(
             "selected_band": list(text_band),
         }
     else:
-        if not text_verdict or text_verdict.get("verdict") != "TEXT_PAPER_REPLICATION_GO":
+        if not text_verdict or text_verdict.get("verdict") not in {
+            "TEXT_PAPER_REPLICATION_GO",
+            "L21_TEXT_CONFIRMATION_GO",
+        }:
             raise WorkspaceReplicationRefused(
                 "the text-only paper replication did not pass; multimodal "
                 "confirmation is blocked"

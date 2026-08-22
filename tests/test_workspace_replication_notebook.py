@@ -101,6 +101,13 @@ def test_notebook_enforces_the_paper_first_order() -> None:
     assert 'STORE.save("intervention", key, trial)' in source
     assert '_design_kwargs["text_diagnostic"] = TEXT_DIAGNOSTIC_REPORT' in source
     assert '_design_kwargs["text_verdict"] = TEXT_VERDICT' in source
+    assert 'STUDY_LAYER_WINDOW == "frozen_r_l21_confirmation"' in source
+    assert 'TEXT_TASK_SET != "probe_swap_v1"' in source
+    assert "discover_l21_run" in source
+    assert "task_level_loading_admission" in source
+    assert "L21_TEXT_CONFIRMATION_GO" in source
+    assert "L21_TRIMODAL_DOWNSTREAM_RECOMPUTATION_GO" in source
+    assert '"discovery_layer_and_instrument_frozen": True' in source
 
 
 def test_all_result_switches_default_false() -> None:

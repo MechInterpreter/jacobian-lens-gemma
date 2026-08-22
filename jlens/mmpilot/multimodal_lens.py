@@ -589,12 +589,20 @@ def select_causal_groups(
     n_per_concept: int,
     excluded_image_ids: Sequence[str],
     seed: str,
+    forbidden_concepts: Mapping[str, Sequence[str]] | None = None,
 ) -> dict[str, list[dict]]:
-    """Freeze fresh, distinct photographs for the unrestricted causal stage."""
+    """Freeze fresh, distinct photographs for the unrestricted causal stage.
+
+    ``forbidden_concepts`` prevents a source example from carrying evidence for
+    its intended swap target.  The exclusion is checked against both audited
+    object labels and the caption, so it applies to image, text, and spoken
+    caption inputs alike.
+    """
 
     excluded = {str(value) for value in excluded_image_ids}
     result: dict[str, list[dict]] = {}
     for concept in concepts:
+        forbidden = tuple((forbidden_concepts or {}).get(str(concept), ()))
         by_image: dict[str, list[dict]] = {}
         for raw in groups:
             group = dict(raw)
@@ -611,6 +619,12 @@ def select_causal_groups(
             )
             mentioned = _surface_contains(str(group.get("caption") or ""), concept)
             if not (labelled and mentioned):
+                continue
+            if any(
+                _surface_contains(value, other)
+                for other in forbidden
+                for value in (*_concept_fields(group), str(group.get("caption") or ""))
+            ):
                 continue
             by_image.setdefault(image_id, []).append(group)
         representatives = [

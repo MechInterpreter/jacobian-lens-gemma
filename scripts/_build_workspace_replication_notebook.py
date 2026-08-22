@@ -34,6 +34,9 @@ The order is mandatory:
    L27-L32 and L33-L40 matrices are checksum-verified and concatenated into one
    contiguous L27-L40 lens without fitting or averaging. Other modes retain the
    original resumable fitting path.
+   In `frozen_r_l21_confirmation` mode, the exploratory L21 run is located by
+   its immutable unit fingerprint, its text and pooled R-lenses are reused
+   without fitting, and neither its layer nor its instrument can be reselected.
 1. **Clean text loading, then text replication.** Compare the published text
    J-lens, matched text/pooled J-lenses, and matched text/pooled R-lenses on the
    same clean task activations. Select the instrument and contiguous band using
@@ -76,6 +79,12 @@ If the text replication or clean-loading gate fails, later causal spending is
 blocked. No threshold, pair, layer, position, or alpha may be changed after its
 gate has seen results. R-Lens changes how each per-layer map is fitted; it does
 not change Anthropic's later two-coordinate, all-position, contiguous-band clamp.
+
+The L21 confirmation mode uses Anthropic's checked-in 90-item `probe-swap`
+population as a prompt-disjoint text confirmation set.  Tokenization, clean
+capability, and positive task-level source loading are the only admissibility
+filters, all evaluated before a causal hook runs.  A passing text result then
+licenses the existing fresh, disjoint text/image/spoken-audio confirmation.
 """
 )
 
@@ -188,10 +197,17 @@ elif STUDY_LAYER_WINDOW == "mid_r_l21_l29":
     # so the involution parity hazard does not apply.
     LAYERS = tuple(range(21, 30))
     SCIENTIFIC_IMPLEMENTATION_ID = "paper-band-mid-r-l21-l29.v1"
+elif STUDY_LAYER_WINDOW == "frozen_r_l21_confirmation":
+    # Prospective confirmation of the exploratory L21 result.  The source
+    # R-lens is discovered by its immutable unit fingerprint and reused; no
+    # fitting and no new layer selection are permitted in this mode.
+    LAYERS = (21,)
+    SCIENTIFIC_IMPLEMENTATION_ID = "frozen-r-l21-probe-swap-confirmation.v1"
 else:
     raise ValueError(
         "STUDY_LAYER_WINDOW must be 'late_jr_l33_l40', 'early_r_l27_l32', "
-        "'combined_r_l27_l40', 'mid_r_l21_l29', or 'all_r_l01_l40'"
+        "'combined_r_l27_l40', 'mid_r_l21_l29', "
+        "'frozen_r_l21_confirmation', or 'all_r_l01_l40'"
     )
 TEXT_PRIMARY_ALPHA = 2.0 if STUDY_LAYER_WINDOW == "combined_r_l27_l40" else 1.0
 # Instrument-power override, set from the POSITIVE CONTROL only.
@@ -242,9 +258,26 @@ R_LENS_DIM_BATCH = 4 if STUDY_LAYER_WINDOW == "all_r_l01_l40" else 8
 # the selector one fewer candidate; it does not change how any candidate is
 # scored. This is in SCIENTIFIC_CONFIG, so it changes the fingerprint.
 R_LENS_ARMS = ("text",) if STUDY_LAYER_WINDOW == "all_r_l01_l40" else ("text", "pooled")
+L21_CONFIRMATION_MODE = STUDY_LAYER_WINDOW == "frozen_r_l21_confirmation"
+if L21_CONFIRMATION_MODE:
+    if RUN_STAGE0_FIT_MATCHED_R_LENSES:
+        raise RuntimeError(
+            "frozen_r_l21_confirmation reuses the verified discovery lens; "
+            "RUN_STAGE0_FIT_MATCHED_R_LENSES must remain False"
+        )
+    if TEXT_TASK_SET != "probe_swap_v1":
+        raise RuntimeError(
+            "frozen_r_l21_confirmation requires TEXT_TASK_SET='probe_swap_v1'"
+        )
 EVIDENCE_POSITION_MARGIN = 0.0
 MIN_CONFIRMATION_SUCCESS_RATE = 0.50
 CONFIRMATION_FAMILYWISE_ALPHA = 0.05
+L21_TEXT_MIN_ELIGIBLE_TASKS = 30
+L21_TEXT_MIN_EXACT_SUCCESSES = 5
+L21_TEXT_MIN_EXACT_SUCCESS_RATE = 0.15
+L21_TEXT_MIN_SUCCESS_CATEGORIES = 2
+L21_MULTIMODAL_MIN_SUCCESS_RATE = 0.25
+L21_MULTIMODAL_MIN_SUCCESSES_PER_MODALITY = 4
 DEVELOPMENT_SEED = "paper-first-loading-development-20260820-v1"
 CONFIRMATION_SEED = "paper-first-fresh-confirmation-20260820-v1"
 PROMPT_PROTOCOL = "mmpilot.implicit_animal_property_open_output.v1"
@@ -309,7 +342,20 @@ else:
     MATCHED_FIT_PLAN_PATH = None
     EARLY_R_LENS_RUN_DIR = LATE_R_LENS_RUN_DIR = None
 
-if TEXT_TASK_SET not in ("frozen_v1", "expanded_v1", "expanded_v2"):
+L21_DISCOVERY = None
+if REAL_MODE and L21_CONFIRMATION_MODE:
+    from jlens.mmpilot.l21_confirmation import discover_l21_run
+
+    L21_DISCOVERY = discover_l21_run(RUNS_ROOT)
+    L21_DISCOVERY_RUN_DIR = Path(L21_DISCOVERY["run_dir"])
+    print("frozen L21 discovery", L21_DISCOVERY_RUN_DIR)
+    print("source fingerprint", L21_DISCOVERY["fingerprint_digest"])
+elif L21_CONFIRMATION_MODE:
+    L21_DISCOVERY_RUN_DIR = None
+
+if TEXT_TASK_SET not in (
+    "frozen_v1", "expanded_v1", "expanded_v2", "probe_swap_v1",
+):
     raise ValueError(f"unknown TEXT_TASK_SET {TEXT_TASK_SET!r}")
 _wr = __import__(
     "jlens.mmpilot.workspace_replication",
@@ -319,11 +365,23 @@ _wr = __import__(
         "anthropic_text_tasks_expanded_v2",
     ],
 )
-TEXT_TASKS = {
+_task_builders = {
     "frozen_v1": _wr.anthropic_text_tasks,
     "expanded_v1": _wr.anthropic_text_tasks_expanded_v1,
     "expanded_v2": _wr.anthropic_text_tasks_expanded_v2,
-}[TEXT_TASK_SET]()
+}
+if TEXT_TASK_SET == "probe_swap_v1":
+    from jlens.mmpilot.l21_confirmation import (
+        assert_disjoint_from_discovery, probe_swap_tasks,
+    )
+
+    TEXT_TASKS = probe_swap_tasks(REPO_DIR / "data" / "experiments" / "probe-swap.json")
+    DISCOVERY_DISJOINTNESS = assert_disjoint_from_discovery(
+        TEXT_TASKS, _wr.anthropic_text_tasks_expanded_v2()
+    )
+    print("discovery disjointness", DISCOVERY_DISJOINTNESS)
+else:
+    TEXT_TASKS = _task_builders[TEXT_TASK_SET]()
 print("TEXT TASK SET", TEXT_TASK_SET, "digest", _wr.text_task_digest(TEXT_TASKS))
 TEXT_DIAGNOSTIC_BANDS = __import__(
     "jlens.mmpilot.workspace_replication", fromlist=["text_diagnostic_bands"]
@@ -357,8 +415,10 @@ print("  no intervention forwards in Stage 2")
 print("FRESH CONFIRMATION UPPER BOUND")
 print("  clean generation forwards",
       CONFIRMATION_IMAGES_PER_SOURCE * 3 * 2 * 2 * 2)
-print("  six causal/control conditions, two directions, two-token generation",
-      CONFIRMATION_IMAGES_PER_SOURCE * 3 * 2 * 2 * 6 * 2)
+_confirmation_conditions = 4 if L21_CONFIRMATION_MODE else 6
+print("  causal/control conditions", _confirmation_conditions,
+      "two directions, two-token generation",
+      CONFIRMATION_IMAGES_PER_SOURCE * 3 * 2 * 2 * _confirmation_conditions * 2)
 print("RESUME UNIT: one two-token condition JSON; completed work lost = 0")
 print("MATCHED R-LENS FIT — same frozen 99 examples as each J-Lens arm")
 print("  arms text + pooled; layers", list(LAYERS))
@@ -379,6 +439,8 @@ if REAL_MODE:
     ]
     if STUDY_LAYER_WINDOW == "combined_r_l27_l40":
         _required_paths.extend((EARLY_R_LENS_RUN_DIR, LATE_R_LENS_RUN_DIR))
+    if L21_CONFIRMATION_MODE:
+        _required_paths.append(L21_DISCOVERY_RUN_DIR)
     missing = [path for path in _required_paths if not path.exists()]
     if missing:
         raise FileNotFoundError("configured artifact(s) missing:\n  " + "\n  ".join(map(str, missing)))
@@ -474,25 +536,76 @@ if RUN_TASK_TOKEN_PREFLIGHT:
     def _encode(text):
         return _tok.encode(text, add_special_tokens=False)
 
-    TASK_TOKEN_PREFLIGHT = task_set_token_preflight(
-        TEXT_TASKS, _encode,
-        extra_concepts=("Japan", "Brazil", *CONTROL_CONCEPTS),
-    )
+    if L21_CONFIRMATION_MODE:
+        from jlens.mmpilot.coordinate_swap import (
+            MultiTokenConceptError, resolve_concept_token,
+        )
+        from jlens.mmpilot.store import payload_checksum
+
+        _required = set(CONTROL_CONCEPTS) | {
+            name for pair in CANDIDATE_PAIRS for name in pair
+        }
+        _resolved, _unresolved = {}, {}
+        for _name in sorted(
+            {task.source for task in TEXT_TASKS}
+            | {task.target for task in TEXT_TASKS}
+            | _required
+        ):
+            try:
+                _resolved[_name] = resolve_concept_token(_encode, _name).to_dict()
+            except MultiTokenConceptError as _error:
+                _unresolved[_name] = str(_error)
+        _eligible = [
+            task.task_id for task in TEXT_TASKS
+            if task.source in _resolved and task.target in _resolved
+        ]
+        _required_missing = sorted(_required - set(_resolved))
+        TASK_TOKEN_PREFLIGHT = {
+            "version": "mmpilot.l21_probe_swap_token_preflight.v1",
+            "task_digest": _wr.text_task_digest(TEXT_TASKS),
+            "n_tasks": len(TEXT_TASKS),
+            "n_token_eligible_tasks": len(_eligible),
+            "eligible_task_ids": _eligible,
+            "unresolvable": _unresolved,
+            "required_multimodal_concepts_missing": _required_missing,
+            "passed": (
+                len(_eligible) >= L21_TEXT_MIN_ELIGIBLE_TASKS
+                and not _required_missing
+            ),
+        }
+        TASK_TOKEN_PREFLIGHT["preflight_checksum"] = payload_checksum(
+            TASK_TOKEN_PREFLIGHT
+        )
+    else:
+        TASK_TOKEN_PREFLIGHT = task_set_token_preflight(
+            TEXT_TASKS, _encode,
+            extra_concepts=("Japan", "Brazil", *CONTROL_CONCEPTS),
+        )
     print("task set", TEXT_TASK_SET, "digest", TASK_TOKEN_PREFLIGHT["task_digest"])
-    print("tasks", TASK_TOKEN_PREFLIGHT["n_tasks"],
-          TASK_TOKEN_PREFLIGHT["tasks_by_family"])
-    print("concepts", TASK_TOKEN_PREFLIGHT["n_concepts"],
-          "single-token", TASK_TOKEN_PREFLIGHT["all_single_token"],
-          "collision-free", TASK_TOKEN_PREFLIGHT["no_collisions"])
+    print("tasks", TASK_TOKEN_PREFLIGHT["n_tasks"])
+    if L21_CONFIRMATION_MODE:
+        print("token-eligible", TASK_TOKEN_PREFLIGHT["n_token_eligible_tasks"])
+    else:
+        print(TASK_TOKEN_PREFLIGHT["tasks_by_family"])
+        print("concepts", TASK_TOKEN_PREFLIGHT["n_concepts"],
+              "single-token", TASK_TOKEN_PREFLIGHT["all_single_token"],
+              "collision-free", TASK_TOKEN_PREFLIGHT["no_collisions"])
     for _name, _why in sorted(TASK_TOKEN_PREFLIGHT["unresolvable"].items()):
         print("  UNRESOLVABLE", _name, "--", _why.splitlines()[0])
-    for _row in TASK_TOKEN_PREFLIGHT["collisions"]:
+    for _row in TASK_TOKEN_PREFLIGHT.get("collisions", ()):
         print("  COLLISION", _row)
     print("checksum", TASK_TOKEN_PREFLIGHT["preflight_checksum"])
 
     # Refuses here, on CPU, rather than after the 16 GB download.
-    assert_task_set_resolvable(TASK_TOKEN_PREFLIGHT)
-    print("PREFLIGHT PASSED — every concept is one token; no role collides")
+    if L21_CONFIRMATION_MODE:
+        if not TASK_TOKEN_PREFLIGHT["passed"]:
+            raise RuntimeError(
+                "L21 probe-swap preflight left too few eligible tasks or "
+                "an unresolved required multimodal concept"
+            )
+    else:
+        assert_task_set_resolvable(TASK_TOKEN_PREFLIGHT)
+    print("PREFLIGHT PASSED")
     print("Still unproven: whether Gemma answers each clean prompt correctly.")
     print("That is Stage 1's capability gate, and it needs the model.")
 else:
@@ -565,10 +678,17 @@ if REAL_MODE:
             "excluded_groups": len(_spent_groups),
         })
     source_names = sorted({name for pair in CANDIDATE_PAIRS for name in pair})
+    PAIR_TARGET_EXCLUSIONS = {
+        source_name: sorted({target for left, right in CANDIDATE_PAIRS
+                             for source, target in ((left, right), (right, left))
+                             if source == source_name and source != target})
+        for source_name in source_names
+    }
     DEV_POOL = select_causal_groups(
         GROUPS, concepts=source_names,
         n_per_concept=DEVELOPMENT_IMAGES_PER_SOURCE,
         excluded_image_ids=sorted(PRIOR_EXCLUDED_IMAGES), seed=DEVELOPMENT_SEED,
+        forbidden_concepts=PAIR_TARGET_EXCLUSIONS,
     )
     DEV_GROUPS = [{**row, "concept": name} for name in source_names for row in DEV_POOL[name]]
     DEV_IMAGE_IDS = {str(row["image_id"]) for row in DEV_GROUPS}
@@ -578,6 +698,7 @@ if REAL_MODE:
         n_per_concept=CONFIRMATION_IMAGES_PER_SOURCE,
         excluded_image_ids=sorted(PRIOR_EXCLUDED_IMAGES | DEV_IMAGE_IDS),
         seed=CONFIRMATION_SEED,
+        forbidden_concepts=PAIR_TARGET_EXCLUSIONS,
     )
     CONFIRM_GROUPS = [{**row, "concept": name} for name in source_names for row in CONFIRM_POOL[name]]
     from jlens.mmpilot.workspace_replication import assert_fresh_population
@@ -591,6 +712,7 @@ if REAL_MODE:
         "prior_workspace_population_sources": _workspace_plan_sources,
         "prior_workspace_excluded_image_ids": sorted(PRIOR_EXCLUDED_IMAGES),
         "prior_workspace_excluded_group_ids": sorted(PRIOR_EXCLUDED_GROUPS),
+        "pair_target_exclusions": PAIR_TARGET_EXCLUSIONS,
         "development": [{"group_id": r["group_id"], "image_id": r["image_id"], "concept": r.get("concept")} for r in DEV_GROUPS],
         "confirmation": [{"group_id": r["group_id"], "image_id": r["image_id"], "concept": r.get("concept")} for r in CONFIRM_GROUPS],
         "freshness": FRESHNESS,
@@ -661,6 +783,20 @@ SCIENTIFIC_CONFIG = {
     "r_lens_fit_arms": list(R_LENS_ARMS),
     "r_lens_checkpoint_every": R_LENS_CHECKPOINT_EVERY,
     "combined_r_source_provenance": COMBINED_R_SOURCE_PROVENANCE,
+    "l21_discovery_source": L21_DISCOVERY,
+    "l21_text_confirmation_thresholds": {
+        "min_eligible_tasks": L21_TEXT_MIN_ELIGIBLE_TASKS,
+        "min_exact_successes": L21_TEXT_MIN_EXACT_SUCCESSES,
+        "min_exact_success_rate": L21_TEXT_MIN_EXACT_SUCCESS_RATE,
+        "min_success_categories": L21_TEXT_MIN_SUCCESS_CATEGORIES,
+        "familywise_alpha": CONFIRMATION_FAMILYWISE_ALPHA,
+    },
+    "l21_multimodal_confirmation_thresholds": {
+        "min_clean_capability_rate": 0.75,
+        "min_property_success_rate_per_modality": L21_MULTIMODAL_MIN_SUCCESS_RATE,
+        "min_property_successes_per_modality": L21_MULTIMODAL_MIN_SUCCESSES_PER_MODALITY,
+        "familywise_alpha": CONFIRMATION_FAMILYWISE_ALPHA,
+    },
     "evidence_position_margin": EVIDENCE_POSITION_MARGIN,
     "minimum_confirmation_success_rate": MIN_CONFIRMATION_SUCCESS_RATE,
     "confirmation_familywise_alpha": CONFIRMATION_FAMILYWISE_ALPHA,
@@ -679,6 +815,7 @@ FINGERPRINT = RunFingerprint(
     lens_checksum=payload_checksum({
         "corrected_text_run": str(CORRECTED_RUN_DIR),
         "matched_lens_run": str(MATCHED_LENS_RUN_DIR),
+        "frozen_l21_source": L21_DISCOVERY,
     }),
     manifest_checksum=MANIFEST_CHECKSUM,
     split_id=POPULATION_PLAN["plan_digest"],
@@ -723,17 +860,42 @@ if REAL_MODE and MODEL_STAGE and CONFIRM_MODEL_LOAD:
     assert_audio_protocol(BUNDLE.audio_interface, expected_fingerprint=AUDIO_PROTOCOL_FINGERPRINT)
     BACKEND = BUNDLE.backend
     from jlens.mmpilot.workspace_replication import semantic_answer_concept
-    names = sorted(
-        {task.source for task in TEXT_TASKS}
-        | {task.target for task in TEXT_TASKS}
-        | {semantic_answer_concept(task.clean_answer) for task in TEXT_TASKS}
-        | {semantic_answer_concept(task.swapped_answer) for task in TEXT_TASKS}
-        | {"Japan", "Brazil"}
-        | set(CONTROL_CONCEPTS)
-        | set(IMPLICIT_UNRELATED_CONCEPTS)
-    )
-    from jlens.mmpilot.coordinate_swap import resolve_concept_token
-    TEXT_CONCEPT_TOKENS = {name: resolve_concept_token(BACKEND.encode_candidate, name) for name in names}
+    if L21_CONFIRMATION_MODE:
+        names = sorted(
+            {task.source for task in TEXT_TASKS}
+            | {task.target for task in TEXT_TASKS}
+            | {name for pair in CANDIDATE_PAIRS for name in pair}
+            | set(CONTROL_CONCEPTS)
+        )
+    else:
+        names = sorted(
+            {task.source for task in TEXT_TASKS}
+            | {task.target for task in TEXT_TASKS}
+            | {semantic_answer_concept(task.clean_answer) for task in TEXT_TASKS}
+            | {semantic_answer_concept(task.swapped_answer) for task in TEXT_TASKS}
+            | {"Japan", "Brazil"}
+            | set(CONTROL_CONCEPTS)
+            | set(IMPLICIT_UNRELATED_CONCEPTS)
+        )
+    from jlens.mmpilot.coordinate_swap import MultiTokenConceptError, resolve_concept_token
+    TEXT_CONCEPT_TOKENS = {}
+    UNRESOLVABLE_TEXT_CONCEPTS = {}
+    for name in names:
+        try:
+            TEXT_CONCEPT_TOKENS[name] = resolve_concept_token(
+                BACKEND.encode_candidate, name
+            )
+        except MultiTokenConceptError as error:
+            if not L21_CONFIRMATION_MODE:
+                raise
+            UNRESOLVABLE_TEXT_CONCEPTS[name] = str(error)
+    TEXT_TOKEN_ELIGIBLE_TASK_IDS = {
+        task.task_id for task in TEXT_TASKS
+        if task.source in TEXT_CONCEPT_TOKENS and task.target in TEXT_CONCEPT_TOKENS
+    }
+    if L21_CONFIRMATION_MODE:
+        print("token-eligible probe-swap tasks", len(TEXT_TOKEN_ELIGIBLE_TASK_IDS))
+        print("unresolvable concepts", UNRESOLVABLE_TEXT_CONCEPTS)
     for arm in ("text", "image", "spoken_audio", "pooled"):
         MATCHED_LENSES[arm] = JacobianLens.load(str(MATCHED_LENS_RUN_DIR / "lenses" / f"lens.{arm}.pt"))
     from jlens.mmpilot.multimodal_lens import (
@@ -786,6 +948,7 @@ if REAL_MODE and MODEL_STAGE and CONFIRM_MODEL_LOAD:
                 )
     elif STUDY_LAYER_WINDOW in (
         "early_r_l27_l32", "mid_r_l21_l29", "all_r_l01_l40",
+        "frozen_r_l21_confirmation",
     ):
         print(
             STUDY_LAYER_WINDOW,
@@ -838,6 +1001,10 @@ if REAL_MODE and MODEL_STAGE and CONFIRM_MODEL_LOAD:
     )
     for _arm in R_LENS_ARMS:
         _path = RUN_DIR / "r_lenses" / f"lens.{_arm}.pt"
+        _l21_source_path = (
+            Path(L21_DISCOVERY["artifacts"][_arm]["path"])
+            if L21_CONFIRMATION_MODE else None
+        )
         _early_path = (
             EARLY_R_LENS_RUN_DIR / "r_lenses" / f"lens.{_arm}.pt"
             if EARLY_R_LENS_RUN_DIR is not None
@@ -845,6 +1012,15 @@ if REAL_MODE and MODEL_STAGE and CONFIRM_MODEL_LOAD:
         )
         if STUDY_LAYER_WINDOW == "combined_r_l27_l40":
             pass
+        elif L21_CONFIRMATION_MODE:
+            _candidate = JacobianLens.load(str(_l21_source_path))
+            if set(LAYERS) != {21} or 21 not in _candidate.jacobians:
+                raise RuntimeError(
+                    f"{_l21_source_path} does not contain the frozen L21 lens"
+                )
+            R_LENSES[_arm] = _candidate
+            R_LENS_SOURCE_PATHS[_arm] = _l21_source_path
+            print("R-lens", _arm, "reused from frozen discovery", _l21_source_path)
         elif _path.is_file():
             R_LENSES[_arm] = JacobianLens.load(str(_path))
             R_LENS_SOURCE_PATHS[_arm] = _path
@@ -985,7 +1161,7 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
     from jlens.mmpilot.store import safe_key
     from jlens.mmpilot.workspace_replication import (
         TEXT_MAX_NEW_TOKENS, build_assistant_prefill_completion_inputs,
-        capture_source_loading, text_capability_verdict,
+        capture_source_loading, completion_answer_matches, text_capability_verdict,
         semantic_answer_concept, swapped_answer_diagnostic_tokens,
         text_replication_verdict,
         unrestricted_greedy_completion, unrestricted_greedy_swap_trial,
@@ -1032,7 +1208,28 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
             "pass", stored["clean_correct"],
         )
 
-    TEXT_CAPABILITY = text_capability_verdict(capability_rows, tasks=TEXT_TASKS)
+    if L21_CONFIRMATION_MODE:
+        _clean_token_eligible = [
+            row for row in capability_rows
+            if row["task_id"] in TEXT_TOKEN_ELIGIBLE_TASK_IDS
+            and row["clean_correct"]
+        ]
+        TEXT_CAPABILITY = {
+            "version": "mmpilot.l21_probe_swap_capability.v1",
+            "verdict": "L21_TEXT_CAPABILITY_GO",
+            "n_total_tasks": len(TEXT_TASKS),
+            "n_token_eligible_tasks": len(TEXT_TOKEN_ELIGIBLE_TASK_IDS),
+            "n_clean_token_eligible_tasks": len(_clean_token_eligible),
+            "causal_spending_licensed": (
+                len(_clean_token_eligible) >= L21_TEXT_MIN_ELIGIBLE_TASKS
+            ),
+            "selection_uses_only_tokenization_and_clean_output": True,
+        }
+        if not TEXT_CAPABILITY["causal_spending_licensed"]:
+            TEXT_CAPABILITY["verdict"] = "L21_TEXT_CAPABILITY_NO_GO"
+        TEXT_CAPABILITY["report_checksum"] = payload_checksum(TEXT_CAPABILITY)
+    else:
+        TEXT_CAPABILITY = text_capability_verdict(capability_rows, tasks=TEXT_TASKS)
     STORE.save("metric", "text_capability_verdict", TEXT_CAPABILITY)
     print(json.dumps(TEXT_CAPABILITY, indent=2))
 
@@ -1041,9 +1238,26 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
     # intervention outcomes cannot influence the instrument or band.
     from jlens.mmpilot.loading_first import select_loading_instrument
     loading_by_instrument = {}
-    for instrument, vectors in sorted(INSTRUMENT_VECTORS.items()):
+    _loading_instruments = (
+        {"matched_text_r": INSTRUMENT_VECTORS["matched_text_r"]}
+        if L21_CONFIRMATION_MODE else INSTRUMENT_VECTORS
+    )
+    _clean_correct_by_task = {
+        row["task_id"]: bool(row["clean_correct"]) for row in capability_rows
+    }
+    _loading_tasks = [
+        task for task in TEXT_TASKS
+        if (
+            not L21_CONFIRMATION_MODE
+            or (
+                task.task_id in TEXT_TOKEN_ELIGIBLE_TASK_IDS
+                and _clean_correct_by_task[task.task_id]
+            )
+        )
+    ]
+    for instrument, vectors in sorted(_loading_instruments.items()):
         instrument_rows = []
-        for task in TEXT_TASKS:
+        for task in _loading_tasks:
             key = safe_key("loading-first", instrument, task.task_id)
             stored = STORE.load("activation", key)
             if stored is None:
@@ -1051,6 +1265,7 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
                     BACKEND, task.prompt
                 )
                 controls = (
+                    CONTROL_CONCEPTS if L21_CONFIRMATION_MODE else
                     IMPLICIT_UNRELATED_CONCEPTS
                     if task.family == "implicit_two_hop"
                     else ("Japan", "Brazil")
@@ -1074,14 +1289,43 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
             print("clean loading", instrument, task.task_id, work)
         loading_by_instrument[instrument] = instrument_rows
 
-    LOADING_FIRST_SELECTION = select_loading_instrument(
-        loading_by_instrument,
-        tasks=[task.task_id for task in TEXT_TASKS],
-        layers=LAYERS,
-        position_class="final_prompt_token",
-        min_source_cosine=MIN_SOURCE_COSINE,
-        min_source_advantage=MIN_SOURCE_ADVANTAGE,
-    )
+    if L21_CONFIRMATION_MODE:
+        from jlens.mmpilot.l21_confirmation import task_level_loading_admission
+
+        _admission = task_level_loading_admission(
+            loading_by_instrument["matched_text_r"],
+            task_ids=[task.task_id for task in _loading_tasks],
+            layer=21,
+            min_source_cosine=MIN_SOURCE_COSINE,
+            min_source_advantage=MIN_SOURCE_ADVANTAGE,
+        )
+        LOADING_FIRST_SELECTION = {
+            "version": "mmpilot.l21_frozen_loading_admission.v1",
+            "verdict": (
+                "LOADING_FIRST_INSTRUMENT_GO"
+                if len(_admission["eligible_task_ids"])
+                >= L21_TEXT_MIN_ELIGIBLE_TASKS
+                else "LOADING_FIRST_INSTRUMENT_NO_GO"
+            ),
+            "selected_instrument": "matched_text_r",
+            "selected_band": [21],
+            "eligible_task_ids": _admission["eligible_task_ids"],
+            "task_level_admission": _admission,
+            "discovery_layer_and_instrument_frozen": True,
+            "causal_result_consulted": False,
+        }
+        LOADING_FIRST_SELECTION["selection_digest"] = payload_checksum(
+            LOADING_FIRST_SELECTION
+        )
+    else:
+        LOADING_FIRST_SELECTION = select_loading_instrument(
+            loading_by_instrument,
+            tasks=[task.task_id for task in TEXT_TASKS],
+            layers=LAYERS,
+            position_class="final_prompt_token",
+            min_source_cosine=MIN_SOURCE_COSINE,
+            min_source_advantage=MIN_SOURCE_ADVANTAGE,
+        )
     STORE.save("metric", "loading_first_selection", LOADING_FIRST_SELECTION)
     (RUN_DIR / "loading_first_selection.json").write_text(
         json.dumps(LOADING_FIRST_SELECTION, indent=2, default=str)
@@ -1098,7 +1342,12 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
         and LOADING_FIRST_SELECTION["verdict"]
         == "LOADING_FIRST_INSTRUMENT_GO"
     ):
-        for task in TEXT_TASKS:
+        _causal_task_ids = set(
+            LOADING_FIRST_SELECTION.get("eligible_task_ids") or
+            [task.task_id for task in TEXT_TASKS]
+        )
+        _causal_tasks = [task for task in TEXT_TASKS if task.task_id in _causal_task_ids]
+        for task in _causal_tasks:
             key = safe_key("text-paper", task.task_id)
             stored = STORE.load("intervention", key)
             if stored is not None:
@@ -1130,6 +1379,7 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
             # a source concept in the expanded set. CONTROL_CONCEPTS is the
             # study's own declared control_concepts, inert for legs/color/continent.
             controls = (
+                CONTROL_CONCEPTS if L21_CONFIRMATION_MODE else
                 IMPLICIT_UNRELATED_CONCEPTS
                 if task.family == "implicit_two_hop"
                 else ("Japan", "Brazil")
@@ -1181,6 +1431,9 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
                 "unrelated_primary_swapped_answer_generated": bool(
                     unrelated_result["answer_match"]
                 ),
+                "zero_swapped_answer_generated": completion_answer_matches(
+                    clean_record["clean"]["generated_text"], task.swapped_answer
+                ),
                 "clean": clean_record["clean"],
                 "exact": exact, "random": random, "unrelated": unrelated_result,
                 "loading_rows": [
@@ -1190,6 +1443,17 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
                 ],
                 "selected_instrument": SELECTED_INSTRUMENT,
                 "selected_band": list(ACTIVE_TEXT_LAYERS),
+                "integrity_passed": all(
+                    bool(result["intervention_diagnostics"].get("all_hooks_fired"))
+                    and bool(result["intervention_diagnostics"].get("all_finite"))
+                    and bool(result["intervention_diagnostics"].get(
+                        "all_model_dtype_realizations_converged", True
+                    ))
+                    and bool(result["intervention_diagnostics"].get(
+                        "post_cast_audit_passed", True
+                    ))
+                    for result in (exact, random, unrelated_result)
+                ),
             }
             if TEXT_PRIMARY_ALPHA == 1.0:
                 stored.update({
@@ -1210,9 +1474,32 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
                 "swapped answer generated",
                 stored["exact_primary_swapped_answer_generated"],
             )
-        TEXT_VERDICT = text_replication_verdict(
-            text_rows, primary_alpha=TEXT_PRIMARY_ALPHA, task_set=TEXT_TASKS
-        )
+        if L21_CONFIRMATION_MODE:
+            from jlens.mmpilot.l21_confirmation import (
+                L21TextThresholds, l21_text_confirmation_verdict,
+            )
+
+            _eligible_tasks = [
+                task for task in TEXT_TASKS if task.task_id in _causal_task_ids
+            ]
+            TEXT_VERDICT = l21_text_confirmation_verdict(
+                text_rows,
+                eligible_tasks=_eligible_tasks,
+                thresholds=L21TextThresholds(
+                    min_eligible_tasks=L21_TEXT_MIN_ELIGIBLE_TASKS,
+                    min_exact_successes=L21_TEXT_MIN_EXACT_SUCCESSES,
+                    min_exact_success_rate=L21_TEXT_MIN_EXACT_SUCCESS_RATE,
+                    min_success_categories=L21_TEXT_MIN_SUCCESS_CATEGORIES,
+                    familywise_alpha=CONFIRMATION_FAMILYWISE_ALPHA,
+                ),
+            )
+            (RUN_DIR / "l21_text_confirmation_report.json").write_text(
+                json.dumps(TEXT_VERDICT, indent=2, default=str)
+            )
+        else:
+            TEXT_VERDICT = text_replication_verdict(
+                text_rows, primary_alpha=TEXT_PRIMARY_ALPHA, task_set=TEXT_TASKS
+            )
     else:
         _blocked_verdict = (
             "TEXT_LOADING_FIRST_NO_GO"
@@ -1480,7 +1767,9 @@ MULTIMODAL_INSTRUMENT_SELECTION = STORE.load(
 )
 TEXT_CAUSAL_GATE_MET = bool(
     TEXT_VERDICT is not None
-    and TEXT_VERDICT.get("verdict") == "TEXT_PAPER_REPLICATION_GO"
+    and TEXT_VERDICT.get("verdict") in {
+        "TEXT_PAPER_REPLICATION_GO", "L21_TEXT_CONFIRMATION_GO",
+    }
 ) or bool(
     TEXT_DIAGNOSTIC_REPORT is not None
     and TEXT_DIAGNOSTIC_REPORT.get("verdict")
@@ -1809,13 +2098,19 @@ if REAL_MODE and RUN_STAGE4_FRESH_CONFIRMATION and CONFIRM_MODEL_LOAD and CONFIR
         _random_key = f"random_{_primary_tag}"
         _unrelated_key = f"unrelated_{_primary_tag}"
         _sensitivity_key = f"exact_{_sensitivity_tag}"
-        condition_specs = (
+        _primary_condition_specs = (
             (_exact_key, "exact", _primary_alpha),
             ("zero", "exact", 0.0),
             (_random_key, "random", _primary_alpha),
             (_unrelated_key, "unrelated", _primary_alpha),
-            (_sensitivity_key, "exact", _sensitivity_alpha),
-            ("direct_answer_norm_matched", "direct", None),
+        )
+        condition_specs = (
+            _primary_condition_specs
+            if L21_CONFIRMATION_MODE
+            else _primary_condition_specs + (
+                (_sensitivity_key, "exact", _sensitivity_alpha),
+                ("direct_answer_norm_matched", "direct", None),
+            )
         )
         completed = computed = reused = 0
         for direction_source, direction_target in directions:
@@ -1920,11 +2215,17 @@ if REAL_MODE and RUN_STAGE4_FRESH_CONFIRMATION and CONFIRM_MODEL_LOAD and CONFIR
                         "primary_alpha": _primary_alpha,
                         "primary_success": sum(row["conditions"][_exact_key]["success"] for row in cell) / len(cell),
                         "sensitivity_alpha": _sensitivity_alpha,
-                        "sensitivity_success": sum(row["conditions"][_sensitivity_key]["success"] for row in cell) / len(cell),
+                        "sensitivity_success": (
+                            None if L21_CONFIRMATION_MODE else
+                            sum(row["conditions"][_sensitivity_key]["success"] for row in cell) / len(cell)
+                        ),
                         "zero_success": sum(row["conditions"]["zero"]["success"] for row in cell) / len(cell),
                         "random_primary_success": sum(row["conditions"][_random_key]["success"] for row in cell) / len(cell),
                         "unrelated_primary_success": sum(row["conditions"][_unrelated_key]["success"] for row in cell) / len(cell),
-                        "direct_answer_success": sum(row["conditions"]["direct_answer_norm_matched"]["success"] for row in cell) / len(cell),
+                        "direct_answer_success": (
+                            None if L21_CONFIRMATION_MODE else
+                            sum(row["conditions"]["direct_answer_norm_matched"]["success"] for row in cell) / len(cell)
+                        ),
                         "all_condition_integrity": all(
                             condition_integrity(trial)
                             for row in cell for trial in row["conditions"].values()
@@ -1987,7 +2288,9 @@ if REAL_MODE and RUN_STAGE4_FRESH_CONFIRMATION and CONFIRM_MODEL_LOAD and CONFIR
             )
         integrity = all(cell["all_condition_integrity"] for cell in cells)
         capability = all(cell["clean_capability"] >= 0.75 for cell in cells)
-        positive_control = all(cell["direct_answer_success"] >= 0.50 for cell in cells)
+        positive_control = L21_CONFIRMATION_MODE or all(
+            cell["direct_answer_success"] >= 0.50 for cell in cells
+        )
         primary = all(
             cell["primary_success"] >= MIN_CONFIRMATION_SUCCESS_RATE
             and cell["primary_success"] > max(
@@ -2021,7 +2324,7 @@ if REAL_MODE and RUN_STAGE4_FRESH_CONFIRMATION and CONFIRM_MODEL_LOAD and CONFIR
             if primary and downstream
             else "FRESH_MULTIMODAL_CONFIRMATION_NO_GO"
         )
-        CONFIRMATION_REPORT = {
+        _legacy_confirmation_report = {
             "version": "mmpilot.fresh_multimodal_confirmation.v2",
             "verdict": verdict, "text_only_verdict": text_verdict,
             "design": CONFIRMATION_DESIGN, "freshness": freshness,
@@ -2042,6 +2345,63 @@ if REAL_MODE and RUN_STAGE4_FRESH_CONFIRMATION and CONFIRM_MODEL_LOAD and CONFIR
             "atomic_resume_unit": "one two-token condition",
             "maximum_completed_forward_passes_lost_on_disconnect": 0,
         }
+        if L21_CONFIRMATION_MODE:
+            from jlens.mmpilot.l21_confirmation import (
+                L21MultimodalThresholds,
+                l21_multimodal_confirmation_verdict,
+            )
+
+            _l21_rows = []
+            for row in rows:
+                _conditions = row["conditions"]
+                _l21_rows.append({
+                    "group_id": row["group_id"],
+                    "image_id": row["image_id"],
+                    "direction": row["direction"],
+                    "modality": row["modality"],
+                    "prompt_kind": row["prompt_kind"],
+                    "clean_correct": row["clean_correct"],
+                    "primary_success": bool(
+                        _conditions[_exact_key]["success"]
+                    ),
+                    "zero_success": bool(_conditions["zero"]["success"]),
+                    "random_success": bool(
+                        _conditions[_random_key]["success"]
+                    ),
+                    "unrelated_success": bool(
+                        _conditions[_unrelated_key]["success"]
+                    ),
+                    "integrity_passed": all(
+                        condition_integrity(trial)
+                        for trial in _conditions.values()
+                    ),
+                })
+            CONFIRMATION_REPORT = l21_multimodal_confirmation_verdict(
+                _l21_rows,
+                thresholds=L21MultimodalThresholds(
+                    min_clean_capability_rate=0.75,
+                    min_property_success_rate_per_modality=(
+                        L21_MULTIMODAL_MIN_SUCCESS_RATE
+                    ),
+                    min_property_successes_per_modality=(
+                        L21_MULTIMODAL_MIN_SUCCESSES_PER_MODALITY
+                    ),
+                    familywise_alpha=CONFIRMATION_FAMILYWISE_ALPHA,
+                ),
+            )
+            CONFIRMATION_REPORT.update({
+                "design": CONFIRMATION_DESIGN,
+                "freshness": freshness,
+                "rows": rows,
+                "legacy_diagnostics": {
+                    key: value for key, value in _legacy_confirmation_report.items()
+                    if key != "rows"
+                },
+                "atomic_resume_unit": "one two-token condition",
+                "maximum_completed_forward_passes_lost_on_disconnect": 0,
+            })
+        else:
+            CONFIRMATION_REPORT = _legacy_confirmation_report
         CONFIRMATION_REPORT["report_checksum"] = payload_checksum(CONFIRMATION_REPORT)
         STORE.save("metric", "fresh_confirmation_report", CONFIRMATION_REPORT)
         (RUN_DIR / "fresh_multimodal_confirmation_report.json").write_text(json.dumps(CONFIRMATION_REPORT, indent=2, default=str))
@@ -2089,14 +2449,22 @@ if RUN_STAGE5_WRITE_REPORT:
         "fresh_confirmation": CONFIRMATION_REPORT,
         "claims": {
             "text_only_causal_recomputation_supported": bool(
-                CONFIRMATION_REPORT
-                and CONFIRMATION_REPORT.get("text_only_verdict")
-                == "FRESH_TEXT_CAUSAL_RECOMPUTATION_GO"
+                (
+                    TEXT_VERDICT
+                    and TEXT_VERDICT.get("verdict") == "L21_TEXT_CONFIRMATION_GO"
+                )
+                or (
+                    CONFIRMATION_REPORT
+                    and CONFIRMATION_REPORT.get("text_only_verdict")
+                    == "FRESH_TEXT_CAUSAL_RECOMPUTATION_GO"
+                )
             ),
             "strong_multimodal_causal_recomputation_supported": bool(
                 CONFIRMATION_REPORT
-                and CONFIRMATION_REPORT.get("verdict")
-                == "FRESH_MULTIMODAL_DOWNSTREAM_RECOMPUTATION_GO"
+                and CONFIRMATION_REPORT.get("verdict") in {
+                    "FRESH_MULTIMODAL_DOWNSTREAM_RECOMPUTATION_GO",
+                    "L21_TRIMODAL_DOWNSTREAM_RECOMPUTATION_GO",
+                }
             ),
         },
         "claim_boundary": (
