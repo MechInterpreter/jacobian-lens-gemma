@@ -245,7 +245,7 @@ elif STUDY_LAYER_WINDOW == "repair_existing_l21_l40":
     # L21 artifact plus the completed contiguous L27-L40 shards. The gap
     # L22-L26 is explicit, so no selected causal band can cross it.
     LAYERS = (21, *range(27, 41))
-    SCIENTIFIC_IMPLEMENTATION_ID = "multimodal-prefill-loading-repair.v1"
+    SCIENTIFIC_IMPLEMENTATION_ID = "multimodal-prefill-loading-repair.v2"
 else:
     raise ValueError(
         "STUDY_LAYER_WINDOW must be 'late_jr_l33_l40', 'early_r_l27_l32', "
@@ -376,17 +376,17 @@ L21_TEXT_MIN_SUCCESS_CATEGORIES = 2
 L21_MULTIMODAL_MIN_SUCCESS_RATE = 0.25
 L21_MULTIMODAL_MIN_SUCCESSES_PER_MODALITY = 4
 DEVELOPMENT_SEED = (
-    "multimodal-prefill-repair-development-20260821-v1"
+    "multimodal-prefill-repair-development-20260822-v2"
     if RUN_MULTIMODAL_PROTOCOL_REPAIR
     else "paper-first-loading-development-20260820-v1"
 )
 CONFIRMATION_SEED = (
-    "multimodal-prefill-repair-confirmation-20260821-v1"
+    "multimodal-prefill-repair-confirmation-20260822-v2"
     if RUN_MULTIMODAL_PROTOCOL_REPAIR
     else "paper-first-fresh-confirmation-20260820-v1"
 )
 PROMPT_PROTOCOL = (
-    "mmpilot.multimodal_assistant_prefill_completion.v1"
+    "mmpilot.multimodal_assistant_prefill_completion.v2"
     if RUN_MULTIMODAL_PROTOCOL_REPAIR
     else "mmpilot.implicit_animal_property_open_output.v1"
 )
