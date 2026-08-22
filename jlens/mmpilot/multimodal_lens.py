@@ -60,6 +60,9 @@ ANSWER_EQUIVALENCE_VERSION = (
 )
 CAUSAL_SOURCE_VERSION = "mmpilot.matched_multimodal_causal_source.v1"
 ALPHA_SWEEP_SOURCE_VERSION = "mmpilot.matched_multimodal_alpha_sweep_source.v1"
+BROAD_CONFIRMATION_SOURCE_VERSION = (
+    "mmpilot.broad_pooled_multimodal_confirmation_source.v1"
+)
 
 
 class MultimodalLensRefused(RuntimeError):
@@ -384,6 +387,94 @@ def load_completed_alpha_sweep_source(
             or ""
         ),
         "answer_equivalence": dict(causal.get("answer_equivalence") or {}),
+    }
+    return {**payload, "source_digest": payload_checksum(payload)}
+
+
+def load_broad_pooled_development_source(
+    run_dir: str | Path,
+    *,
+    expected_report_checksum: str,
+    expected_population_digest: str,
+    expected_lens_checksum: str,
+    expected_direction: tuple[str, str] = ("bird", "cat"),
+) -> dict:
+    """Pin the sole development winner before fresh confirmation opens data."""
+
+    root = Path(run_dir)
+    report = _verified_payload(
+        root / "broad_pooled_multimodal_j_workspace_report.json",
+        expected_checksum=expected_report_checksum,
+        label="broad pooled multimodal J-lens development report",
+    )
+    population_path = root / "development_population.json"
+    if not population_path.is_file():
+        raise MultimodalLensRefused(
+            f"missing broad development population: {population_path}"
+        )
+    population_payload = json.loads(population_path.read_text(encoding="utf-8"))
+    population = dict(population_payload.get("population") or {})
+    observed_population_digest = payload_checksum(population)
+    recorded_population_digest = str(
+        population_payload.get("population_digest") or ""
+    )
+    lens_path = root / "lenses" / "lens.pooled.l16_l40.pt"
+    observed_lens_checksum = (
+        file_sha256(str(lens_path)) if lens_path.is_file() else "missing"
+    )
+    direction = f"{expected_direction[0]}->{expected_direction[1]}"
+    problems: list[str] = []
+    if report.get("verdict") != "BROAD_POOLED_J_DEVELOPMENT_ALPHA1_GO":
+        problems.append("development did not return the alpha=1 GO verdict")
+    if list(report.get("alpha1_primary_passing_directions") or []) != [direction]:
+        problems.append("the sole frozen alpha=1 winner is not bird->cat")
+    if report.get("alpha2_sensitivity_passing_directions"):
+        problems.append("development unexpectedly records an alpha=2 winner")
+    if str(report.get("population_digest") or "") != expected_population_digest:
+        problems.append("report population digest differs from the pin")
+    if recorded_population_digest != expected_population_digest:
+        problems.append("population artifact digest differs from the pin")
+    if observed_population_digest != expected_population_digest:
+        problems.append("population contents no longer match their digest")
+    provenance = dict(report.get("lens_provenance") or {})
+    if provenance.get("combined_checksum") != expected_lens_checksum:
+        problems.append("report combined-lens checksum differs from the pin")
+    if observed_lens_checksum != expected_lens_checksum:
+        problems.append("combined-lens file checksum differs from the pin")
+    method = dict(report.get("method") or {})
+    if method.get("layers") != list(range(16, 41)):
+        problems.append("development did not patch the contiguous L16-L40 band")
+    if method.get("positions") != "every original prompt position":
+        problems.append("development used a different position rule")
+    if method.get("teacher_forcing_used") or method.get("candidate_list_supplied"):
+        problems.append("development used a restricted output endpoint")
+    excluded_image_ids = sorted(
+        {
+            str(row.get("image_id"))
+            for rows in population.values()
+            for row in rows
+            if str(row.get("image_id") or "").strip()
+        }
+    )
+    if not excluded_image_ids:
+        problems.append("development population contains no image identities")
+    if problems:
+        raise MultimodalLensRefused(
+            "the broad development run cannot seed confirmation:\n  - "
+            + "\n  - ".join(problems)
+        )
+    payload = {
+        "version": BROAD_CONFIRMATION_SOURCE_VERSION,
+        "run_dir": str(root),
+        "report_checksum": expected_report_checksum,
+        "population_digest": expected_population_digest,
+        "lens_checksum": expected_lens_checksum,
+        "lens_path": str(lens_path),
+        "direction": list(expected_direction),
+        "alpha": 1.0,
+        "layers": list(range(16, 41)),
+        "excluded_image_ids": excluded_image_ids,
+        "n_excluded_images": len(excluded_image_ids),
     }
     return {**payload, "source_digest": payload_checksum(payload)}
 
@@ -949,6 +1040,63 @@ def combine_layer_shards(
     )
 
 
+def paired_binary_one_sided_p(
+    primary: Sequence[bool], control: Sequence[bool]
+) -> dict:
+    """Exact one-sided paired sign test for binary intervention outcomes.
+
+    Only discordant pairs carry information.  Under the null, a discordant
+    outcome is equally likely to favour either condition, so the p-value is the
+    upper binomial tail for the number favouring ``primary``.  No SciPy runtime
+    dependency is required, which keeps the Colab confirmation self-contained.
+    """
+
+    left = [bool(value) for value in primary]
+    right = [bool(value) for value in control]
+    if len(left) != len(right) or not left:
+        raise MultimodalLensRefused(
+            "paired binary test requires equal non-empty outcome sequences"
+        )
+    primary_only = sum(a and not b for a, b in zip(left, right, strict=True))
+    control_only = sum(b and not a for a, b in zip(left, right, strict=True))
+    discordant = primary_only + control_only
+    if discordant == 0:
+        p_value = 1.0
+    else:
+        numerator = sum(
+            math.comb(discordant, successes)
+            for successes in range(primary_only, discordant + 1)
+        )
+        p_value = numerator / (2**discordant)
+    return {
+        "n": len(left),
+        "primary_only": primary_only,
+        "control_only": control_only,
+        "discordant": discordant,
+        "one_sided_p": float(min(1.0, p_value)),
+    }
+
+
+def holm_adjust(records: Sequence[Mapping], *, p_key: str = "one_sided_p") -> list[dict]:
+    """Return records with monotone Holm family-wise adjusted p-values."""
+
+    rows = [dict(record) for record in records]
+    if not rows:
+        return []
+    ordered = sorted(enumerate(rows), key=lambda item: float(item[1][p_key]))
+    adjusted_by_index: dict[int, float] = {}
+    running = 0.0
+    total = len(rows)
+    for rank, (original_index, row) in enumerate(ordered):
+        candidate = min(1.0, float(row[p_key]) * (total - rank))
+        running = max(running, candidate)
+        adjusted_by_index[original_index] = running
+    return [
+        {**row, "holm_adjusted_p": adjusted_by_index[index]}
+        for index, row in enumerate(rows)
+    ]
+
+
 def selected_lens_vector(
     lens: JacobianLens, unembedding_weight: torch.Tensor, *, layer: int, token_id: int
 ) -> torch.Tensor:
@@ -1305,8 +1453,11 @@ __all__ = [
     "fit_arm",
     "fit_budget",
     "fitting_prompt",
+    "holm_adjust",
     "jacobian_for_built_inputs",
     "load_completed_alpha_sweep_source",
+    "load_broad_pooled_development_source",
+    "paired_binary_one_sided_p",
     "plan_units",
     "selected_lens_vector",
     "select_causal_groups",

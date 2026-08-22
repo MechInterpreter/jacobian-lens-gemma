@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -17,11 +18,14 @@ from jlens.mmpilot.multimodal_lens import (
     combine_layer_shards,
     fit_arm,
     fit_budget,
+    holm_adjust,
     jacobian_for_built_inputs,
+    load_broad_pooled_development_source,
     load_completed_alpha_sweep_source,
     load_completed_causal_source,
     normalize_open_answer_surface,
     open_answer_matches,
+    paired_binary_one_sided_p,
     plan_units,
     select_causal_groups,
     unrestricted_swap_trial,
@@ -107,6 +111,33 @@ def test_combine_layer_shards_refuses_incompatible_inputs(defect: str):
         late = JacobianLens({18: torch.eye(2)}, n_prompts=99, d_model=2)
     with pytest.raises(MultimodalLensRefused):
         combine_layer_shards([early, late], expected_layers=range(16, 18))
+
+
+def test_paired_binary_test_and_holm_adjustment_are_exact():
+    exact = [True] * 16
+    zero = [False] * 16
+    unrelated = [True] + [False] * 15
+    zero_test = paired_binary_one_sided_p(exact, zero)
+    unrelated_test = paired_binary_one_sided_p(exact, unrelated)
+    assert zero_test["primary_only"] == 16
+    assert zero_test["one_sided_p"] == pytest.approx(1 / 2**16)
+    assert unrelated_test["primary_only"] == 15
+    assert unrelated_test["one_sided_p"] == pytest.approx(1 / 2**15)
+    adjusted = holm_adjust(
+        [
+            {"name": "zero", **zero_test},
+            {"name": "unrelated", **unrelated_test},
+        ]
+    )
+    assert adjusted[0]["holm_adjusted_p"] == pytest.approx(2 / 2**16)
+    assert adjusted[1]["holm_adjusted_p"] == pytest.approx(1 / 2**15)
+
+
+def test_paired_binary_test_refuses_unpaired_or_empty_data():
+    with pytest.raises(MultimodalLensRefused):
+        paired_binary_one_sided_p([], [])
+    with pytest.raises(MultimodalLensRefused):
+        paired_binary_one_sided_p([True], [False, True])
 
 
 def test_multimodal_jacobian_uses_processor_tensors():
@@ -530,3 +561,97 @@ def test_completed_alpha_sweep_source_freezes_the_measured_population(
     assert source["population_digest"] == "sha256:population"
     assert len(source["alpha1_exact_outcomes"]) == 192
     assert source["source_digest"].startswith("sha256:")
+
+
+def test_broad_development_source_pins_lens_population_and_winner(
+    tmp_path: Path,
+) -> None:
+    lens_path = tmp_path / "lenses" / "lens.pooled.l16_l40.pt"
+    lens_path.parent.mkdir(parents=True)
+    JacobianLens(
+        {layer: torch.eye(2) for layer in range(16, 41)},
+        n_prompts=99,
+        d_model=2,
+    ).save(str(lens_path))
+    lens_checksum = file_sha256(str(lens_path))
+    population = {
+        "bird": [{"group_id": "g1", "image_id": "i1"}],
+        "cat": [{"group_id": "g2", "image_id": "i2"}],
+    }
+    population_digest = payload_checksum(population)
+    (tmp_path / "development_population.json").write_text(
+        json.dumps(
+            {"population": population, "population_digest": population_digest}
+        )
+    )
+    _, report_checksum = _write_report(
+        tmp_path / "broad_pooled_multimodal_j_workspace_report.json",
+        {
+            "verdict": "BROAD_POOLED_J_DEVELOPMENT_ALPHA1_GO",
+            "alpha1_primary_passing_directions": ["bird->cat"],
+            "alpha2_sensitivity_passing_directions": [],
+            "population_digest": population_digest,
+            "lens_provenance": {"combined_checksum": lens_checksum},
+            "method": {
+                "layers": list(range(16, 41)),
+                "positions": "every original prompt position",
+                "teacher_forcing_used": False,
+                "candidate_list_supplied": False,
+            },
+        },
+    )
+    source = load_broad_pooled_development_source(
+        tmp_path,
+        expected_report_checksum=report_checksum,
+        expected_population_digest=population_digest,
+        expected_lens_checksum=lens_checksum,
+    )
+    assert source["direction"] == ["bird", "cat"]
+    assert source["excluded_image_ids"] == ["i1", "i2"]
+    assert source["alpha"] == 1.0
+
+
+def test_broad_development_source_refuses_changed_population(tmp_path: Path) -> None:
+    lens_path = tmp_path / "lenses" / "lens.pooled.l16_l40.pt"
+    lens_path.parent.mkdir(parents=True)
+    JacobianLens(
+        {layer: torch.eye(2) for layer in range(16, 41)},
+        n_prompts=99,
+        d_model=2,
+    ).save(str(lens_path))
+    lens_checksum = file_sha256(str(lens_path))
+    population = {"bird": [{"group_id": "g1", "image_id": "i1"}]}
+    population_digest = payload_checksum(population)
+    (tmp_path / "development_population.json").write_text(
+        json.dumps(
+            {
+                "population": {
+                    "bird": [{"group_id": "changed", "image_id": "i1"}]
+                },
+                "population_digest": population_digest,
+            }
+        )
+    )
+    _, report_checksum = _write_report(
+        tmp_path / "broad_pooled_multimodal_j_workspace_report.json",
+        {
+            "verdict": "BROAD_POOLED_J_DEVELOPMENT_ALPHA1_GO",
+            "alpha1_primary_passing_directions": ["bird->cat"],
+            "alpha2_sensitivity_passing_directions": [],
+            "population_digest": population_digest,
+            "lens_provenance": {"combined_checksum": lens_checksum},
+            "method": {
+                "layers": list(range(16, 41)),
+                "positions": "every original prompt position",
+                "teacher_forcing_used": False,
+                "candidate_list_supplied": False,
+            },
+        },
+    )
+    with pytest.raises(MultimodalLensRefused):
+        load_broad_pooled_development_source(
+            tmp_path,
+            expected_report_checksum=report_checksum,
+            expected_population_digest=population_digest,
+            expected_lens_checksum=lens_checksum,
+        )

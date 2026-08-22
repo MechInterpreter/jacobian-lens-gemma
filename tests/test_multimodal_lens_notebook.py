@@ -96,6 +96,29 @@ def test_notebook_contains_broad_pooled_j_workspace_extension() -> None:
         assert required in source
 
 
+def test_notebook_contains_frozen_fresh_multimodal_confirmation() -> None:
+    source = _source()
+    for required in (
+        "RUN_STAGE3D_FRESH_MULTIMODAL_CONFIRMATION",
+        "EXPECTED_BROAD_DEVELOPMENT_REPORT_CHECKSUM",
+        "sha256:ec1747a78902080ac3fac5f6aa5bc105e36f49ade5b517282ad7c3673da31a42",
+        "EXPECTED_BROAD_POOLED_LENS_CHECKSUM",
+        "CONFIRMATION_DIRECTION = (\"bird\", \"cat\")",
+        "CONFIRMATION_ALPHA = 1.0",
+        "CONFIRMATION_IMAGES = 16",
+        "load_broad_pooled_development_source",
+        "paired_binary_one_sided_p",
+        "holm_adjust",
+        '"lens_refitted": False',
+        '"independent_unit": "photograph with three synchronized modalities"',
+        '"multiple_testing": "Holm across 3 modalities x 3 controls"',
+        "FRESH_MULTIMODAL_CONFIRMATION_GO",
+        "fresh_multimodal_confirmation_report.json",
+    ):
+        assert required in source
+    assert "RUN_STAGE3C_BROAD_POOLED_WORKSPACE and RUN_STAGE3D_FRESH_MULTIMODAL_CONFIRMATION" in source
+
+
 def test_mock_notebook_executes_end_to_end(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("TMP", str(tmp_path))
     monkeypatch.setenv("TEMP", str(tmp_path))

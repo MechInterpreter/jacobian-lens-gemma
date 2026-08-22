@@ -65,6 +65,7 @@ better in advance, and no arm is selected after seeing a causal result.
 | 3 | GPU | gated exact-swap comparison on fresh bird/cat media | one trial |
 | 3B | GPU | paired alpha dose-response on the frozen Stage-3 population | one condition |
 | 3C | A100 recommended | extend pooled J to L16-L32 and run a broad paper-depth workspace development | one fit checkpoint / one trial |
+| 3D | A100 or L4 | checksum-pinned fresh confirmation of the frozen development winner | one capability/trial JSON |
 | 4 | CPU | write the report from stored units | no model |
 
 Changing any model, processor, audio protocol, cache, population, order, layer,
@@ -125,6 +126,7 @@ RUN_STAGE2_CROSS_EVALUATE = False
 RUN_STAGE3_CAUSAL_COMPARE = False
 RUN_STAGE3B_ALPHA_SWEEP = False
 RUN_STAGE3C_BROAD_POOLED_WORKSPACE = False
+RUN_STAGE3D_FRESH_MULTIMODAL_CONFIRMATION = False
 RUN_STAGE4_WRITE_REPORT = False
 
 CONFIRM_MODEL_LOAD = False
@@ -133,6 +135,7 @@ CONFIRM_CAUSAL_BUDGET = False
 CONFIRM_ALPHA_SWEEP_BUDGET = False
 CONFIRM_BROAD_POOLED_FIT_BUDGET = False
 CONFIRM_BROAD_POOLED_CAUSAL_BUDGET = False
+CONFIRM_FRESH_MULTIMODAL_CONFIRMATION_BUDGET = False
 REPORT_RUN_DIR = None
 
 MODEL_REPO_ID = "google/gemma-4-E4B-it"
@@ -180,6 +183,30 @@ BROAD_POOLED_CONTROLS = ("microwave", "toilet")
 BROAD_POOLED_CANDIDATES_PER_CONCEPT = 64
 BROAD_POOLED_IMAGES_PER_DIRECTION = 8
 BROAD_POOLED_SEED = "paper-depth-pooled-j-development-20260822-v1"
+
+# Frozen only after Stage 3C completed. Stage 3D verifies every pin before it
+# opens a fresh photograph. Nothing here is selected again in confirmation.
+BROAD_DEVELOPMENT_RUN_DIR = (
+    "/content/drive/MyDrive/jacobian-lens-gemma/runs/mmbroadpooledj/"
+    "mmbroadpooledj_real_ee944cd22ba1"
+)
+EXPECTED_BROAD_DEVELOPMENT_REPORT_CHECKSUM = (
+    "sha256:ec1747a78902080ac3fac5f6aa5bc105e36f49ade5b517282ad7c3673da31a42"
+)
+EXPECTED_BROAD_DEVELOPMENT_POPULATION_DIGEST = (
+    "sha256:c3f1cdc351d4710b79937ab49a99a877647594ff475bd64b3dfd13170047f23d"
+)
+EXPECTED_BROAD_POOLED_LENS_CHECKSUM = (
+    "sha256:3321a47db8aa7f948507e0419d80f23e97684fe3411d07f5d0d14c76b5d0ee1f"
+)
+CONFIRMATION_DIRECTION = ("bird", "cat")
+CONFIRMATION_ALPHA = 1.0
+CONFIRMATION_CANDIDATES = 64
+CONFIRMATION_IMAGES = 16
+CONFIRMATION_MIN_SUCCESS_RATE = 0.75
+CONFIRMATION_MIN_CONTROL_MARGIN = 0.25
+CONFIRMATION_FAMILYWISE_ALPHA = 0.05
+CONFIRMATION_SEED = "broad-pooled-j-fresh-confirmation-20260822-v1"
 # Alpha=1 is the exact exchange. The refinement grid brackets the strongest
 # stable signal in the coarse 0.5/1/2/4 sweep and never enters the alpha>=2
 # regime that already produced large activation-norm inflation. The grid was
@@ -233,10 +260,13 @@ EXPECTED_ALPHA1_SCIENTIFIC_FINGERPRINT = (
 REAL_MODE = bool(RUN_REAL_MATCHED_JLENS)
 if RUN_STAGE3_CAUSAL_COMPARE and RUN_STAGE3B_ALPHA_SWEEP:
     raise RuntimeError("Run Stage 3 or Stage 3B, never both in one session")
+if RUN_STAGE3C_BROAD_POOLED_WORKSPACE and RUN_STAGE3D_FRESH_MULTIMODAL_CONFIRMATION:
+    raise RuntimeError("Run Stage 3C development or Stage 3D confirmation, never both")
 MODEL_STAGE = any((
     RUN_STAGE1_FIT_LENSES, RUN_STAGE2_CROSS_EVALUATE,
     RUN_STAGE3_CAUSAL_COMPARE, RUN_STAGE3B_ALPHA_SWEEP,
     RUN_STAGE3C_BROAD_POOLED_WORKSPACE,
+    RUN_STAGE3D_FRESH_MULTIMODAL_CONFIRMATION,
 ))
 MODEL_ENABLED = bool(MODEL_STAGE and CONFIRM_MODEL_LOAD)
 FIT_ENABLED = bool(RUN_STAGE1_FIT_LENSES and MODEL_ENABLED and CONFIRM_FIT_BUDGET)
@@ -250,6 +280,10 @@ BROAD_POOLED_ENABLED = bool(
     and CONFIRM_BROAD_POOLED_FIT_BUDGET
     and CONFIRM_BROAD_POOLED_CAUSAL_BUDGET
 )
+FRESH_CONFIRMATION_ENABLED = bool(
+    RUN_STAGE3D_FRESH_MULTIMODAL_CONFIRMATION and MODEL_ENABLED
+    and CONFIRM_FRESH_MULTIMODAL_CONFIRMATION_BUDGET
+)
 if REAL_MODE and MODEL_STAGE and not MODEL_ENABLED:
     print("MODEL STAGES BLOCKED: set CONFIRM_MODEL_LOAD after reading the budget")
 if REAL_MODE and RUN_STAGE1_FIT_LENSES and not FIT_ENABLED:
@@ -262,6 +296,8 @@ if REAL_MODE and RUN_STAGE3C_BROAD_POOLED_WORKSPACE and not BROAD_POOLED_ENABLED
     print(
         "BROAD POOLED WORKSPACE BLOCKED: confirm both its fit and causal budgets"
     )
+if REAL_MODE and RUN_STAGE3D_FRESH_MULTIMODAL_CONFIRMATION and not FRESH_CONFIRMATION_ENABLED:
+    print("FRESH CONFIRMATION BLOCKED: confirm its printed budget")
 '''
 )
 
@@ -338,6 +374,19 @@ print("  causal rows               ", _broad_cells)
 print("  patched forwards          ", _broad_cells * (1 + 3 * len(BROAD_POOLED_ALPHAS)))
 print("  primary / sensitivity     alpha=1 / alpha=2")
 print("  resume                    one atomic fit prefix; then one condition JSON")
+print()
+print("STAGE 3D FRESH CONFIRMATION BUDGET")
+print("  fitting / backward passes 0 / 0")
+print("  frozen direction          ", "->".join(CONFIRMATION_DIRECTION))
+print("  frozen alpha / band       ", CONFIRMATION_ALPHA, list(BROAD_POOLED_BAND))
+print("  fresh candidates          ", CONFIRMATION_CANDIDATES, "bird photographs")
+print("  recruited units           ", CONFIRMATION_IMAGES, "photographs x 3 modalities")
+print("  capability forwards       ", CONFIRMATION_CANDIDATES * 3)
+print("  intervention forwards     ", CONFIRMATION_IMAGES * 3 * 4)
+print("  conditions                exact, zero, random, unrelated")
+print("  primary endpoint          unrestricted next-token top1 = 4")
+print("  inference                 paired exact sign tests; Holm FWER", CONFIRMATION_FAMILYWISE_ALPHA)
+print("  resume                    one checksum-valid JSON per completed forward")
 '''
 )
 
@@ -1949,6 +1998,432 @@ if REAL_MODE and BROAD_POOLED_ENABLED:
     print("checksum", BROAD_POOLED_REPORT["report_checksum"])
 elif RUN_STAGE3C_BROAD_POOLED_WORKSPACE:
     print("Stage 3C requested but blocked by model/fit/causal budget confirmations.")
+'''
+)
+
+markdown("## 10D. Stage 3D — independently frozen multimodal confirmation")
+code(
+    r'''
+FRESH_CONFIRMATION_REPORT = None
+if REAL_MODE and FRESH_CONFIRMATION_ENABLED:
+    from jlens.lens import JacobianLens
+    from jlens.mmpilot.coordinate_swap import (
+        random_two_direction_basis, resolve_concept_token,
+    )
+    from jlens.mmpilot.digit_reasoning_confirmation import resolve_digit_endpoints
+    from jlens.mmpilot.multimodal_lens import (
+        build_swap_bases_for_lens, holm_adjust,
+        load_broad_pooled_development_source, load_completed_causal_source,
+        open_answer_matches, paired_binary_one_sided_p,
+        select_causal_groups, unrestricted_swap_trial,
+    )
+    from jlens.mmpilot.store import RunFingerprint, UnitStore, safe_key
+
+    CONFIRMATION_SOURCE = load_broad_pooled_development_source(
+        BROAD_DEVELOPMENT_RUN_DIR,
+        expected_report_checksum=EXPECTED_BROAD_DEVELOPMENT_REPORT_CHECKSUM,
+        expected_population_digest=EXPECTED_BROAD_DEVELOPMENT_POPULATION_DIGEST,
+        expected_lens_checksum=EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+        expected_direction=CONFIRMATION_DIRECTION,
+    )
+    _prior_source = load_completed_causal_source(
+        CAUSAL_LENS_SOURCE_RUN_DIR,
+        expected_final_report_checksum=EXPECTED_SOURCE_FINAL_REPORT_CHECKSUM,
+        expected_cross_report_checksum=EXPECTED_SOURCE_CROSS_REPORT_CHECKSUM,
+        expected_causal_report_checksum=EXPECTED_SOURCE_CAUSAL_REPORT_CHECKSUM,
+        expected_lens_checksums=EXPECTED_SOURCE_LENS_CHECKSUMS,
+    )
+    print("CONFIRMATION DESIGN FROZEN BEFORE FRESH POPULATION")
+    print("  source report", EXPECTED_BROAD_DEVELOPMENT_REPORT_CHECKSUM)
+    print("  source lens  ", EXPECTED_BROAD_POOLED_LENS_CHECKSUM)
+    print("  direction    ", "->".join(CONFIRMATION_DIRECTION))
+    print("  alpha / band ", CONFIRMATION_ALPHA, list(BROAD_POOLED_BAND))
+    print("  source digest", CONFIRMATION_SOURCE["source_digest"])
+
+    _confirmation_lens = JacobianLens.load(CONFIRMATION_SOURCE["lens_path"])
+    if _confirmation_lens.source_layers != list(BROAD_POOLED_BAND):
+        raise RuntimeError("confirmation lens no longer covers exactly L16-L40")
+    if _confirmation_lens.n_prompts != N_FIT_GROUPS:
+        raise RuntimeError("confirmation lens no longer records 99 fit examples")
+
+    _confirmation_config = {
+        "study": "broad_pooled_multimodal_jlens_fresh_confirmation.v1",
+        "development_source_digest": CONFIRMATION_SOURCE["source_digest"],
+        "development_report_checksum": EXPECTED_BROAD_DEVELOPMENT_REPORT_CHECKSUM,
+        "development_population_digest": EXPECTED_BROAD_DEVELOPMENT_POPULATION_DIGEST,
+        "lens_checksum": EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+        "model_repo_id": MODEL_REPO_ID,
+        "model_revision": MODEL_REVISION,
+        "audio_protocol_fingerprint": AUDIO_PROTOCOL_FINGERPRINT,
+        "manifest_checksum": MANIFEST_CHECKSUM,
+        "direction": list(CONFIRMATION_DIRECTION),
+        "alpha": CONFIRMATION_ALPHA,
+        "layers": list(BROAD_POOLED_BAND),
+        "positions": "every original prompt position",
+        "teacher_forcing": False,
+        "candidate_list": False,
+        "candidate_count": CONFIRMATION_CANDIDATES,
+        "confirmation_images": CONFIRMATION_IMAGES,
+        "min_success_rate": CONFIRMATION_MIN_SUCCESS_RATE,
+        "min_control_margin": CONFIRMATION_MIN_CONTROL_MARGIN,
+        "familywise_alpha": CONFIRMATION_FAMILYWISE_ALPHA,
+        "seed": CONFIRMATION_SEED,
+        "commit": COMMIT,
+    }
+    _confirmation_config_digest = payload_checksum(_confirmation_config)
+    CONFIRMATION_RUN_DIR = (
+        RUNS_ROOT / "mmbroadconfirm" /
+        f"mmbroadconfirm_real_{_confirmation_config_digest.split(':')[1][:12]}"
+    )
+    CONFIRMATION_RUN_DIR.mkdir(parents=True, exist_ok=True)
+    (CONFIRMATION_RUN_DIR / "scientific_config.json").write_text(
+        json.dumps(_confirmation_config, indent=2)
+    )
+
+    # Exclude all opened development candidates—not only the eight winners—
+    # plus every fit/evaluation and earlier causal-screen photograph.
+    _excluded_confirmation_images = sorted(set(
+        [*CONFIRMATION_SOURCE["excluded_image_ids"]]
+        + [str(value) for value in PLAN["fit_image_ids"]]
+        + [str(value) for value in PLAN["eval_image_ids"]]
+        + [str(value) for value in _prior_source["excluded_image_ids"]]
+    ))
+    _confirmation_population = select_causal_groups(
+        GROUPS, concepts=(CONFIRMATION_DIRECTION[0],),
+        n_per_concept=CONFIRMATION_CANDIDATES,
+        excluded_image_ids=_excluded_confirmation_images,
+        seed=CONFIRMATION_SEED,
+        forbidden_concepts={CONFIRMATION_DIRECTION[0]: (CONFIRMATION_DIRECTION[1],)},
+    )[CONFIRMATION_DIRECTION[0]]
+    _confirmation_population_record = [
+        {"group_id": row["group_id"], "image_id": row["image_id"]}
+        for row in _confirmation_population
+    ]
+    _confirmation_population_digest = payload_checksum(
+        _confirmation_population_record
+    )
+    if set(row["image_id"] for row in _confirmation_population_record) & set(
+        _excluded_confirmation_images
+    ):
+        raise RuntimeError("fresh confirmation overlaps an opened photograph")
+    (CONFIRMATION_RUN_DIR / "fresh_population.json").write_text(json.dumps({
+        "population": _confirmation_population_record,
+        "population_digest": _confirmation_population_digest,
+        "excluded_image_ids_digest": payload_checksum(_excluded_confirmation_images),
+        "n_excluded_images": len(_excluded_confirmation_images),
+        "selected_before_capability": True,
+    }, indent=2))
+
+    _confirmation_fingerprint = RunFingerprint(
+        mode="real", model_repo_id=MODEL_REPO_ID,
+        model_revision=MODEL_REVISION, processor_revision=MODEL_REVISION,
+        layers=tuple(BROAD_POOLED_BAND),
+        lens_checksum=EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+        manifest_checksum=MANIFEST_CHECKSUM,
+        split_id=_confirmation_population_digest,
+        intervention_config={
+            "direction": list(CONFIRMATION_DIRECTION),
+            "alpha": CONFIRMATION_ALPHA,
+            "conditions": ["exact", "zero", "random", "unrelated"],
+            "positions": "all_original_prompt_positions",
+        },
+        extra={
+            "confirmation_config_digest": _confirmation_config_digest,
+            "development_source_digest": CONFIRMATION_SOURCE["source_digest"],
+        },
+    )
+    _confirmation_store = UnitStore(
+        CONFIRMATION_RUN_DIR, _confirmation_fingerprint
+    )
+    print("confirmation run state", _confirmation_store.open())
+
+    _source, _target_name = CONFIRMATION_DIRECTION
+    _tokens = {
+        name: resolve_concept_token(BACKEND.encode_candidate, name)
+        for name in (_source, _target_name, *BROAD_POOLED_CONTROLS)
+    }
+    _digits = resolve_digit_endpoints(BACKEND)
+    _source_answer, _target_answer = "2", "4"
+    _source_answer_id = int(_digits["token_ids"][_source_answer])
+    _target_answer_id = int(_digits["token_ids"][_target_answer])
+    _exact_bases = build_swap_bases_for_lens(
+        _confirmation_lens, BACKEND.unembedding_weight(),
+        layers=BROAD_POOLED_BAND, source=_tokens[_source],
+        target=_tokens[_target_name],
+    )
+    _random_bases = {
+        layer: random_two_direction_basis(basis, seed=20260822 + layer)
+        for layer, basis in _exact_bases.items()
+    }
+    _unrelated_bases = build_swap_bases_for_lens(
+        _confirmation_lens, BACKEND.unembedding_weight(),
+        layers=BROAD_POOLED_BAND,
+        source=_tokens[BROAD_POOLED_CONTROLS[0]],
+        target=_tokens[BROAD_POOLED_CONTROLS[1]],
+    )
+
+    def _confirmation_prompt(modality, caption):
+        question = (
+            "How many legs does the animal in the evidence typically have? "
+            "Answer with one digit.\nAnswer:"
+        )
+        return f"Caption: {caption}\n{question}" if modality == "text" else question
+
+    _confirmation_capability = []
+    for _group in _confirmation_population:
+        for _modality in ("text", "image", "spoken_audio"):
+            _key = safe_key(
+                "fresh_capability", _group["group_id"], _modality
+            )
+            _row = _confirmation_store.load("capability", _key)
+            if _row is None:
+                _inputs = build_group_inputs(
+                    _group, _modality,
+                    _confirmation_prompt(_modality, _group["caption"]),
+                )
+                _logits = BACKEND.forward_logits(_inputs.tensors)[
+                    0, _inputs.final_prompt_position
+                ].float()
+                _surface = BACKEND.decode_token(int(_logits.argmax())).strip()
+                _row = {
+                    "group_id": _group["group_id"],
+                    "image_id": _group["image_id"],
+                    "modality": _modality,
+                    "expected": _source_answer,
+                    "generated": _surface,
+                    "pass": open_answer_matches(_surface, _source_answer),
+                }
+                _confirmation_store.save("capability", _key, _row)
+                _work = "computed"
+            else:
+                _work = "reused"
+            _confirmation_capability.append(_row)
+            if len(_confirmation_capability) == 1 or len(_confirmation_capability) % 24 == 0:
+                print("confirmation capability", len(_confirmation_capability), _work)
+
+    _confirmation_recruited = []
+    for _group in _confirmation_population:
+        _rows = [
+            row for row in _confirmation_capability
+            if row["group_id"] == _group["group_id"]
+        ]
+        if len(_rows) == 3 and all(row["pass"] for row in _rows):
+            _confirmation_recruited.append(_group)
+        if len(_confirmation_recruited) == CONFIRMATION_IMAGES:
+            break
+    _confirmation_capability_go = (
+        len(_confirmation_recruited) == CONFIRMATION_IMAGES
+    )
+    print("confirmation recruited", len(_confirmation_recruited), "/", CONFIRMATION_IMAGES)
+
+    _confirmation_rows = []
+    if _confirmation_capability_go:
+        _condition_specs = (
+            ("exact", 1.0, _exact_bases),
+            ("zero", 0.0, _exact_bases),
+            ("random", 1.0, _random_bases),
+            ("unrelated", 1.0, _unrelated_bases),
+        )
+        for _group in _confirmation_recruited:
+            for _modality in ("text", "image", "spoken_audio"):
+                _inputs = None
+                _clean_logits = None
+                for _condition, _alpha, _bases in _condition_specs:
+                    _key = safe_key(
+                        "fresh_trial", _group["group_id"], _modality, _condition
+                    )
+                    _stored = _confirmation_store.load("intervention", _key)
+                    if _stored is None:
+                        if _inputs is None:
+                            _inputs = build_group_inputs(
+                                _group, _modality,
+                                _confirmation_prompt(_modality, _group["caption"]),
+                            )
+                            _clean_logits = BACKEND.forward_logits(_inputs.tensors)[
+                                0, _inputs.final_prompt_position
+                            ].float()
+                        _trial = unrestricted_swap_trial(
+                            BACKEND, _inputs, bases=_bases, alpha=_alpha,
+                            target_token_id=_target_answer_id,
+                            source_token_id=_source_answer_id,
+                            clean_logits=_clean_logits, compact_positions=True,
+                        )
+                        _surface = BACKEND.decode_token(
+                            _trial["patched_top_token_id"]
+                        ).strip()
+                        _stored = {
+                            **_trial, "group_id": _group["group_id"],
+                            "image_id": _group["image_id"],
+                            "modality": _modality, "condition": _condition,
+                            "expected": _target_answer,
+                            "patched_surface": _surface,
+                            "success": open_answer_matches(
+                                _surface, _target_answer
+                            ),
+                        }
+                        _confirmation_store.save("intervention", _key, _stored)
+                        _work = "computed"
+                    else:
+                        _work = "reused"
+                    _confirmation_rows.append(_stored)
+                    if len(_confirmation_rows) == 1 or len(_confirmation_rows) % 48 == 0:
+                        print("confirmation trials", len(_confirmation_rows), _work)
+
+    _confirmation_cells = []
+    _raw_comparisons = []
+    for _modality in ("text", "image", "spoken_audio"):
+        _modality_rows = [
+            row for row in _confirmation_rows if row["modality"] == _modality
+        ]
+        _by_condition = {
+            condition: sorted(
+                [row for row in _modality_rows if row["condition"] == condition],
+                key=lambda row: row["group_id"],
+            )
+            for condition in ("exact", "zero", "random", "unrelated")
+        }
+        _exact_outcomes = [bool(row["success"]) for row in _by_condition["exact"]]
+        _cell = {
+            "modality": _modality,
+            "n_photographs": len(_exact_outcomes),
+            "exact_successes": sum(_exact_outcomes),
+            "exact_success_rate": (
+                sum(_exact_outcomes) / len(_exact_outcomes)
+                if _exact_outcomes else 0.0
+            ),
+            "controls": {},
+            "integrity_pass": bool(_by_condition["exact"]) and all(
+                row["all_prompt_positions_patched"]
+                and row["layers_patched"] == list(BROAD_POOLED_BAND)
+                and float(row["max_orthogonal_residual_drift"]) <= 1e-5
+                and float(row["max_coordinate_update_error"]) <= 1e-5
+                for condition_rows in _by_condition.values()
+                for row in condition_rows
+            ),
+            "max_activation_norm_ratio": max(
+                (float(row["max_activation_norm_ratio"])
+                 for row in _by_condition["exact"]), default=1.0
+            ),
+            "max_update_to_activation_norm_ratio": max(
+                (float(row["max_update_to_activation_norm_ratio"])
+                 for row in _by_condition["exact"]), default=0.0
+            ),
+        }
+        for _control in ("zero", "random", "unrelated"):
+            _control_outcomes = [
+                bool(row["success"]) for row in _by_condition[_control]
+            ]
+            _test = paired_binary_one_sided_p(
+                _exact_outcomes, _control_outcomes
+            )
+            _comparison = {
+                "modality": _modality,
+                "control": _control,
+                **_test,
+            }
+            _raw_comparisons.append(_comparison)
+            _control_rate = sum(_control_outcomes) / len(_control_outcomes)
+            _cell["controls"][_control] = {
+                "successes": sum(_control_outcomes),
+                "success_rate": _control_rate,
+                "exact_minus_control": _cell["exact_success_rate"] - _control_rate,
+            }
+        _confirmation_cells.append(_cell)
+    _adjusted_comparisons = holm_adjust(_raw_comparisons)
+    for _comparison in _adjusted_comparisons:
+        for _cell in _confirmation_cells:
+            if _cell["modality"] == _comparison["modality"]:
+                _cell["controls"][_comparison["control"]]["paired_test"] = _comparison
+
+    _confirmation_gate = {
+        "capability_population_complete": _confirmation_capability_go,
+        "fresh_population_disjoint": not bool(
+            set(row["image_id"] for row in _confirmation_population_record)
+            & set(_excluded_confirmation_images)
+        ),
+        "success_rate_in_every_modality": bool(_confirmation_cells) and all(
+            cell["exact_success_rate"] >= CONFIRMATION_MIN_SUCCESS_RATE
+            for cell in _confirmation_cells
+        ),
+        "control_margin_in_every_comparison": bool(_confirmation_cells) and all(
+            control["exact_minus_control"] >= CONFIRMATION_MIN_CONTROL_MARGIN
+            for cell in _confirmation_cells
+            for control in cell["controls"].values()
+        ),
+        "holm_passing_in_every_comparison": bool(_adjusted_comparisons) and all(
+            row["holm_adjusted_p"] <= CONFIRMATION_FAMILYWISE_ALPHA
+            for row in _adjusted_comparisons
+        ),
+        "coordinate_integrity_in_every_modality": bool(_confirmation_cells) and all(
+            cell["integrity_pass"] for cell in _confirmation_cells
+        ),
+        "activation_norms_sane": bool(_confirmation_cells) and all(
+            cell["max_activation_norm_ratio"] <= 1.25
+            and cell["max_update_to_activation_norm_ratio"] <= 0.50
+            for cell in _confirmation_cells
+        ),
+    }
+    _confirmation_verdict = (
+        "FRESH_MULTIMODAL_CONFIRMATION_GO"
+        if all(_confirmation_gate.values())
+        else "FRESH_MULTIMODAL_CONFIRMATION_CAPABILITY_NO_GO"
+        if not _confirmation_capability_go
+        else "FRESH_MULTIMODAL_CONFIRMATION_NO_GO"
+    )
+    FRESH_CONFIRMATION_REPORT = {
+        "schema": "jlens.mmpilot.broad_pooled_multimodal_confirmation.v1",
+        "verdict": _confirmation_verdict,
+        "scientific_config": _confirmation_config,
+        "confirmation_config_digest": _confirmation_config_digest,
+        "development_source": CONFIRMATION_SOURCE,
+        "population_digest": _confirmation_population_digest,
+        "n_fresh_candidates": len(_confirmation_population),
+        "n_recruited_photographs": len(_confirmation_recruited),
+        "gate": _confirmation_gate,
+        "cells": _confirmation_cells,
+        "paired_comparisons": _adjusted_comparisons,
+        "capability_rows": _confirmation_capability,
+        "rows": _confirmation_rows,
+        "method": {
+            "lens_refitted": False,
+            "direction": "bird->cat",
+            "alpha": 1.0,
+            "layers": list(BROAD_POOLED_BAND),
+            "positions": "every original prompt position",
+            "teacher_forcing_used": False,
+            "candidate_list_supplied": False,
+            "endpoint": "unrestricted full-vocabulary next-token top1",
+            "independent_unit": "photograph with three synchronized modalities",
+            "multiple_testing": "Holm across 3 modalities x 3 controls",
+        },
+    }
+    FRESH_CONFIRMATION_REPORT["report_checksum"] = payload_checksum(
+        FRESH_CONFIRMATION_REPORT
+    )
+    _confirmation_store.save(
+        "metric", "fresh_multimodal_confirmation", FRESH_CONFIRMATION_REPORT
+    )
+    _confirmation_report_path = (
+        CONFIRMATION_RUN_DIR / "fresh_multimodal_confirmation_report.json"
+    )
+    _confirmation_report_path.write_text(
+        json.dumps(FRESH_CONFIRMATION_REPORT, indent=2, default=str)
+    )
+    print("=" * 96)
+    print("FRESH MULTIMODAL CONFIRMATION —", _confirmation_verdict)
+    print("=" * 96)
+    for _cell in _confirmation_cells:
+        print(
+            _cell["modality"],
+            f"exact {_cell['exact_successes']}/{_cell['n_photographs']}",
+            "controls",
+            {name: value["successes"] for name, value in _cell["controls"].items()},
+        )
+    print("gate", _confirmation_gate)
+    print("report", _confirmation_report_path)
+    print("checksum", FRESH_CONFIRMATION_REPORT["report_checksum"])
+elif RUN_STAGE3D_FRESH_MULTIMODAL_CONFIRMATION:
+    print("Stage 3D requested but blocked by model or confirmation budget.")
 '''
 )
 
