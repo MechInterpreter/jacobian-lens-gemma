@@ -108,6 +108,11 @@ def test_notebook_enforces_the_paper_first_order() -> None:
     assert "L21_TEXT_CONFIRMATION_GO" in source
     assert "L21_TRIMODAL_DOWNSTREAM_RECOMPUTATION_GO" in source
     assert '"discovery_layer_and_instrument_frozen": True' in source
+    assert 'L21_PRIMARY_COHORT_RULE = "token_eligible_and_clean_capable.v2"' in source
+    assert '"loading_secondary_subgroup_only": True' in source
+    assert '"positive_loading_secondary_task_ids"' in source
+    assert '"superseded_loading_screen_result": {' in source
+    assert '"cannot_be_overwritten_by_this_followup": True' in source
 
 
 def test_all_result_switches_default_false() -> None:

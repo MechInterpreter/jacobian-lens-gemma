@@ -198,11 +198,13 @@ elif STUDY_LAYER_WINDOW == "mid_r_l21_l29":
     LAYERS = tuple(range(21, 30))
     SCIENTIFIC_IMPLEMENTATION_ID = "paper-band-mid-r-l21-l29.v1"
 elif STUDY_LAYER_WINDOW == "frozen_r_l21_confirmation":
-    # Prospective confirmation of the exploratory L21 result.  The source
-    # R-lens is discovered by its immutable unit fingerprint and reused; no
-    # fitting and no new layer selection are permitted in this mode.
+    # Prospective causal follow-up to the outcome-blind loading-screen NO_GO.
+    # The source R-lens is discovered by its immutable unit fingerprint and
+    # reused; no fitting and no new layer selection are permitted.  All tasks
+    # that pass tokenization and clean capability form the primary causal
+    # cohort.  Positive L21 loading is reported only as a secondary subgroup.
     LAYERS = (21,)
-    SCIENTIFIC_IMPLEMENTATION_ID = "frozen-r-l21-probe-swap-confirmation.v1"
+    SCIENTIFIC_IMPLEMENTATION_ID = "frozen-r-l21-probe-swap-clean-cohort.v2"
 else:
     raise ValueError(
         "STUDY_LAYER_WINDOW must be 'late_jr_l33_l40', 'early_r_l27_l32', "
@@ -259,6 +261,7 @@ R_LENS_DIM_BATCH = 4 if STUDY_LAYER_WINDOW == "all_r_l01_l40" else 8
 # scored. This is in SCIENTIFIC_CONFIG, so it changes the fingerprint.
 R_LENS_ARMS = ("text",) if STUDY_LAYER_WINDOW == "all_r_l01_l40" else ("text", "pooled")
 L21_CONFIRMATION_MODE = STUDY_LAYER_WINDOW == "frozen_r_l21_confirmation"
+L21_PRIMARY_COHORT_RULE = "token_eligible_and_clean_capable.v2"
 if L21_CONFIRMATION_MODE:
     if RUN_STAGE0_FIT_MATCHED_R_LENSES:
         raise RuntimeError(
@@ -784,6 +787,7 @@ SCIENTIFIC_CONFIG = {
     "r_lens_checkpoint_every": R_LENS_CHECKPOINT_EVERY,
     "combined_r_source_provenance": COMBINED_R_SOURCE_PROVENANCE,
     "l21_discovery_source": L21_DISCOVERY,
+    "l21_primary_cohort_rule": L21_PRIMARY_COHORT_RULE,
     "l21_text_confirmation_thresholds": {
         "min_eligible_tasks": L21_TEXT_MIN_ELIGIBLE_TASKS,
         "min_exact_successes": L21_TEXT_MIN_EXACT_SUCCESSES,
@@ -1300,18 +1304,23 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
             min_source_cosine=MIN_SOURCE_COSINE,
             min_source_advantage=MIN_SOURCE_ADVANTAGE,
         )
+        _primary_task_ids = [task.task_id for task in _loading_tasks]
         LOADING_FIRST_SELECTION = {
-            "version": "mmpilot.l21_frozen_loading_admission.v1",
+            "version": "mmpilot.l21_clean_capability_cohort.v2",
             "verdict": (
                 "LOADING_FIRST_INSTRUMENT_GO"
-                if len(_admission["eligible_task_ids"])
+                if len(_primary_task_ids)
                 >= L21_TEXT_MIN_ELIGIBLE_TASKS
                 else "LOADING_FIRST_INSTRUMENT_NO_GO"
             ),
             "selected_instrument": "matched_text_r",
             "selected_band": [21],
-            "eligible_task_ids": _admission["eligible_task_ids"],
-            "task_level_admission": _admission,
+            "eligible_task_ids": _primary_task_ids,
+            "primary_cohort_rule": L21_PRIMARY_COHORT_RULE,
+            "positive_loading_secondary_task_ids": _admission["eligible_task_ids"],
+            "nonpositive_loading_secondary_task_ids": _admission["ineligible_task_ids"],
+            "loading_secondary_subgroup_only": True,
+            "task_level_loading_diagnostics": _admission,
             "discovery_layer_and_instrument_frozen": True,
             "causal_result_consulted": False,
         }
@@ -1497,6 +1506,47 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
                     familywise_alpha=CONFIRMATION_FAMILYWISE_ALPHA,
                 ),
             )
+            _positive_loading_ids = set(
+                LOADING_FIRST_SELECTION["positive_loading_secondary_task_ids"]
+            )
+            _subgroup_rows = [
+                row for row in text_rows if row["task_id"] in _positive_loading_ids
+            ]
+            TEXT_VERDICT.update({
+                "primary_cohort_rule": L21_PRIMARY_COHORT_RULE,
+                "primary_cohort_was_frozen_before_interventions": True,
+                "loading_secondary_subgroup_only": True,
+                "positive_loading_secondary": {
+                    "n": len(_subgroup_rows),
+                    "exact_successes": sum(
+                        bool(row["exact_primary_swapped_answer_generated"])
+                        for row in _subgroup_rows
+                    ),
+                    "zero_successes": sum(
+                        bool(row["zero_swapped_answer_generated"])
+                        for row in _subgroup_rows
+                    ),
+                    "random_successes": sum(
+                        bool(row["random_primary_swapped_answer_generated"])
+                        for row in _subgroup_rows
+                    ),
+                    "unrelated_successes": sum(
+                        bool(row["unrelated_primary_swapped_answer_generated"])
+                        for row in _subgroup_rows
+                    ),
+                    "licenses_primary_claim": False,
+                },
+                "superseded_loading_screen_result": {
+                    "verdict": "LOADING_FIRST_INSTRUMENT_NO_GO",
+                    "positive_loading_tasks": len(_positive_loading_ids),
+                    "required_by_superseded_gate": L21_TEXT_MIN_ELIGIBLE_TASKS,
+                    "cannot_be_overwritten_by_this_followup": True,
+                },
+            })
+            TEXT_VERDICT["report_checksum"] = payload_checksum({
+                key: value for key, value in TEXT_VERDICT.items()
+                if key != "report_checksum"
+            })
             (RUN_DIR / "l21_text_confirmation_report.json").write_text(
                 json.dumps(TEXT_VERDICT, indent=2, default=str)
             )
