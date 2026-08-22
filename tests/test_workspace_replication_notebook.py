@@ -86,6 +86,7 @@ def test_notebook_enforces_the_paper_first_order() -> None:
         "CAPABILITY HARD STOP",
         "CAPABILITY_ADMISSIBLE_PAIRS",
         "FOCAL_ANIMAL_EXCLUSIONS",
+        "CONFIRMATION NOT LICENSED — CAUSAL DEVELOPMENT NO_GO",
     ):
         assert required in source
     assert "answer_token_table(BACKEND" not in source
@@ -136,6 +137,10 @@ def test_notebook_enforces_the_paper_first_order() -> None:
     assert "the repair reuses the pinned L21 text result" in source
     assert '"generation_stops_at_turn_or_eos": True' in source
     assert '"hard_stop_loading_when_no_capability_pair": True' in source
+    assert (
+        '_development.get("verdict") != "MULTIMODAL_SWAP_DEVELOPMENT_GO"'
+        in source
+    )
 
 
 def test_all_result_switches_default_false() -> None:

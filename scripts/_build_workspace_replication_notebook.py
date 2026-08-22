@@ -2797,6 +2797,18 @@ if RUN_STAGE3_FREEZE_DESIGN:
                 "Stage 3 did not freeze: capability, tomography, and causal "
                 "development must all be complete"
             )
+        elif _development.get("verdict") != "MULTIMODAL_SWAP_DEVELOPMENT_GO":
+            print("=" * 78)
+            print("CONFIRMATION NOT LICENSED — CAUSAL DEVELOPMENT NO_GO")
+            print("=" * 78)
+            print("development verdict", _development.get("verdict"))
+            print("development checksum", _development.get("report_checksum"))
+            print("fresh confirmation opened", False)
+            print(
+                "Stage 3 did not freeze a design and Stage 4 must not spend. "
+                "This preserves the development result without converting a "
+                "predeclared scientific NO_GO into a notebook exception."
+            )
         else:
             CONFIRMATION_DESIGN = freeze_repair_confirmation_design(
                 capability=_capability,
