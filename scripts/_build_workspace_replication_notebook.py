@@ -1186,6 +1186,7 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
                 diagnostic_token_ids=swapped_answer_diagnostic_tokens(
                     task.swapped_answer, TEXT_CONCEPT_TOKENS,
                     BACKEND.encode_candidate,
+                    allow_missing_head=L21_CONFIRMATION_MODE,
                 ),
             )
             stored = {
@@ -1397,6 +1398,7 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
                 diagnostic_token_ids=swapped_answer_diagnostic_tokens(
                     task.swapped_answer, TEXT_CONCEPT_TOKENS,
                     BACKEND.encode_candidate,
+                    allow_missing_head=L21_CONFIRMATION_MODE,
                 ),
                 realization_policy=TEXT_MODEL_DTYPE_REALIZATION,
             )
@@ -1407,6 +1409,7 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
                 diagnostic_token_ids=swapped_answer_diagnostic_tokens(
                     task.swapped_answer, TEXT_CONCEPT_TOKENS,
                     BACKEND.encode_candidate,
+                    allow_missing_head=L21_CONFIRMATION_MODE,
                 ),
                 realization_policy=TEXT_MODEL_DTYPE_REALIZATION,
             )
@@ -1417,6 +1420,7 @@ if REAL_MODE and RUN_STAGE1_TEXT_REPLICATION and CONFIRM_MODEL_LOAD:
                 diagnostic_token_ids=swapped_answer_diagnostic_tokens(
                     task.swapped_answer, TEXT_CONCEPT_TOKENS,
                     BACKEND.encode_candidate,
+                    allow_missing_head=L21_CONFIRMATION_MODE,
                 ),
                 realization_policy=TEXT_MODEL_DTYPE_REALIZATION,
             )
@@ -1590,6 +1594,7 @@ if (
         answer_name = semantic_answer_concept(task.swapped_answer)
         diagnostic_tokens = swapped_answer_diagnostic_tokens(
             task.swapped_answer, TEXT_CONCEPT_TOKENS, BACKEND.encode_candidate,
+            allow_missing_head=L21_CONFIRMATION_MODE,
         )
         bases_all = {
             layer: build_swap_basis_from_vectors(

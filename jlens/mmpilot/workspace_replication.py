@@ -493,6 +493,8 @@ def swapped_answer_diagnostic_tokens(
     answer: str,
     concept_tokens: Mapping[str, object],
     encode: Callable[[str], Sequence[int]] | None = None,
+    *,
+    allow_missing_head: bool = False,
 ) -> dict[str, int]:
     """Diagnostic token ids for a swapped answer, covering both surface forms.
 
@@ -515,7 +517,15 @@ def swapped_answer_diagnostic_tokens(
     """
 
     head = semantic_answer_concept(answer)
-    out = {"swapped_answer_head": int(concept_tokens[head].token_id)}
+    if head in concept_tokens:
+        out = {"swapped_answer_head": int(concept_tokens[head].token_id)}
+    elif allow_missing_head:
+        # This trace is optional: unrestricted generated text remains the
+        # endpoint. Large confirmation sets can contain multi-token answer
+        # heads even when source and target are valid one-token coordinates.
+        out = {}
+    else:
+        raise KeyError(head)
     bare = str(answer).strip()
     if bare in _NUMBER_WORDS and encode is not None:
         ids = list(encode(bare))

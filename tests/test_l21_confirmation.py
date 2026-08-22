@@ -17,7 +17,10 @@ from jlens.mmpilot.l21_confirmation import (
     probe_swap_tasks,
     task_level_loading_admission,
 )
-from jlens.mmpilot.workspace_replication import anthropic_text_tasks_expanded_v2
+from jlens.mmpilot.workspace_replication import (
+    anthropic_text_tasks_expanded_v2,
+    swapped_answer_diagnostic_tokens,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -31,6 +34,14 @@ def test_probe_swap_is_a_fresh_90_item_population() -> None:
     assert result["disjoint"] is True
     assert result["task_id_overlap"] == []
     assert result["prompt_overlap"] == []
+
+
+def test_missing_answer_head_only_disables_optional_diagnostic() -> None:
+    assert swapped_answer_diagnostic_tokens(
+        "Spanish", {}, allow_missing_head=True
+    ) == {}
+    with pytest.raises(KeyError, match="Spanish"):
+        swapped_answer_diagnostic_tokens("Spanish", {})
 
 
 def test_discovers_only_the_pinned_l21_run(tmp_path: Path) -> None:
