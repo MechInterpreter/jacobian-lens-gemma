@@ -30,9 +30,9 @@ from jlens.mmpilot.workspace_replication import (
     summarize_loading,
 )
 
-REPAIR_PROTOCOL_VERSION = "mmpilot.multimodal_workspace_repair.v1"
-CAPABILITY_VERSION = "mmpilot.multimodal_prefill_capability.v1"
-TOMOGRAPHY_VERSION = "mmpilot.multimodal_loading_tomography.v1"
+REPAIR_PROTOCOL_VERSION = "mmpilot.multimodal_workspace_repair.v2"
+CAPABILITY_VERSION = "mmpilot.multimodal_prefill_capability.v2"
+TOMOGRAPHY_VERSION = "mmpilot.multimodal_loading_tomography.v2"
 DEVELOPMENT_VERSION = "mmpilot.multimodal_swap_development.v1"
 CONFIRMATION_VERSION = "mmpilot.multimodal_swap_fresh_confirmation.v1"
 DESIGN_VERSION = "mmpilot.multimodal_workspace_confirmation_design.v1"
@@ -122,6 +122,7 @@ def _bidirectional_score(
     *,
     pair: Sequence[str],
     modalities: Sequence[str],
+    position_class: str | None = None,
 ) -> tuple[float | None, dict]:
     left, right = map(str, pair)
     per_direction_modality = {}
@@ -136,6 +137,10 @@ def _bidirectional_score(
                 if str(row.get("source")) == source
                 and str(row.get("target")) == target
                 and str(row.get("modality")) == modality
+                and (
+                    position_class is None
+                    or str(row.get("position_class")) == str(position_class)
+                )
             ]
             value = _median(cell) if cell else None
             per_direction_modality[direction][str(modality)] = value
@@ -155,6 +160,8 @@ def select_loading_tomography(
     min_source_advantage: float = 0.0,
     min_source_cosine: float = 0.0,
     evidence_position_margin: float = 0.0,
+    primary_loading_position_class: str = "final_prompt_token",
+    intervention_position_rule: str = "all_prompt_positions",
 ) -> dict:
     """Select one instrument/band from clean loading, never swap outcomes.
 
@@ -182,7 +189,10 @@ def select_loading_tomography(
                 in {(left, right), (right, left)}
             ]
             weakest, direction_scores = _bidirectional_score(
-                pair_rows, pair=(left, right), modalities=modalities
+                pair_rows,
+                pair=(left, right),
+                modalities=modalities,
+                position_class=primary_loading_position_class,
             )
             source_cosine_evidence = []
             cosine_eligible_layers = []
@@ -200,6 +210,8 @@ def select_loading_tomography(
                             and str(row.get("source")) == source
                             and str(row.get("target")) == target
                             and str(row.get("modality")) == modality
+                            and str(row.get("position_class"))
+                            == str(primary_loading_position_class)
                         ]
                         value = _median(values) if values else None
                         cell_medians[direction][modality] = value
@@ -228,6 +240,8 @@ def select_loading_tomography(
                 candidate_layers=(cosine_eligible_layers or layers),
                 min_source_advantage=min_source_advantage,
                 evidence_position_margin=evidence_position_margin,
+                primary_position_class=primary_loading_position_class,
+                intervention_position_rule=intervention_position_rule,
             )
             if not cosine_eligible_layers:
                 localization = {
@@ -237,7 +251,7 @@ def select_loading_tomography(
                     "contiguous_runs": [],
                     "selected_band": [],
                     "position_rule_by_modality": {
-                        modality: "all_prompt_positions"
+                        modality: str(intervention_position_rule)
                         for modality in modalities
                     },
                 }
@@ -282,6 +296,8 @@ def select_loading_tomography(
         "min_source_advantage": float(min_source_advantage),
         "min_source_cosine": float(min_source_cosine),
         "evidence_position_margin": float(evidence_position_margin),
+        "primary_loading_position_class": str(primary_loading_position_class),
+        "intervention_position_rule": str(intervention_position_rule),
         "ranking": ranking,
         "selected_instrument": selected["instrument"] if selected else None,
         "selected_pair": selected["pair"] if selected else None,

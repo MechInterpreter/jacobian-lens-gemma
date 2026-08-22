@@ -134,6 +134,63 @@ def test_tomography_rejects_a_barely_loaded_layer_despite_positive_advantage() -
     assert report["ranking"][0]["source_cosine_eligible_layers"] == []
 
 
+def test_tomography_uses_final_token_loading_but_keeps_paper_swap_rule() -> None:
+    capability = multimodal_capability_report(
+        _capability_rows(), concepts=("bird", "giraffe")
+    )
+    rows = _loading_rows("localized", 0.2)
+    for row in list(rows):
+        rows.extend(
+            {
+                **row,
+                "sample_id": f"{row['sample_id']}:evidence:{index}",
+                "position": index,
+                "position_class": "evidence",
+                "source_cosine": 0.03,
+                "target_cosine": 0.04,
+                "source_advantage": -0.01,
+            }
+            for index in range(10)
+        )
+    report = select_loading_tomography(
+        {"localized": rows},
+        instrument_layers={"localized": (20, 21)},
+        candidate_pairs=(("bird", "giraffe"),),
+        capability=capability,
+        min_source_cosine=0.01,
+    )
+    assert report["verdict"] == "MULTIMODAL_LOADING_TOMOGRAPHY_GO"
+    assert report["selected_band"] == [20, 21]
+    assert report["primary_loading_position_class"] == "final_prompt_token"
+    assert report["intervention_position_rule"] == "all_prompt_positions"
+    assert set(report["position_rule_by_modality"].values()) == {
+        "all_prompt_positions"
+    }
+
+
+def test_tomography_returns_no_go_without_capability_or_model_rows() -> None:
+    capability = multimodal_capability_report(
+        _capability_rows(
+            failures={
+                (concept, modality, "property", index)
+                for concept in ("bird", "giraffe")
+                for modality in MODALITIES
+                for index in range(4)
+            }
+        ),
+        concepts=("bird", "giraffe"),
+    )
+    report = select_loading_tomography(
+        {},
+        instrument_layers={},
+        candidate_pairs=(("bird", "giraffe"),),
+        capability=capability,
+    )
+    assert report["verdict"] == "MULTIMODAL_LOADING_TOMOGRAPHY_NO_GO"
+    assert report["ranking"] == []
+    assert report["causal_outcomes_opened"] is False
+
+
 def _causal_rows(primary, zero, random, unrelated):
     rows = []
     for direction in ("bird->giraffe", "giraffe->bird"):

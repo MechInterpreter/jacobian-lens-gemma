@@ -23,6 +23,7 @@ from jlens.mmpilot.workspace_replication import (
     build_multimodal_assistant_prefill_inputs,
     capture_source_loading,
     completion_answer_matches,
+    completion_identity_matches,
     freeze_confirmation_design,
     freeze_loading_localization,
     holm_adjust,
@@ -254,6 +255,13 @@ def test_semantic_head_match_rejects_negation_and_nonfinal_mentions(
     assert completion_answer_matches(generated, answer) is False
 
 
+def test_identity_match_accepts_a_lexical_concept_before_a_modifier() -> None:
+    assert completion_identity_matches(" a bird in flight<turn|>", "bird") is True
+    assert completion_identity_matches(" two zebras grazing", "zebra") is True
+    assert completion_identity_matches(" a cat is not visible", "cat") is False
+    assert completion_identity_matches(" a hawk", "bird") is False
+
+
 class _GenerationBackend:
     def __init__(self) -> None:
         self.blocks = nn.ModuleList([nn.Identity()])
@@ -269,6 +277,18 @@ class _GenerationBackend:
             hidden = block(hidden)
         logits = torch.zeros((1, seq_len, 4), dtype=torch.float32)
         logits[0, -1, 1 if seq_len == 1 else 2] = 10.0
+        return logits
+
+
+class _ControlTerminatingBackend(_GenerationBackend):
+    def decode_token(self, token_id: int) -> str:
+        return {1: " four", 2: "<turn|>", 3: "garbage"}.get(int(token_id), "x")
+
+    def forward_logits(self, tensors):
+        seq_len = int(tensors["input_ids"].shape[1])
+        logits = torch.zeros((1, seq_len, 4), dtype=torch.float32)
+        selected = {1: 1, 2: 2}.get(seq_len, 3)
+        logits[0, -1, selected] = 10.0
         return logits
 
 
@@ -310,6 +330,20 @@ def test_full_vocabulary_trace_uses_only_self_generated_prefixes() -> None:
     assert [row["selected_token_id"] for row in trace] == [1, 2]
     assert trace[0]["tokens"]["swapped_answer_head"]["rank"] > 1
     assert trace[1]["tokens"]["swapped_answer_head"]["is_global_top1"] is True
+
+
+def test_complete_answer_stops_at_gemma_turn_control_token() -> None:
+    result = unrestricted_greedy_completion(
+        _ControlTerminatingBackend(),
+        _generation_inputs(),
+        answer="4",
+        max_new_tokens=4,
+    )
+    assert result["generated_token_ids"] == [1, 2]
+    assert result["n_forward_passes"] == 2
+    assert result["terminated_early"] is True
+    assert result["stop_reason"] == "gemma_control_token"
+    assert result["answer_match"] is True
 
 
 def test_complete_answer_swap_keeps_hooks_active_for_both_decode_steps() -> None:
@@ -438,6 +472,44 @@ def test_localization_falls_back_to_all_positions_when_evidence_does_not_win() -
     )
     assert result["selected_band"] == [33, 34, 35]
     assert result["position_rule"] == "all_prompt_positions"
+
+
+def test_localization_can_gate_on_final_token_without_changing_swap_positions() -> None:
+    rows = []
+    for modality in ("text", "image", "spoken_audio"):
+        for layer in (33, 34):
+            for index in range(20):
+                rows.append(
+                    {
+                        "sample_id": f"{modality}-{layer}-e-{index}",
+                        "modality": modality,
+                        "layer": layer,
+                        "position_class": "evidence",
+                        "source_advantage": -0.2,
+                    }
+                )
+            rows.append(
+                {
+                    "sample_id": f"{modality}-{layer}-final",
+                    "modality": modality,
+                    "layer": layer,
+                    "position_class": "final_prompt_token",
+                    "source_advantage": 0.1,
+                }
+            )
+    result = freeze_loading_localization(
+        rows,
+        required_modalities=("text", "image", "spoken_audio"),
+        candidate_layers=(33, 34),
+        primary_position_class="final_prompt_token",
+        intervention_position_rule="all_prompt_positions",
+    )
+    assert result["selected_band"] == [33, 34]
+    assert result["primary_loading_position_class"] == "final_prompt_token"
+    assert result["intervention_position_rule"] == "all_prompt_positions"
+    assert set(result["position_rule_by_modality"].values()) == {
+        "all_prompt_positions"
+    }
 
 
 def test_pair_selection_uses_weakest_clean_modality_only() -> None:

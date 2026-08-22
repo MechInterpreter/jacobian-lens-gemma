@@ -922,11 +922,18 @@ if REAL_MODE:
                              if source == source_name and source != target})
         for source_name in source_names
     }
+    from jlens.mmpilot.prompt_protocol import COCO_ANIMAL_CATEGORIES
+    FOCAL_ANIMAL_EXCLUSIONS = {
+        source_name: sorted(
+            set(COCO_ANIMAL_CATEGORIES) - {str(source_name)}
+        )
+        for source_name in source_names
+    }
     DEV_POOL = select_causal_groups(
         GROUPS, concepts=source_names,
         n_per_concept=DEVELOPMENT_IMAGES_PER_SOURCE,
         excluded_image_ids=sorted(PRIOR_EXCLUDED_IMAGES), seed=DEVELOPMENT_SEED,
-        forbidden_concepts=PAIR_TARGET_EXCLUSIONS,
+        forbidden_concepts=FOCAL_ANIMAL_EXCLUSIONS,
     )
     DEV_GROUPS = [{**row, "concept": name} for name in source_names for row in DEV_POOL[name]]
     DEV_IMAGE_IDS = {str(row["image_id"]) for row in DEV_GROUPS}
@@ -936,7 +943,7 @@ if REAL_MODE:
         n_per_concept=CONFIRMATION_IMAGES_PER_SOURCE,
         excluded_image_ids=sorted(PRIOR_EXCLUDED_IMAGES | DEV_IMAGE_IDS),
         seed=CONFIRMATION_SEED,
-        forbidden_concepts=PAIR_TARGET_EXCLUSIONS,
+        forbidden_concepts=FOCAL_ANIMAL_EXCLUSIONS,
     )
     CONFIRM_GROUPS = [{**row, "concept": name} for name in source_names for row in CONFIRM_POOL[name]]
     from jlens.mmpilot.workspace_replication import assert_fresh_population
@@ -951,6 +958,11 @@ if REAL_MODE:
         "prior_workspace_excluded_image_ids": sorted(PRIOR_EXCLUDED_IMAGES),
         "prior_workspace_excluded_group_ids": sorted(PRIOR_EXCLUDED_GROUPS),
         "pair_target_exclusions": PAIR_TARGET_EXCLUSIONS,
+        "focal_animal_exclusions": FOCAL_ANIMAL_EXCLUSIONS,
+        "focal_animal_rule": (
+            "the selected source is the only registered COCO animal category "
+            "in the audited labels and caption"
+        ),
         "development": [{"group_id": r["group_id"], "image_id": r["image_id"], "concept": r.get("concept")} for r in DEV_GROUPS],
         "confirmation": [{"group_id": r["group_id"], "image_id": r["image_id"], "concept": r.get("concept")} for r in CONFIRM_GROUPS],
         "freshness": FRESHNESS,
@@ -997,11 +1009,19 @@ SCIENTIFIC_CONFIG = {
         "completion_instruction": MULTIMODAL_COMPLETION_INSTRUCTION,
         "max_new_tokens": MULTIMODAL_MAX_NEW_TOKENS,
         "capability_before_loading": True,
+        "hard_stop_loading_when_no_capability_pair": True,
         "loading_before_causal_development": True,
         "development_before_fresh_confirmation": True,
         "teacher_forcing_used": False,
         "candidate_list_supplied": False,
         "refitting_performed": False,
+        "generation_stops_at_turn_or_eos": True,
+        "identity_match_rule": "lexical_identity_anywhere_before_control_token",
+        "primary_loading_position_class": "final_prompt_token",
+        "intervention_position_rule": "all_prompt_positions",
+        "focal_animal_population_rule": POPULATION_PLAN.get(
+            "focal_animal_rule"
+        ),
     },
     "model_repo_id": MODEL_REPO_ID, "model_revision": MODEL_REVISION,
     "study_layer_window": STUDY_LAYER_WINDOW,
@@ -2232,6 +2252,7 @@ if (
     from jlens.mmpilot.workspace_replication import (
         MULTIMODAL_MAX_NEW_TOKENS,
         build_multimodal_assistant_prefill_inputs,
+        completion_identity_matches,
         unrestricted_greedy_completion,
     )
     _identity_prefill = "The animal in the evidence is"
@@ -2284,8 +2305,19 @@ if (
                             "concept": concept, "group_id": group["group_id"],
                             "image_id": group["image_id"],
                             "modality": modality, "prompt_kind": prompt_kind,
-                            "clean_correct": bool(completion["answer_match"]),
+                            "clean_correct": bool(
+                                completion_identity_matches(
+                                    completion["generated_text"], concept
+                                )
+                                if prompt_kind == "identity"
+                                else completion["answer_match"]
+                            ),
                             "clean_surface": completion["generated_text"],
+                            "clean_match_rule": (
+                                "lexical_identity_anywhere_before_control_token"
+                                if prompt_kind == "identity"
+                                else completion["answer_match_rule"]
+                            ),
                             "completion": completion,
                         }
                         STORE.save("capability", key, stored)
@@ -2307,12 +2339,28 @@ if (
             json.dumps(CAPABILITY_REPORT, indent=2)
         )
         print(json.dumps(CAPABILITY_REPORT, indent=2))
+    CAPABILITY_ADMISSIBLE_PAIRS = list(CANDIDATE_PAIRS)
+    if RUN_MULTIMODAL_PROTOCOL_REPAIR:
+        _eligible_concepts = set(CAPABILITY_REPORT["eligible_concepts"])
+        CAPABILITY_ADMISSIBLE_PAIRS = [
+            pair for pair in CANDIDATE_PAIRS
+            if set(pair).issubset(_eligible_concepts)
+        ]
+        print(
+            "capability-admissible pairs",
+            [list(pair) for pair in CAPABILITY_ADMISSIBLE_PAIRS],
+        )
+        if not CAPABILITY_ADMISSIBLE_PAIRS:
+            print(
+                "CAPABILITY HARD STOP — no loading tomography or causal pass "
+                "will run in this session"
+            )
     loading_by_instrument = {name: [] for name in MULTIMODAL_VECTORS}
     by_concept = {}
     for group in DEV_GROUPS:
         by_concept.setdefault(str(group.get("concept")), []).append(group)
     for instrument, vectors in sorted(MULTIMODAL_VECTORS.items()):
-        for pair_left, pair_right in CANDIDATE_PAIRS:
+        for pair_left, pair_right in CAPABILITY_ADMISSIBLE_PAIRS:
             directed_pairs = (
                 ((pair_left, pair_right), (pair_right, pair_left))
                 if RUN_MULTIMODAL_PROTOCOL_REPAIR
@@ -2351,7 +2399,11 @@ if (
                             group["group_id"], modality, work,
                         )
     _instrument_rows = []
-    for instrument, loading_rows in sorted(loading_by_instrument.items()):
+    for instrument, loading_rows in (
+        ()
+        if RUN_MULTIMODAL_PROTOCOL_REPAIR
+        else sorted(loading_by_instrument.items())
+    ):
         pair_selection = select_pair_from_loading(
             loading_rows, candidate_pairs=CANDIDATE_PAIRS,
             required_modalities=("text", "image", "spoken_audio"),
@@ -2397,6 +2449,8 @@ if (
             min_source_advantage=MIN_SOURCE_ADVANTAGE,
             min_source_cosine=MIN_SOURCE_COSINE,
             evidence_position_margin=EVIDENCE_POSITION_MARGIN,
+            primary_loading_position_class="final_prompt_token",
+            intervention_position_rule="all_prompt_positions",
         )
         _selected_name = MULTIMODAL_INSTRUMENT_SELECTION["selected_instrument"]
         _selected_pair = MULTIMODAL_INSTRUMENT_SELECTION["selected_pair"]
@@ -2409,7 +2463,16 @@ if (
             None,
         )
         LOADING_REPORT = (
-            _selected_record["loading_report"] if _selected_record else None
+            _selected_record["loading_report"]
+            if _selected_record
+            else {
+                "version": "mmpilot.clean_source_loading.not_run.v1",
+                "verdict": "LOADING_NOT_RUN_CAPABILITY_NO_GO",
+                "n_model_passes": 0,
+                "capability_eligible_concepts": list(
+                    CAPABILITY_REPORT["eligible_concepts"]
+                ),
+            }
         )
         PAIR_SELECTION = (
             {
@@ -2417,10 +2480,31 @@ if (
                 "selected_pair": list(_selected_pair),
                 "selection_depended_on_causal_outcome": False,
             }
-            if _selected_pair else None
+            if _selected_pair else {
+                "version": "mmpilot.multimodal_bidirectional_loading_pair.v1",
+                "verdict": "PAIR_NOT_SELECTED_CAPABILITY_NO_GO",
+                "selected_pair": None,
+                "selection_depended_on_causal_outcome": False,
+            }
         )
         LOCALIZATION = (
-            _selected_record["localization"] if _selected_record else None
+            _selected_record["localization"]
+            if _selected_record
+            else {
+                "version": "mmpilot.loading_only_localization.v2",
+                "verdict": "LOADING_LOCALIZATION_NOT_RUN_CAPABILITY_NO_GO",
+                "selected_band": [],
+                "eligible_layers": [],
+                "primary_loading_position_class": "final_prompt_token",
+                "intervention_position_rule": "all_prompt_positions",
+                "position_rule": "all_prompt_positions",
+                "position_rule_by_modality": {
+                    modality: "all_prompt_positions"
+                    for modality in ("text", "image", "spoken_audio")
+                },
+                "causal_result_consulted": False,
+                "selection_depended_on_causal_outcome": False,
+            }
         )
     else:
         _instrument_rows.sort(

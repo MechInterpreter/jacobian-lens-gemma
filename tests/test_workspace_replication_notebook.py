@@ -80,6 +80,12 @@ def test_notebook_enforces_the_paper_first_order() -> None:
         "freeze_repair_confirmation_design",
         "MULTIMODAL_SWAP_CONFIRMATION_GO",
         "multimodal_workspace_repair_confirmation_report.json",
+        "completion_identity_matches",
+        'primary_loading_position_class="final_prompt_token"',
+        'intervention_position_rule="all_prompt_positions"',
+        "CAPABILITY HARD STOP",
+        "CAPABILITY_ADMISSIBLE_PAIRS",
+        "FOCAL_ANIMAL_EXCLUSIONS",
     ):
         assert required in source
     assert "answer_token_table(BACKEND" not in source
@@ -128,6 +134,8 @@ def test_notebook_enforces_the_paper_first_order() -> None:
     assert '"multimodal_causal_outcomes_opened": False' in source
     assert "if RUN_MULTIMODAL_PROTOCOL_REPAIR\n    else __import__(" in source
     assert "the repair reuses the pinned L21 text result" in source
+    assert '"generation_stops_at_turn_or_eos": True' in source
+    assert '"hard_stop_loading_when_no_capability_pair": True' in source
 
 
 def test_all_result_switches_default_false() -> None:

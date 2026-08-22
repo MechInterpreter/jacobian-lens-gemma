@@ -43,16 +43,17 @@ from jlens.mmpilot.coordinate_swap import (
 )
 from jlens.mmpilot.store import payload_checksum
 
-PROTOCOL_VERSION = "mmpilot.paper_first_workspace_replication.v7"
+PROTOCOL_VERSION = "mmpilot.paper_first_workspace_replication.v8"
 TEXT_INPUT_PROTOCOL_VERSION = "mmpilot.assistant_prefill_completion.v1"
-TEXT_OUTPUT_ENDPOINT_VERSION = "mmpilot.unrestricted_greedy_semantic_head_answer.v2"
+TEXT_OUTPUT_ENDPOINT_VERSION = "mmpilot.unrestricted_greedy_semantic_head_answer.v3"
 TEXT_MAX_NEW_TOKENS = 2
 MULTIMODAL_INPUT_PROTOCOL_VERSION = (
-    "mmpilot.multimodal_assistant_prefill_completion.v1"
+    "mmpilot.multimodal_assistant_prefill_completion.v2"
 )
 MULTIMODAL_COMPLETION_INSTRUCTION = (
-    "Use only the supplied evidence. Complete the assistant's factual sentence "
-    "directly with the requested answer. Do not restart, explain, or list choices."
+    "Use the supplied evidence to identify the focal animal, then use ordinary "
+    "factual knowledge to answer. Complete the assistant's factual sentence "
+    "directly. Do not restart, explain, or list choices."
 )
 MULTIMODAL_MAX_NEW_TOKENS = 4
 TEXT_COMPLETION_INSTRUCTION = (
@@ -79,7 +80,7 @@ _NUMBER_WORDS = {
 }
 _NEGATION_MARKERS = frozenset({"not", "no", "non", "never", "except", "outside"})
 LOADING_VERSION = "mmpilot.clean_source_loading.v1"
-LOCALIZATION_VERSION = "mmpilot.loading_only_localization.v1"
+LOCALIZATION_VERSION = "mmpilot.loading_only_localization.v2"
 CONFIRMATION_VERSION = "mmpilot.fresh_multimodal_confirmation.v2"
 TEXT_DIAGNOSTIC_VERSION = "mmpilot.paper_first_text_swap_diagnostic.v2"
 TEXT_DIAGNOSTIC_CONDITIONS = (
@@ -828,6 +829,13 @@ _CONTROL_TOKEN_WORDS = frozenset({"turn", "eos", "bos", "pad", "unk", "mask"})
 _CONTROL_TOKEN = re.compile(r"<\|?[a-z_]+\|?>", re.IGNORECASE)
 
 
+def _before_first_control_token(text: str) -> str:
+    """Return generated content before Gemma's first turn-control marker."""
+
+    match = _CONTROL_TOKEN.search(str(text))
+    return str(text)[: match.start()] if match is not None else str(text)
+
+
 def completion_answer_matches(generated: str, answer: str) -> bool:
     """Match an unrestricted completion by its final semantic head.
 
@@ -845,7 +853,7 @@ def completion_answer_matches(generated: str, answer: str) -> bool:
 
     generated_words = re.findall(
         r"\w+",
-        normalize_generated_text(_CONTROL_TOKEN.sub(" ", str(generated))),
+        normalize_generated_text(_before_first_control_token(str(generated))),
         flags=re.UNICODE,
     )
     # Defence in depth: if a control token survived in a shape the pattern above
@@ -867,6 +875,36 @@ def completion_answer_matches(generated: str, answer: str) -> bool:
     if wanted in reverse:
         aliases.add(reverse[wanted])
     return generated_words[-1] in aliases
+
+
+def completion_identity_matches(generated: str, concept: str) -> bool:
+    """Match an unrestricted identity answer without requiring the final word.
+
+    Identity completions naturally continue after the noun (for example,
+    ``"a bird in flight"``).  Requiring the concept to be the final lexical
+    item therefore measures response length, not recognition.  This matcher is
+    deliberately lexical and predeclared: it accepts the singular concept or
+    its regular plural anywhere before the first control token, and no
+    post-hoc species taxonomy or semantic alias list.
+    """
+
+    from jlens.mmpilot.full_vocabulary import normalize_generated_text
+
+    words = re.findall(
+        r"\w+",
+        normalize_generated_text(_before_first_control_token(str(generated))),
+        flags=re.UNICODE,
+    )
+    wanted = re.findall(
+        r"\w+", normalize_generated_text(str(concept)), flags=re.UNICODE
+    )
+    if not words or not wanted or any(word in _NEGATION_MARKERS for word in words):
+        return False
+    head = wanted[-1]
+    aliases = {head, f"{head}s"}
+    if head.endswith("y") and len(head) > 1:
+        aliases.add(f"{head[:-1]}ies")
+    return any(word in aliases for word in words)
 
 
 @torch.no_grad()
@@ -915,6 +953,21 @@ def unrestricted_greedy_completion(
     }
     generated: list[int] = []
     diagnostic_trace: list[dict] = []
+    stop_reason = None
+    processor = getattr(backend, "processor", None)
+    tokenizer = getattr(processor, "tokenizer", None)
+    if tokenizer is None:
+        tokenizer = getattr(backend, "tokenizer", None)
+    stop_token_ids: set[int] = set()
+    for owner in (tokenizer, processor):
+        if owner is None:
+            continue
+        for attribute in ("eos_token_id", "sep_token_id"):
+            value = getattr(owner, attribute, None)
+            if isinstance(value, int):
+                stop_token_ids.add(int(value))
+            elif isinstance(value, (tuple, list, set)):
+                stop_token_ids.update(int(item) for item in value)
     for step_index in range(budget):
         step_tensors = (
             tensors
@@ -953,6 +1006,13 @@ def unrestricted_greedy_completion(
             }
         )
         generated.append(top_id)
+        decoded_piece = str(decoder(top_id))
+        if top_id in stop_token_ids:
+            stop_reason = "tokenizer_stop_token"
+            break
+        if _CONTROL_TOKEN.search(decoded_piece):
+            stop_reason = "gemma_control_token"
+            break
 
     text = "".join(decoder(token_id) for token_id in generated)
     return {
@@ -963,7 +1023,9 @@ def unrestricted_greedy_completion(
         "temperature": 0.0,
         "do_sample": False,
         "max_new_tokens": budget,
-        "n_forward_passes": budget,
+        "n_forward_passes": len(generated),
+        "terminated_early": stop_reason is not None,
+        "stop_reason": stop_reason or "token_budget_exhausted",
         "generated_token_ids": generated,
         "generated_text": text,
         "normalized_generated_text": normalize_generated_text(text),
@@ -1616,15 +1678,22 @@ def freeze_loading_localization(
     candidate_layers: Sequence[int],
     min_source_advantage: float = 0.0,
     evidence_position_margin: float = 0.0,
+    primary_position_class: str | None = None,
+    intervention_position_rule: str = PRIMARY_POSITION_RULE,
 ) -> dict:
     """Choose a band and position rule using clean loading and nothing else.
 
     A layer is admissible only when its median source advantage is above the
     frozen margin in *every* required modality.  The longest contiguous run is
-    used; ties choose the deeper run deterministically.  For image/audio, an
-    evidence-only rule is chosen only when evidence positions beat non-evidence
-    positions by the frozen margin in every modality that has an evidence span.
-    Otherwise the literal paper rule (all prompt positions) remains in force.
+    used; ties choose the deeper run deterministically.  When
+    ``primary_position_class`` is supplied, only that predeclared class decides
+    the loading gate; the independently declared intervention rule is recorded
+    separately.  This prevents thousands of evidence tokens from drowning a
+    final-prompt-token workspace signal without silently changing the paper's
+    all-original-prompt-position causal intervention.
+
+    The legacy path (no primary position class) retains the evidence-span versus
+    all-position selection used by completed studies.
     """
 
     required = tuple(map(str, required_modalities))
@@ -1633,7 +1702,14 @@ def freeze_loading_localization(
         raise WorkspaceReplicationRefused("localization needs modalities and layers")
     by_cell: dict[tuple[str, int], list[Mapping]] = {}
     for row in rows:
-        if int(row["layer"]) in layers and str(row["modality"]) in required:
+        if (
+            int(row["layer"]) in layers
+            and str(row["modality"]) in required
+            and (
+                primary_position_class is None
+                or str(row.get("position_class")) == str(primary_position_class)
+            )
+        ):
             by_cell.setdefault((str(row["modality"]), int(row["layer"])), []).append(row)
 
     layer_evidence = []
@@ -1664,8 +1740,39 @@ def freeze_loading_localization(
     selected = max(runs, key=lambda run: (len(run), run[-1]), default=())
 
     position_evidence = []
-    position_rule_by_modality = {modality: "all_prompt_positions" for modality in required}
+    position_rule_by_modality = {
+        modality: str(intervention_position_rule) for modality in required
+    }
     for modality in required:
+        if primary_position_class is not None:
+            primary_values = [
+                float(row["source_advantage"])
+                for row in rows
+                if str(row["modality"]) == modality
+                and int(row["layer"]) in selected
+                and str(row.get("position_class")) == str(primary_position_class)
+            ]
+            other_values = [
+                float(row["source_advantage"])
+                for row in rows
+                if str(row["modality"]) == modality
+                and int(row["layer"]) in selected
+                and str(row.get("position_class")) != str(primary_position_class)
+            ]
+            position_evidence.append(
+                {
+                    "modality": modality,
+                    "primary_position_class": str(primary_position_class),
+                    "median_primary_advantage": (
+                        _median(primary_values) if primary_values else None
+                    ),
+                    "median_other_position_advantage": (
+                        _median(other_values) if other_values else None
+                    ),
+                    "intervention_position_rule": str(intervention_position_rule),
+                }
+            )
+            continue
         evidence_values = [
             float(row["source_advantage"])
             for row in rows
@@ -1705,6 +1812,8 @@ def freeze_loading_localization(
         "required_modalities": list(required),
         "min_source_advantage": float(min_source_advantage),
         "evidence_position_margin": float(evidence_position_margin),
+        "primary_loading_position_class": primary_position_class,
+        "intervention_position_rule": str(intervention_position_rule),
         "layer_evidence": layer_evidence,
         "eligible_layers": eligible,
         "contiguous_runs": [list(run) for run in runs],
@@ -2448,6 +2557,7 @@ __all__ = [
     "build_multimodal_assistant_prefill_inputs",
     "capture_source_loading",
     "completion_answer_matches",
+    "completion_identity_matches",
     "freeze_confirmation_design",
     "freeze_loading_localization",
     "holm_adjust",
