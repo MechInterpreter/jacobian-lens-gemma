@@ -18,6 +18,7 @@ from jlens.mmpilot.l21_confirmation import (
     task_level_loading_admission,
 )
 from jlens.mmpilot.workspace_replication import (
+    WorkspaceReplicationRefused,
     anthropic_text_tasks_expanded_v2,
     swapped_answer_diagnostic_tokens,
 )
@@ -109,7 +110,7 @@ def test_text_confirmation_passes_six_clean_exact_wins() -> None:
         rows.append(
             {
                 "task_id": task.task_id,
-                "exact_swapped_answer_generated": index < 6,
+                "exact_primary_swapped_answer_generated": index < 6,
                 "zero_swapped_answer_generated": False,
                 "random_swapped_answer_generated": False,
                 "unrelated_swapped_answer_generated": False,
@@ -126,12 +127,12 @@ def test_text_confirmation_passes_six_clean_exact_wins() -> None:
     assert all(row["passed"] for row in result["paired_controls"].values())
 
 
-def test_text_confirmation_refuses_missing_or_control_tied_result() -> None:
+def test_text_confirmation_refuses_control_tied_result() -> None:
     tasks = probe_swap_tasks(ROOT / "data" / "experiments" / "probe-swap.json")[:30]
     rows = [
         {
             "task_id": task.task_id,
-            "exact_swapped_answer_generated": index < 10,
+            "exact_primary_swapped_answer_generated": index < 10,
             "zero_swapped_answer_generated": index < 10,
             "random_swapped_answer_generated": False,
             "unrelated_swapped_answer_generated": False,
@@ -146,6 +147,19 @@ def test_text_confirmation_refuses_missing_or_control_tied_result() -> None:
     )
     assert result["verdict"] == "L21_TEXT_CONFIRMATION_NO_GO"
     assert result["paired_controls"]["zero"]["passed"] is False
+
+
+def test_text_confirmation_hard_refuses_a_missing_primary_endpoint() -> None:
+    tasks = probe_swap_tasks(ROOT / "data" / "experiments" / "probe-swap.json")[:1]
+    rows = [{
+        "task_id": tasks[0].task_id,
+        "zero_swapped_answer_generated": False,
+        "random_swapped_answer_generated": False,
+        "unrelated_swapped_answer_generated": False,
+        "integrity_passed": True,
+    }]
+    with pytest.raises(WorkspaceReplicationRefused, match="endpoint fields"):
+        l21_text_confirmation_verdict(rows, eligible_tasks=tasks)
 
 
 def test_multimodal_confirmation_pools_directions_but_requires_each_modality() -> None:

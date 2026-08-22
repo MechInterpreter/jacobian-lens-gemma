@@ -272,8 +272,27 @@ def l21_text_confirmation_verdict(
     indexed = {str(row["task_id"]): dict(row) for row in rows}
     missing = sorted(set(tasks) - set(indexed))
     ordered = [indexed[name] for name in tasks if name in indexed]
+    endpoint_fields = (
+        "exact_primary_swapped_answer_generated",
+        "zero_swapped_answer_generated",
+        "random_swapped_answer_generated",
+        "unrelated_swapped_answer_generated",
+    )
+    malformed = {
+        str(row.get("task_id")): [name for name in endpoint_fields if name not in row]
+        for row in ordered
+        if any(name not in row for name in endpoint_fields)
+    }
+    if malformed:
+        raise WorkspaceReplicationRefused(
+            "L21 confirmation rows are missing frozen endpoint fields: "
+            f"{malformed}"
+        )
     integrity = not missing and all(bool(row.get("integrity_passed")) for row in ordered)
-    exact = [bool(row.get("exact_swapped_answer_generated")) for row in ordered]
+    exact = [
+        bool(row["exact_primary_swapped_answer_generated"])
+        for row in ordered
+    ]
     controls = {
         "zero": [bool(row.get("zero_swapped_answer_generated")) for row in ordered],
         "random": [bool(row.get("random_swapped_answer_generated")) for row in ordered],
@@ -313,6 +332,7 @@ def l21_text_confirmation_verdict(
         "discovery_layer": 21,
         "primary_alpha": 1.0,
         "exact_coordinate_exchange": True,
+        "primary_endpoint_field": "exact_primary_swapped_answer_generated",
         "n_eligible_tasks": len(ordered),
         "n_exact_successes": successes,
         "exact_success_rate": rate,
