@@ -126,6 +126,8 @@ def test_notebook_enforces_the_paper_first_order() -> None:
     assert "frozen-r-l21-multimodal-prospective-followup.v3" in source
     assert '"previous_loading_no_go_remains_unchanged": True' in source
     assert '"multimodal_causal_outcomes_opened": False' in source
+    assert "if RUN_MULTIMODAL_PROTOCOL_REPAIR\n    else __import__(" in source
+    assert "the repair reuses the pinned L21 text result" in source
 
 
 def test_all_result_switches_default_false() -> None:

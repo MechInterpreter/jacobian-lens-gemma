@@ -361,6 +361,11 @@ if RUN_MULTIMODAL_PROTOCOL_REPAIR:
         raise RuntimeError(
             "the repair reuses existing lenses; fitting is forbidden"
         )
+    if RUN_STAGE1_TEXT_REPLICATION or RUN_STAGE1B_TEXT_DIAGNOSTIC:
+        raise RuntimeError(
+            "the repair reuses the pinned L21 text result; Stages 1 and 1B "
+            "must remain False"
+        )
 EVIDENCE_POSITION_MARGIN = 0.0
 MIN_CONFIRMATION_SUCCESS_RATE = 0.50
 CONFIRMATION_FAMILYWISE_ALPHA = 0.05
@@ -566,9 +571,13 @@ if TEXT_TASK_SET == "probe_swap_v1":
 else:
     TEXT_TASKS = _task_builders[TEXT_TASK_SET]()
 print("TEXT TASK SET", TEXT_TASK_SET, "digest", _wr.text_task_digest(TEXT_TASKS))
-TEXT_DIAGNOSTIC_BANDS = __import__(
-    "jlens.mmpilot.workspace_replication", fromlist=["text_diagnostic_bands"]
-).text_diagnostic_bands(LAYERS)
+TEXT_DIAGNOSTIC_BANDS = (
+    ()
+    if RUN_MULTIMODAL_PROTOCOL_REPAIR
+    else __import__(
+        "jlens.mmpilot.workspace_replication", fromlist=["text_diagnostic_bands"]
+    ).text_diagnostic_bands(LAYERS)
+)
 TEXT_DIAGNOSTIC_CONDITIONS = __import__(
     "jlens.mmpilot.workspace_replication",
     fromlist=["TEXT_DIAGNOSTIC_CONDITIONS"],
