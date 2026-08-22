@@ -14,6 +14,7 @@ from jlens.mmpilot.multimodal_lens import (
     answer_equivalence_record,
     build_matched_plan,
     build_swap_bases_for_lens,
+    combine_layer_shards,
     fit_arm,
     fit_budget,
     jacobian_for_built_inputs,
@@ -78,6 +79,34 @@ def test_matched_plan_is_balanced_disjoint_and_concept_neutral():
     }
     assert sorted(plan["pooled_modality_counts"].values()) == [1, 2, 2]
     assert all("bird" not in row["caption"].lower() for row in plan["fit_groups"])
+
+
+def test_combine_layer_shards_joins_same_population_into_exact_band():
+    early = JacobianLens(
+        {16: torch.eye(3), 17: torch.eye(3) * 2}, n_prompts=99, d_model=3
+    )
+    late = JacobianLens(
+        {18: torch.eye(3) * 3, 19: torch.eye(3) * 4}, n_prompts=99, d_model=3
+    )
+    combined = combine_layer_shards(
+        [early, late], expected_layers=range(16, 20)
+    )
+    assert combined.source_layers == [16, 17, 18, 19]
+    assert combined.n_prompts == 99
+    assert torch.equal(combined.jacobians[19], torch.eye(3) * 4)
+
+
+@pytest.mark.parametrize("defect", ["overlap", "population", "gap"])
+def test_combine_layer_shards_refuses_incompatible_inputs(defect: str):
+    early = JacobianLens({16: torch.eye(2)}, n_prompts=99, d_model=2)
+    if defect == "overlap":
+        late = JacobianLens({16: torch.eye(2)}, n_prompts=99, d_model=2)
+    elif defect == "population":
+        late = JacobianLens({17: torch.eye(2)}, n_prompts=98, d_model=2)
+    else:
+        late = JacobianLens({18: torch.eye(2)}, n_prompts=99, d_model=2)
+    with pytest.raises(MultimodalLensRefused):
+        combine_layer_shards([early, late], expected_layers=range(16, 18))
 
 
 def test_multimodal_jacobian_uses_processor_tensors():

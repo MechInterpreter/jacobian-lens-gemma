@@ -64,6 +64,7 @@ better in advance, and no arm is selected after seeing a causal result.
 | 2 | GPU | 4 x 3 full-vocabulary cross-evaluation | one photograph |
 | 3 | GPU | gated exact-swap comparison on fresh bird/cat media | one trial |
 | 3B | GPU | paired alpha dose-response on the frozen Stage-3 population | one condition |
+| 3C | A100 recommended | extend pooled J to L16-L32 and run a broad paper-depth workspace development | one fit checkpoint / one trial |
 | 4 | CPU | write the report from stored units | no model |
 
 Changing any model, processor, audio protocol, cache, population, order, layer,
@@ -123,12 +124,15 @@ RUN_STAGE1_FIT_LENSES = False
 RUN_STAGE2_CROSS_EVALUATE = False
 RUN_STAGE3_CAUSAL_COMPARE = False
 RUN_STAGE3B_ALPHA_SWEEP = False
+RUN_STAGE3C_BROAD_POOLED_WORKSPACE = False
 RUN_STAGE4_WRITE_REPORT = False
 
 CONFIRM_MODEL_LOAD = False
 CONFIRM_FIT_BUDGET = False
 CONFIRM_CAUSAL_BUDGET = False
 CONFIRM_ALPHA_SWEEP_BUDGET = False
+CONFIRM_BROAD_POOLED_FIT_BUDGET = False
+CONFIRM_BROAD_POOLED_CAUSAL_BUDGET = False
 REPORT_RUN_DIR = None
 
 MODEL_REPO_ID = "google/gemma-4-E4B-it"
@@ -162,6 +166,20 @@ EVAL_CONCEPTS = ("bird", "cat")
 CONTROL_CONCEPTS = ("zebra", "giraffe")
 CAUSAL_LAYERS = SOURCE_LAYERS
 PRIMARY_ALPHA = 1.0
+BROAD_POOLED_EARLY_LAYERS = tuple(range(16, 33))
+BROAD_POOLED_LATE_LAYERS = tuple(range(33, 41))
+BROAD_POOLED_BAND = tuple(range(16, 41))
+BROAD_POOLED_ALPHAS = (1.0, 2.0)
+BROAD_POOLED_PAIRS = (
+    ("bird", "cat"), ("cat", "bird"),
+    ("bird", "zebra"), ("zebra", "bird"),
+    ("bird", "giraffe"), ("giraffe", "bird"),
+)
+BROAD_POOLED_CONCEPTS = ("bird", "cat", "zebra", "giraffe")
+BROAD_POOLED_CONTROLS = ("microwave", "toilet")
+BROAD_POOLED_CANDIDATES_PER_CONCEPT = 64
+BROAD_POOLED_IMAGES_PER_DIRECTION = 8
+BROAD_POOLED_SEED = "paper-depth-pooled-j-development-20260822-v1"
 # Alpha=1 is the exact exchange. The refinement grid brackets the strongest
 # stable signal in the coarse 0.5/1/2/4 sweep and never enters the alpha>=2
 # regime that already produced large activation-norm inflation. The grid was
@@ -218,6 +236,7 @@ if RUN_STAGE3_CAUSAL_COMPARE and RUN_STAGE3B_ALPHA_SWEEP:
 MODEL_STAGE = any((
     RUN_STAGE1_FIT_LENSES, RUN_STAGE2_CROSS_EVALUATE,
     RUN_STAGE3_CAUSAL_COMPARE, RUN_STAGE3B_ALPHA_SWEEP,
+    RUN_STAGE3C_BROAD_POOLED_WORKSPACE,
 ))
 MODEL_ENABLED = bool(MODEL_STAGE and CONFIRM_MODEL_LOAD)
 FIT_ENABLED = bool(RUN_STAGE1_FIT_LENSES and MODEL_ENABLED and CONFIRM_FIT_BUDGET)
@@ -225,6 +244,11 @@ CROSS_ENABLED = bool(RUN_STAGE2_CROSS_EVALUATE and MODEL_ENABLED)
 CAUSAL_ENABLED = bool(RUN_STAGE3_CAUSAL_COMPARE and MODEL_ENABLED and CONFIRM_CAUSAL_BUDGET)
 ALPHA_SWEEP_ENABLED = bool(
     RUN_STAGE3B_ALPHA_SWEEP and MODEL_ENABLED and CONFIRM_ALPHA_SWEEP_BUDGET
+)
+BROAD_POOLED_ENABLED = bool(
+    RUN_STAGE3C_BROAD_POOLED_WORKSPACE and MODEL_ENABLED
+    and CONFIRM_BROAD_POOLED_FIT_BUDGET
+    and CONFIRM_BROAD_POOLED_CAUSAL_BUDGET
 )
 if REAL_MODE and MODEL_STAGE and not MODEL_ENABLED:
     print("MODEL STAGES BLOCKED: set CONFIRM_MODEL_LOAD after reading the budget")
@@ -234,6 +258,10 @@ if REAL_MODE and RUN_STAGE3_CAUSAL_COMPARE and not CAUSAL_ENABLED:
     print("CAUSAL BLOCKED: set CONFIRM_CAUSAL_BUDGET after reading the budget")
 if REAL_MODE and RUN_STAGE3B_ALPHA_SWEEP and not ALPHA_SWEEP_ENABLED:
     print("ALPHA SWEEP BLOCKED: set CONFIRM_ALPHA_SWEEP_BUDGET after reading the budget")
+if REAL_MODE and RUN_STAGE3C_BROAD_POOLED_WORKSPACE and not BROAD_POOLED_ENABLED:
+    print(
+        "BROAD POOLED WORKSPACE BLOCKED: confirm both its fit and causal budgets"
+    )
 '''
 )
 
@@ -290,6 +318,26 @@ print("  total forwards            ", _sweep_rows * (1 + _sweep_conditions))
 print("  alphas                    ", list(ALPHA_SWEEP))
 print("  resume                    one arm x alpha x condition trial")
 print("  scientific role           exploratory sensitivity; alpha=1 stays primary")
+print()
+_broad_directions = len(BROAD_POOLED_PAIRS)
+_broad_cells = (
+    BROAD_POOLED_IMAGES_PER_DIRECTION * _broad_directions * 3
+)
+print("STAGE 3C BROAD POOLED J-LENS BUDGET")
+print("  method                    ordinary J-lens; no R-lens")
+print("  fitted shard              pooled L16-L32 only")
+print("  reused checksum-pinned    pooled L33-L40")
+print("  fitting examples          ", N_FIT_GROUPS)
+print("  fitting forward passes    ", N_FIT_GROUPS)
+print("  fitting backward passes   ", N_FIT_GROUPS * ((EXPECT_D_MODEL + DIM_BATCH - 1) // DIM_BATCH))
+print("  checkpoint                every", CHECKPOINT_EVERY, "examples")
+print("  paper-depth band          ", list(BROAD_POOLED_BAND))
+print("  directions                ", list(BROAD_POOLED_PAIRS))
+print("  clean capability forwards ", BROAD_POOLED_CANDIDATES_PER_CONCEPT * len(BROAD_POOLED_CONCEPTS) * 3)
+print("  causal rows               ", _broad_cells)
+print("  patched forwards          ", _broad_cells * (1 + 3 * len(BROAD_POOLED_ALPHAS)))
+print("  primary / sensitivity     alpha=1 / alpha=2")
+print("  resume                    one atomic fit prefix; then one condition JSON")
 '''
 )
 
@@ -1459,6 +1507,448 @@ if ALPHA_SWEEP_REPORT:
         "(fresh-population confirmation required)",
     )
     print("Alpha=1 remains primary; every other alpha is sensitivity evidence.")
+'''
+)
+
+markdown("## 10C. Stage 3C — broad paper-depth pooled multimodal J-lens")
+code(
+    r'''
+BROAD_POOLED_REPORT = None
+if REAL_MODE and BROAD_POOLED_ENABLED:
+    from jlens.lens import JacobianLens
+    from jlens.metadata import file_sha256
+    from jlens.mmpilot.coordinate_swap import (
+        random_two_direction_basis, resolve_concept_token,
+    )
+    from jlens.mmpilot.digit_reasoning_confirmation import resolve_digit_endpoints
+    from jlens.mmpilot.multimodal_lens import (
+        build_swap_bases_for_lens, combine_layer_shards, fit_arm,
+        load_completed_causal_source, open_answer_matches, plan_units,
+        select_causal_groups, unrestricted_swap_trial,
+    )
+    from jlens.mmpilot.store import RunFingerprint, UnitStore, safe_key
+
+    # The late shard is not rediscovered. Its completed report and tensor are
+    # checksum-pinned before the first new backward pass.
+    _broad_source = load_completed_causal_source(
+        CAUSAL_LENS_SOURCE_RUN_DIR,
+        expected_final_report_checksum=EXPECTED_SOURCE_FINAL_REPORT_CHECKSUM,
+        expected_cross_report_checksum=EXPECTED_SOURCE_CROSS_REPORT_CHECKSUM,
+        expected_causal_report_checksum=EXPECTED_SOURCE_CAUSAL_REPORT_CHECKSUM,
+        expected_lens_checksums=EXPECTED_SOURCE_LENS_CHECKSUMS,
+    )
+    _late_path = Path(_broad_source["lens_paths"]["pooled"])
+    _late_lens = JacobianLens.load(str(_late_path))
+    if _broad_source.get("fit_plan_digest") != PLAN["plan_digest"]:
+        raise RuntimeError(
+            "the checksum-pinned late shard was not fitted on this exact "
+            "99-example multimodal plan"
+        )
+    if _late_lens.source_layers != list(BROAD_POOLED_LATE_LAYERS):
+        raise RuntimeError(
+            f"pinned pooled late shard covers {_late_lens.source_layers}, not "
+            f"{list(BROAD_POOLED_LATE_LAYERS)}"
+        )
+    if _late_lens.n_prompts != N_FIT_GROUPS or _late_lens.d_model != EXPECT_D_MODEL:
+        raise RuntimeError(
+            "the checksum-pinned late shard has the wrong fit count or width"
+        )
+
+    _broad_config = {
+        "study": "paper_depth_pooled_multimodal_jlens_development.v1",
+        "model_repo_id": MODEL_REPO_ID,
+        "model_revision": MODEL_REVISION,
+        "audio_protocol_fingerprint": AUDIO_PROTOCOL_FINGERPRINT,
+        "manifest_checksum": MANIFEST_CHECKSUM,
+        "fit_plan_digest": PLAN["plan_digest"],
+        "fit_arm": "pooled",
+        "fit_examples": N_FIT_GROUPS,
+        "early_layers_fitted_now": list(BROAD_POOLED_EARLY_LAYERS),
+        "late_layers_reused": list(BROAD_POOLED_LATE_LAYERS),
+        "full_band": list(BROAD_POOLED_BAND),
+        "target_layer": TARGET_LAYER,
+        "late_lens_checksum": EXPECTED_SOURCE_LENS_CHECKSUMS["pooled"],
+        "pairs": [list(pair) for pair in BROAD_POOLED_PAIRS],
+        "concepts": list(BROAD_POOLED_CONCEPTS),
+        "control_concepts": list(BROAD_POOLED_CONTROLS),
+        "alphas": list(BROAD_POOLED_ALPHAS),
+        "primary_alpha": 1.0,
+        "position_rule": "all_original_prompt_positions",
+        "teacher_forcing": False,
+        "candidate_list": False,
+        "population_seed": BROAD_POOLED_SEED,
+        "commit": COMMIT,
+    }
+    _broad_digest = payload_checksum(_broad_config)
+    BROAD_RUN_DIR = (
+        RUNS_ROOT / "mmbroadpooledj" /
+        f"mmbroadpooledj_real_{_broad_digest.split(':')[1][:12]}"
+    )
+    BROAD_RUN_DIR.mkdir(parents=True, exist_ok=True)
+    (BROAD_RUN_DIR / "scientific_config.json").write_text(
+        json.dumps(_broad_config, indent=2)
+    )
+
+    _early_path = BROAD_RUN_DIR / "lenses" / "lens.pooled.l16_l32.pt"
+    _early_checkpoint = (
+        BROAD_RUN_DIR / "lenses" / "checkpoints" /
+        "pooled.l16_l32.jacobian_sum.pt"
+    )
+    if _early_path.is_file():
+        _early_lens = JacobianLens.load(str(_early_path))
+        print("broad pooled early shard reused", _early_path)
+    else:
+        _early_lens = fit_arm(
+            BACKEND, plan_units(PLAN, "pooled"), build_inputs=build_fit_inputs,
+            source_layers=BROAD_POOLED_EARLY_LAYERS, target_layer=TARGET_LAYER,
+            checkpoint_path=_early_checkpoint, arm="pooled",
+            scientific_fingerprint=_broad_digest, dim_batch=DIM_BATCH,
+            skip_first=SKIP_FIRST, checkpoint_every=CHECKPOINT_EVERY,
+            progress=progress,
+        )
+        _early_path.parent.mkdir(parents=True, exist_ok=True)
+        _temporary = _early_path.with_suffix(".tmp.pt")
+        _early_lens.save(str(_temporary))
+        os.replace(_temporary, _early_path)
+        print("broad pooled early shard completed", _early_path)
+
+    _broad_lens = combine_layer_shards(
+        [_early_lens, _late_lens], expected_layers=BROAD_POOLED_BAND
+    )
+    _combined_path = BROAD_RUN_DIR / "lenses" / "lens.pooled.l16_l40.pt"
+    if not _combined_path.is_file():
+        _temporary = _combined_path.with_suffix(".tmp.pt")
+        _broad_lens.save(str(_temporary))
+        os.replace(_temporary, _combined_path)
+    _early_checksum = file_sha256(str(_early_path))
+    _combined_checksum = file_sha256(str(_combined_path))
+    print("broad pooled lens", _combined_path)
+    print("  early checksum", _early_checksum)
+    print("  late checksum ", EXPECTED_SOURCE_LENS_CHECKSUMS["pooled"])
+    print("  full checksum ", _combined_checksum)
+
+    _forbidden = {
+        concept: tuple(other for other in BROAD_POOLED_CONCEPTS if other != concept)
+        for concept in BROAD_POOLED_CONCEPTS
+    }
+    _broad_population = select_causal_groups(
+        GROUPS, concepts=BROAD_POOLED_CONCEPTS,
+        n_per_concept=BROAD_POOLED_CANDIDATES_PER_CONCEPT,
+        excluded_image_ids=(
+            *PLAN["fit_image_ids"], *PLAN["eval_image_ids"],
+            *_broad_source["excluded_image_ids"],
+        ),
+        seed=BROAD_POOLED_SEED, forbidden_concepts=_forbidden,
+    )
+    _population_record = {
+        concept: [
+            {"group_id": row["group_id"], "image_id": row["image_id"]}
+            for row in rows
+        ]
+        for concept, rows in _broad_population.items()
+    }
+    _population_digest = payload_checksum(_population_record)
+    (BROAD_RUN_DIR / "development_population.json").write_text(
+        json.dumps({
+            "population": _population_record,
+            "population_digest": _population_digest,
+            "excluded_fit_images": len(PLAN["fit_image_ids"]),
+            "excluded_eval_images": len(PLAN["eval_image_ids"]),
+            "excluded_prior_screen_images": len(_broad_source["excluded_image_ids"]),
+        }, indent=2)
+    )
+
+    _broad_fingerprint = RunFingerprint(
+        mode="real", model_repo_id=MODEL_REPO_ID,
+        model_revision=MODEL_REVISION, processor_revision=MODEL_REVISION,
+        layers=tuple(BROAD_POOLED_BAND), lens_checksum=_combined_checksum,
+        manifest_checksum=MANIFEST_CHECKSUM, split_id=_population_digest,
+        intervention_config={
+            "alphas": list(BROAD_POOLED_ALPHAS),
+            "pairs": [list(pair) for pair in BROAD_POOLED_PAIRS],
+            "positions": "all_original_prompt_positions",
+            "controls": ["zero", "random_norm_matched", "unrelated_alpha_matched"],
+        },
+        extra={"study_digest": _broad_digest, "fit_plan_digest": PLAN["plan_digest"]},
+    )
+    _broad_store = UnitStore(BROAD_RUN_DIR, _broad_fingerprint)
+    print("broad run state", _broad_store.open())
+
+    _encode = BACKEND.encode_candidate
+    _all_tokens = {
+        name: resolve_concept_token(_encode, name)
+        for name in (*BROAD_POOLED_CONCEPTS, *BROAD_POOLED_CONTROLS)
+    }
+    _digits = resolve_digit_endpoints(BACKEND)
+    _legs = {"bird": "2", "cat": "4", "zebra": "4", "giraffe": "4"}
+    _bases = {
+        (source, target): build_swap_bases_for_lens(
+            _broad_lens, BACKEND.unembedding_weight(),
+            layers=BROAD_POOLED_BAND, source=_all_tokens[source],
+            target=_all_tokens[target],
+        )
+        for source, target in BROAD_POOLED_PAIRS
+    }
+    _unrelated = build_swap_bases_for_lens(
+        _broad_lens, BACKEND.unembedding_weight(), layers=BROAD_POOLED_BAND,
+        source=_all_tokens[BROAD_POOLED_CONTROLS[0]],
+        target=_all_tokens[BROAD_POOLED_CONTROLS[1]],
+    )
+
+    def _broad_prompt(modality, caption):
+        question = (
+            "How many legs does the animal in the evidence typically have? "
+            "Answer with one digit.\nAnswer:"
+        )
+        return f"Caption: {caption}\n{question}" if modality == "text" else question
+
+    # Recruitment uses only clean capability and is persisted before any swap.
+    _capability_rows = []
+    for _source in BROAD_POOLED_CONCEPTS:
+        for _group in _broad_population[_source]:
+            for _modality in ("text", "image", "spoken_audio"):
+                _key = safe_key("broad_capability", _source, _group["group_id"], _modality)
+                _row = _broad_store.load("capability", _key)
+                if _row is None:
+                    _inputs = build_group_inputs(
+                        _group, _modality,
+                        _broad_prompt(_modality, _group["caption"]),
+                    )
+                    _logits = BACKEND.forward_logits(_inputs.tensors)[
+                        0, _inputs.final_prompt_position
+                    ].float()
+                    _surface = BACKEND.decode_token(int(_logits.argmax())).strip()
+                    _row = {
+                        "source": _source, "group_id": _group["group_id"],
+                        "image_id": _group["image_id"], "modality": _modality,
+                        "expected": _legs[_source], "generated": _surface,
+                        "pass": open_answer_matches(_surface, _legs[_source]),
+                    }
+                    _broad_store.save("capability", _key, _row)
+                    _work = "computed"
+                else:
+                    _work = "reused"
+                _capability_rows.append(_row)
+                if len(_capability_rows) == 1 or len(_capability_rows) % 48 == 0:
+                    print("broad capability", len(_capability_rows), _work)
+
+    _recruited = {}
+    for _source in BROAD_POOLED_CONCEPTS:
+        _eligible = []
+        for _group in _broad_population[_source]:
+            _rows = [
+                row for row in _capability_rows
+                if row["source"] == _source and row["group_id"] == _group["group_id"]
+            ]
+            if len(_rows) == 3 and all(row["pass"] for row in _rows):
+                _eligible.append(_group)
+        _recruited[_source] = _eligible[:BROAD_POOLED_IMAGES_PER_DIRECTION]
+    _capability_go = all(
+        len(rows) == BROAD_POOLED_IMAGES_PER_DIRECTION
+        for rows in _recruited.values()
+    )
+    print("broad recruited", {key: len(value) for key, value in _recruited.items()})
+
+    _trial_rows = []
+    if _capability_go:
+        for _source, _target_name in BROAD_POOLED_PAIRS:
+            for _group in _recruited[_source]:
+                for _modality in ("text", "image", "spoken_audio"):
+                    _inputs = None
+                    _clean_logits = None
+                    _source_answer_id = int(_digits["token_ids"][_legs[_source]])
+                    _target_answer_id = int(_digits["token_ids"][_legs[_target_name]])
+                    _conditions = [("zero", 0.0, _bases[(_source, _target_name)])]
+                    for _alpha in BROAD_POOLED_ALPHAS:
+                        _exact = _bases[(_source, _target_name)]
+                        _conditions.extend((
+                            (f"exact_alpha{_alpha:g}", _alpha, _exact),
+                            (f"random_alpha{_alpha:g}", _alpha, {
+                                layer: random_two_direction_basis(
+                                    basis, seed=20260822 + layer
+                                ) for layer, basis in _exact.items()
+                            }),
+                            (f"unrelated_alpha{_alpha:g}", _alpha, _unrelated),
+                        ))
+                    for _condition, _alpha, _condition_bases in _conditions:
+                        _key = safe_key(
+                            "broad_trial", _source, _target_name,
+                            _group["group_id"], _modality, _condition,
+                        )
+                        _stored = _broad_store.load("intervention", _key)
+                        if _stored is None:
+                            if _inputs is None:
+                                _inputs = build_group_inputs(
+                                    _group, _modality,
+                                    _broad_prompt(_modality, _group["caption"]),
+                                )
+                                _clean_logits = BACKEND.forward_logits(_inputs.tensors)[
+                                    0, _inputs.final_prompt_position
+                                ].float()
+                            _trial = unrestricted_swap_trial(
+                                BACKEND, _inputs, bases=_condition_bases,
+                                alpha=_alpha, target_token_id=_target_answer_id,
+                                source_token_id=_source_answer_id,
+                                clean_logits=_clean_logits, compact_positions=True,
+                            )
+                            _surface = BACKEND.decode_token(
+                                _trial["patched_top_token_id"]
+                            ).strip()
+                            _stored = {
+                                **_trial, "source": _source,
+                                "target": _target_name,
+                                "direction": f"{_source}->{_target_name}",
+                                "group_id": _group["group_id"],
+                                "image_id": _group["image_id"],
+                                "modality": _modality, "condition": _condition,
+                                "expected": _legs[_target_name],
+                                "patched_surface": _surface,
+                                "success": open_answer_matches(
+                                    _surface, _legs[_target_name]
+                                ),
+                            }
+                            _broad_store.save("intervention", _key, _stored)
+                            _work = "computed"
+                        else:
+                            _work = "reused"
+                        _trial_rows.append(_stored)
+                        if len(_trial_rows) == 1 or len(_trial_rows) % 96 == 0:
+                            print("broad trials", len(_trial_rows), _work)
+
+    def _rate(rows):
+        return sum(bool(row["success"]) for row in rows) / len(rows) if rows else 0.0
+
+    _cells = []
+    for _source, _target_name in BROAD_POOLED_PAIRS:
+        for _modality in ("text", "image", "spoken_audio"):
+            _selected = [
+                row for row in _trial_rows
+                if row["source"] == _source and row["target"] == _target_name
+                and row["modality"] == _modality
+            ]
+            _cell = {
+                "direction": f"{_source}->{_target_name}",
+                "modality": _modality,
+                "n": BROAD_POOLED_IMAGES_PER_DIRECTION,
+            }
+            for _condition in (
+                "zero", "exact_alpha1", "random_alpha1", "unrelated_alpha1",
+                "exact_alpha2", "random_alpha2", "unrelated_alpha2",
+            ):
+                _rows = [row for row in _selected if row["condition"] == _condition]
+                _cell[_condition] = {
+                    "success_rate": _rate(_rows),
+                    "successes": sum(bool(row["success"]) for row in _rows),
+                    "mean_target_logit_delta": (
+                        sum(float(row["target_logit_delta"]) for row in _rows) / len(_rows)
+                        if _rows else None
+                    ),
+                    "max_activation_norm_ratio": (
+                        max(float(row["max_activation_norm_ratio"]) for row in _rows)
+                        if _rows else None
+                    ),
+                    "max_update_to_activation_norm_ratio": (
+                        max(
+                            float(row["max_update_to_activation_norm_ratio"])
+                            for row in _rows
+                        ) if _rows else None
+                    ),
+                    "integrity_pass": bool(_rows) and all(
+                        row["all_prompt_positions_patched"]
+                        and row["layers_patched"] == list(BROAD_POOLED_BAND)
+                        and float(row["max_orthogonal_residual_drift"]) <= 1e-5
+                        and float(row["max_coordinate_update_error"]) <= 1e-5
+                        for row in _rows
+                    ),
+                }
+            _cells.append(_cell)
+
+    def _direction_pass(direction, alpha):
+        cells = [cell for cell in _cells if cell["direction"] == direction]
+        exact = f"exact_alpha{alpha:g}"
+        random = f"random_alpha{alpha:g}"
+        unrelated = f"unrelated_alpha{alpha:g}"
+        return len(cells) == 3 and all(
+            cell[exact]["success_rate"] >= 0.50
+            and cell[exact]["success_rate"] > cell["zero"]["success_rate"]
+            and cell[exact]["success_rate"] > cell[random]["success_rate"]
+            and cell[exact]["success_rate"] > cell[unrelated]["success_rate"]
+            and cell[exact]["integrity_pass"]
+            and cell[random]["integrity_pass"]
+            and cell[unrelated]["integrity_pass"]
+            and cell[exact]["max_activation_norm_ratio"] <= (
+                1.25 if alpha == 1.0 else 1.50
+            )
+            and cell[exact]["max_update_to_activation_norm_ratio"] <= (
+                0.50 if alpha == 1.0 else 1.00
+            )
+            for cell in cells
+        )
+
+    _alpha1_directions = [
+        f"{source}->{target}" for source, target in BROAD_POOLED_PAIRS
+        if _direction_pass(f"{source}->{target}", 1.0)
+    ]
+    _alpha2_directions = [
+        f"{source}->{target}" for source, target in BROAD_POOLED_PAIRS
+        if _direction_pass(f"{source}->{target}", 2.0)
+    ]
+    _verdict = (
+        "BROAD_POOLED_J_DEVELOPMENT_CAPABILITY_NO_GO" if not _capability_go
+        else "BROAD_POOLED_J_DEVELOPMENT_ALPHA1_GO" if _alpha1_directions
+        else "BROAD_POOLED_J_DEVELOPMENT_ALPHA2_SENSITIVITY_ONLY"
+        if _alpha2_directions else "BROAD_POOLED_J_DEVELOPMENT_NO_GO"
+    )
+    BROAD_POOLED_REPORT = {
+        "schema": "jlens.mmpilot.broad_pooled_multimodal_j_workspace.v1",
+        "verdict": _verdict,
+        "scientific_config": _broad_config,
+        "study_digest": _broad_digest,
+        "population_digest": _population_digest,
+        "lens_provenance": {
+            "fit_distribution": "33 text + 33 image + 33 spoken_audio",
+            "fit_plan_digest": PLAN["plan_digest"],
+            "early_shard_checksum": _early_checksum,
+            "late_shard_checksum": EXPECTED_SOURCE_LENS_CHECKSUMS["pooled"],
+            "combined_checksum": _combined_checksum,
+            "same_99_examples_in_both_shards": True,
+        },
+        "method": {
+            "lens": "ordinary sample-mean J-lens",
+            "r_lens_used": False,
+            "equation": "c=pinv(V)h; h'=h+alpha*V*(swap(c)-c)",
+            "layers": list(BROAD_POOLED_BAND),
+            "positions": "every original prompt position",
+            "coordinates_recomputed_at_every_layer": True,
+            "teacher_forcing_used": False,
+            "candidate_list_supplied": False,
+            "endpoint": "unrestricted full-vocabulary next-token top1",
+        },
+        "capability_go": _capability_go,
+        "recruited_counts": {key: len(value) for key, value in _recruited.items()},
+        "alpha1_primary_passing_directions": _alpha1_directions,
+        "alpha2_sensitivity_passing_directions": _alpha2_directions,
+        "cells": _cells,
+        "rows": _trial_rows,
+        "claim_boundary": (
+            "This is prospective development on a predeclared paper-depth band. "
+            "Any passing direction must be repeated on a fresh frozen population "
+            "before it is described as independently confirmed."
+        ),
+    }
+    BROAD_POOLED_REPORT["report_checksum"] = payload_checksum(BROAD_POOLED_REPORT)
+    _broad_store.save("metric", "broad_pooled_j_report", BROAD_POOLED_REPORT)
+    _broad_report_path = BROAD_RUN_DIR / "broad_pooled_multimodal_j_workspace_report.json"
+    _broad_report_path.write_text(json.dumps(BROAD_POOLED_REPORT, indent=2, default=str))
+    print("=" * 96)
+    print("BROAD POOLED MULTIMODAL J-LENS —", _verdict)
+    print("=" * 96)
+    print("alpha=1 passing directions", _alpha1_directions)
+    print("alpha=2 sensitivity       ", _alpha2_directions)
+    print("report", _broad_report_path)
+    print("checksum", BROAD_POOLED_REPORT["report_checksum"])
+elif RUN_STAGE3C_BROAD_POOLED_WORKSPACE:
+    print("Stage 3C requested but blocked by model/fit/causal budget confirmations.")
 '''
 )
 

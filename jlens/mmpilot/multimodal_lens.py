@@ -215,7 +215,15 @@ def load_completed_causal_source(
         "excluded_image_ids": excluded_image_ids,
         "n_excluded_images": len(excluded_image_ids),
     }
-    return {**payload, "source_digest": payload_checksum(payload)}
+    return {
+        **payload,
+        "source_digest": payload_checksum(payload),
+        # Added outside the historical source digest so existing checksum-pinned
+        # alpha-sweep provenance remains byte-for-byte compatible.
+        "fit_plan_digest": (final.get("scientific_config") or {}).get(
+            "plan_digest"
+        ),
+    }
 
 
 def load_completed_alpha_sweep_source(
@@ -886,6 +894,61 @@ def fit_arm(
     )
 
 
+def combine_layer_shards(
+    shards: Sequence[JacobianLens],
+    *,
+    expected_layers: Sequence[int] | None = None,
+) -> JacobianLens:
+    """Join lenses fitted on the same examples but on disjoint layer sets.
+
+    This is deliberately different from :meth:`JacobianLens.merge`, which
+    averages lenses fitted on disjoint *prompt* subsets.  Here every shard must
+    have the same ``n_prompts`` and ``d_model`` and no physical layer may occur
+    twice.  The result simply places the already-estimated per-layer matrices
+    beside one another.  When ``expected_layers`` is supplied, it must describe
+    one exact contiguous band; missing, duplicated, or extra layers are refused.
+    """
+
+    if not shards:
+        raise MultimodalLensRefused("at least one layer shard is required")
+    first = shards[0]
+    combined: dict[int, torch.Tensor] = {}
+    for index, shard in enumerate(shards):
+        if shard.d_model != first.d_model:
+            raise MultimodalLensRefused(
+                f"layer shard {index} has d_model={shard.d_model}, not "
+                f"{first.d_model}"
+            )
+        if shard.n_prompts != first.n_prompts:
+            raise MultimodalLensRefused(
+                f"layer shard {index} has n_prompts={shard.n_prompts}, not "
+                f"{first.n_prompts}; layer shards must use the same fit set"
+            )
+        overlap = sorted(set(combined) & set(shard.jacobians))
+        if overlap:
+            raise MultimodalLensRefused(
+                f"layer shards overlap at physical layer(s) {overlap}"
+            )
+        combined.update(shard.jacobians)
+
+    observed = sorted(combined)
+    if expected_layers is not None:
+        expected = sorted({int(layer) for layer in expected_layers})
+        if expected != list(range(expected[0], expected[-1] + 1)):
+            raise MultimodalLensRefused(
+                f"expected layer band is not contiguous: {expected}"
+            )
+        if observed != expected:
+            raise MultimodalLensRefused(
+                f"combined layer shards cover {observed}, not {expected}"
+            )
+    return JacobianLens(
+        jacobians=combined,
+        n_prompts=first.n_prompts,
+        d_model=first.d_model,
+    )
+
+
 def selected_lens_vector(
     lens: JacobianLens, unembedding_weight: torch.Tensor, *, layer: int, token_id: int
 ) -> torch.Tensor:
@@ -1237,6 +1300,7 @@ __all__ = [
     "build_matched_plan",
     "build_swap_bases_for_lens",
     "capture_eval_rows",
+    "combine_layer_shards",
     "evaluation_prompt",
     "fit_arm",
     "fit_budget",

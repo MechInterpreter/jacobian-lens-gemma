@@ -74,6 +74,28 @@ def test_notebook_contains_the_four_arm_scientific_contract() -> None:
     assert "int(_clean_logits.argmax()) == int(_expected)" not in source
 
 
+def test_notebook_contains_broad_pooled_j_workspace_extension() -> None:
+    source = _source()
+    for required in (
+        "RUN_STAGE3C_BROAD_POOLED_WORKSPACE",
+        "BROAD_POOLED_EARLY_LAYERS = tuple(range(16, 33))",
+        "BROAD_POOLED_LATE_LAYERS = tuple(range(33, 41))",
+        "BROAD_POOLED_BAND = tuple(range(16, 41))",
+        "BROAD_POOLED_ALPHAS = (1.0, 2.0)",
+        "combine_layer_shards",
+        '"fit_distribution": "33 text + 33 image + 33 spoken_audio"',
+        '"r_lens_used": False',
+        '"positions": "every original prompt position"',
+        '"teacher_forcing_used": False',
+        '"candidate_list_supplied": False',
+        '"endpoint": "unrestricted full-vocabulary next-token top1"',
+        "BROAD_POOLED_J_DEVELOPMENT_ALPHA1_GO",
+        "BROAD_POOLED_J_DEVELOPMENT_ALPHA2_SENSITIVITY_ONLY",
+        "fresh frozen population",
+    ):
+        assert required in source
+
+
 def test_mock_notebook_executes_end_to_end(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("TMP", str(tmp_path))
     monkeypatch.setenv("TEMP", str(tmp_path))
