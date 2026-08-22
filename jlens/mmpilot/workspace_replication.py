@@ -47,6 +47,14 @@ PROTOCOL_VERSION = "mmpilot.paper_first_workspace_replication.v7"
 TEXT_INPUT_PROTOCOL_VERSION = "mmpilot.assistant_prefill_completion.v1"
 TEXT_OUTPUT_ENDPOINT_VERSION = "mmpilot.unrestricted_greedy_semantic_head_answer.v2"
 TEXT_MAX_NEW_TOKENS = 2
+MULTIMODAL_INPUT_PROTOCOL_VERSION = (
+    "mmpilot.multimodal_assistant_prefill_completion.v1"
+)
+MULTIMODAL_COMPLETION_INSTRUCTION = (
+    "Use only the supplied evidence. Complete the assistant's factual sentence "
+    "directly with the requested answer. Do not restart, explain, or list choices."
+)
+MULTIMODAL_MAX_NEW_TOKENS = 4
 TEXT_COMPLETION_INSTRUCTION = (
     "Complete the assistant's factual sentence by continuing it directly. "
     "Do not restart or explain the sentence."
@@ -643,6 +651,170 @@ def build_assistant_prefill_completion_inputs(backend, prompt: str):
             "input_protocol": TEXT_INPUT_PROTOCOL_VERSION,
         },
         modality_token_range=None,
+    )
+
+
+def build_multimodal_assistant_prefill_inputs(
+    backend,
+    *,
+    modality: str,
+    assistant_prefill: str,
+    caption: str | None = None,
+    image=None,
+    audio=None,
+    sampling_rate: int | None = None,
+    media_path: str | None = None,
+):
+    """Build one answer-neutral completion input for any supported modality.
+
+    This is the multimodal analogue of
+    :func:`build_assistant_prefill_completion_inputs`.  The evidence remains in
+    the user turn while the assistant turn ends in a factual sentence stem such
+    as ``"The number of legs on the animal in the evidence is"``.  The model
+    generates the answer itself: no candidate list, answer token, or
+    teacher-forced continuation is supplied.
+
+    Using the same assistant-prefill route in every modality is scientifically
+    important.  Gemma otherwise spends the two-token text/image endpoint on a
+    conversational restart (``"The animal"``), while its native audio template
+    often emits the requested digit immediately.  That is a protocol artifact,
+    not a modality comparison.
+    """
+
+    from jlens.mmpilot.backend import (
+        BuiltInputs,
+        contiguous_token_range,
+        file_checksum,
+        text_hash,
+    )
+
+    modality = str(modality)
+    if modality not in {"text", "image", "spoken_audio"}:
+        raise WorkspaceReplicationRefused(
+            f"unknown multimodal completion modality {modality!r}"
+        )
+    processor = getattr(backend, "processor", None)
+    device = getattr(backend, "device", None)
+    if processor is None or device is None:
+        raise WorkspaceReplicationRefused(
+            "multimodal assistant-prefill completion requires the real "
+            "backend's processor and device"
+        )
+    apply_chat_template = getattr(processor, "apply_chat_template", None)
+    if not callable(apply_chat_template):
+        raise WorkspaceReplicationRefused(
+            "multimodal assistant-prefill completion requires the pinned chat "
+            "template"
+        )
+
+    instruction = MULTIMODAL_COMPLETION_INSTRUCTION
+    user_content: list[dict] = []
+    audio_record = None
+    modality_token_id = None
+    if modality == "text":
+        if not str(caption or "").strip():
+            raise WorkspaceReplicationRefused(
+                "the text completion route requires a non-empty caption"
+            )
+        user_content.append(
+            {
+                "type": "text",
+                "text": f"Evidence caption: {str(caption).strip()}\n{instruction}",
+            }
+        )
+    elif modality == "image":
+        if image is None:
+            raise WorkspaceReplicationRefused(
+                "the image completion route requires an image"
+            )
+        user_content.extend(
+            (
+                {"type": "image", "image": image},
+                {"type": "text", "text": instruction},
+            )
+        )
+        modality_token_id = getattr(backend, "interface", {}).get(
+            "image_token_id"
+        )
+    else:
+        from jlens.mmpilot.audio import (
+            audio_content_block,
+            prepare_waveform,
+            verify_audio_encoding,
+        )
+
+        resolved = getattr(backend, "audio_interface", None)
+        if resolved is None or audio is None:
+            raise WorkspaceReplicationRefused(
+                "the spoken-audio completion route requires the resolved native "
+                "audio interface and a waveform"
+            )
+        prepared = prepare_waveform(
+            audio,
+            int(sampling_rate) if sampling_rate is not None else resolved.sampling_rate,
+            expected_rate=resolved.sampling_rate,
+        )
+        user_content.extend(
+            (
+                audio_content_block(prepared.samples),
+                {"type": "text", "text": instruction},
+            )
+        )
+        modality_token_id = int(resolved.audio_token_id)
+        audio_record = {"waveform": prepared.to_dict()}
+
+    messages = [
+        {"role": "user", "content": user_content},
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": str(assistant_prefill)}],
+        },
+    ]
+    encoded = apply_chat_template(
+        messages,
+        continue_final_message=True,
+        tokenize=True,
+        return_dict=True,
+        return_tensors="pt",
+    )
+    tensors = {
+        key: (value.to(device) if torch.is_tensor(value) else value)
+        for key, value in dict(encoded).items()
+    }
+    tensors.setdefault("use_cache", False)
+    input_ids = tensors.get("input_ids")
+    if not torch.is_tensor(input_ids) or input_ids.ndim != 2:
+        raise WorkspaceReplicationRefused(
+            "the multimodal assistant-prefill route did not produce rank-two "
+            "input_ids"
+        )
+    modality_range = contiguous_token_range(input_ids, modality_token_id)
+    if modality == "spoken_audio":
+        verified = verify_audio_encoding(
+            encoded, audio_token_id=int(modality_token_id)
+        )
+        modality_range = list(verified["audio_token_span"])
+        audio_record = {**verified, **dict(audio_record or {})}
+    route = {
+        "route": "multimodal_assistant_prefill_completion",
+        "chat_template_used": True,
+        "continue_final_message": True,
+        "input_protocol": MULTIMODAL_INPUT_PROTOCOL_VERSION,
+        "answer_prefill_is_answer_neutral": True,
+        "candidate_list_supplied": False,
+        "teacher_forcing_used": False,
+    }
+    return BuiltInputs(
+        tensors=tensors,
+        prompt_len=int(input_ids.shape[1]),
+        modality=modality,
+        prompt_hash=text_hash(
+            f"{modality}|{caption or ''}|{instruction}|{assistant_prefill}"
+        ),
+        media_checksum=file_checksum(media_path) if media_path else None,
+        route=route,
+        modality_token_range=modality_range,
+        audio=audio_record,
     )
 
 
@@ -2257,6 +2429,9 @@ __all__ = [
     "LOCALIZATION_VERSION",
     "PROTOCOL_VERSION",
     "TEXT_INPUT_PROTOCOL_VERSION",
+    "MULTIMODAL_INPUT_PROTOCOL_VERSION",
+    "MULTIMODAL_COMPLETION_INSTRUCTION",
+    "MULTIMODAL_MAX_NEW_TOKENS",
     "TEXT_COMPLETION_INSTRUCTION",
     "TEXT_ANSWER_MATCH_RULE",
     "TEXT_MAX_NEW_TOKENS",
@@ -2270,6 +2445,7 @@ __all__ = [
     "anthropic_text_tasks",
     "assert_fresh_population",
     "build_assistant_prefill_completion_inputs",
+    "build_multimodal_assistant_prefill_inputs",
     "capture_source_loading",
     "completion_answer_matches",
     "freeze_confirmation_design",

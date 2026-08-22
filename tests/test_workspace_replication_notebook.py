@@ -71,6 +71,15 @@ def test_notebook_enforces_the_paper_first_order() -> None:
         "STORE.save(\"activation\"",
         "STORE.save(\"intervention\"",
         "FRESH_MULTIMODAL_DOWNSTREAM_RECOMPUTATION_GO",
+        "RUN_MULTIMODAL_PROTOCOL_REPAIR",
+        'STUDY_LAYER_WINDOW == "repair_existing_l21_l40"',
+        "build_multimodal_assistant_prefill_inputs",
+        "multimodal_capability_report",
+        "select_loading_tomography",
+        "causal_swap_report",
+        "freeze_repair_confirmation_design",
+        "MULTIMODAL_SWAP_CONFIRMATION_GO",
+        "multimodal_workspace_repair_confirmation_report.json",
     ):
         assert required in source
     assert "answer_token_table(BACKEND" not in source
@@ -126,13 +135,16 @@ def test_all_result_switches_default_false() -> None:
         "RUN_STAGE1_TEXT_REPLICATION",
         "RUN_STAGE1B_TEXT_DIAGNOSTIC",
         "RUN_STAGE2_MULTIMODAL_LOADING_DEVELOPMENT",
+        "RUN_STAGE2B_MULTIMODAL_CAUSAL_DEVELOPMENT",
         "RUN_STAGE3_FREEZE_DESIGN",
         "RUN_STAGE4_FRESH_CONFIRMATION",
         "RUN_STAGE5_WRITE_REPORT",
         "CONFIRM_MODEL_LOAD",
         "CONFIRM_TEXT_DIAGNOSTIC_BUDGET",
         "CONFIRM_DEVELOPMENT_BUDGET",
+        "CONFIRM_DEVELOPMENT_CAUSAL_BUDGET",
         "CONFIRM_CONFIRMATION_BUDGET",
+        "RUN_MULTIMODAL_PROTOCOL_REPAIR",
     ):
         assert f"{name} = False" in source
 

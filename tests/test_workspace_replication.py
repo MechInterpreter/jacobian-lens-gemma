@@ -8,6 +8,9 @@ from torch import nn
 
 from jlens.mmpilot.coordinate_swap import ConceptToken, build_swap_basis_from_vectors
 from jlens.mmpilot.workspace_replication import (
+    MULTIMODAL_COMPLETION_INSTRUCTION,
+    MULTIMODAL_INPUT_PROTOCOL_VERSION,
+    MULTIMODAL_MAX_NEW_TOKENS,
     TEXT_COMPLETION_INSTRUCTION,
     TEXT_DIAGNOSTIC_CONDITIONS,
     TEXT_INPUT_PROTOCOL_VERSION,
@@ -17,6 +20,7 @@ from jlens.mmpilot.workspace_replication import (
     anthropic_text_tasks,
     assert_fresh_population,
     build_assistant_prefill_completion_inputs,
+    build_multimodal_assistant_prefill_inputs,
     capture_source_loading,
     completion_answer_matches,
     freeze_confirmation_design,
@@ -155,6 +159,65 @@ def test_assistant_prefill_uses_continue_final_message() -> None:
         "continue_final_message": True,
         "input_protocol": TEXT_INPUT_PROTOCOL_VERSION,
     }
+
+
+def test_multimodal_prefill_text_keeps_evidence_in_user_turn() -> None:
+    processor = _PrefillProcessor()
+    backend = SimpleNamespace(
+        processor=processor, device=torch.device("cpu"), interface={}
+    )
+    inputs = build_multimodal_assistant_prefill_inputs(
+        backend,
+        modality="text",
+        caption="A bird is perched on a branch.",
+        assistant_prefill="The number of legs on the animal in the evidence is",
+    )
+    messages, kwargs = processor.chat_calls[0]
+    assert messages[0]["role"] == "user"
+    assert "A bird is perched" in messages[0]["content"][0]["text"]
+    assert MULTIMODAL_COMPLETION_INSTRUCTION in messages[0]["content"][0]["text"]
+    assert messages[1] == {
+        "role": "assistant",
+        "content": [
+            {
+                "type": "text",
+                "text": "The number of legs on the animal in the evidence is",
+            }
+        ],
+    }
+    assert kwargs["continue_final_message"] is True
+    assert inputs.route["input_protocol"] == MULTIMODAL_INPUT_PROTOCOL_VERSION
+    assert inputs.route["candidate_list_supplied"] is False
+    assert inputs.route["teacher_forcing_used"] is False
+    assert MULTIMODAL_MAX_NEW_TOKENS == 4
+
+
+def test_multimodal_prefill_image_preserves_media_token_span() -> None:
+    class ImageProcessor(_PrefillProcessor):
+        def apply_chat_template(self, messages, **kwargs):
+            self.chat_calls.append((messages, dict(kwargs)))
+            return {
+                "input_ids": torch.tensor([[7, 99, 99, 8]], dtype=torch.long),
+                "attention_mask": torch.ones((1, 4), dtype=torch.long),
+            }
+
+    processor = ImageProcessor()
+    backend = SimpleNamespace(
+        processor=processor,
+        device=torch.device("cpu"),
+        interface={"image_token_id": 99},
+    )
+    image = object()
+    inputs = build_multimodal_assistant_prefill_inputs(
+        backend,
+        modality="image",
+        image=image,
+        assistant_prefill="The animal in the evidence is",
+    )
+    messages, _ = processor.chat_calls[0]
+    assert messages[0]["content"][0] == {"type": "image", "image": image}
+    assert inputs.modality_token_range == [1, 3]
+    assert inputs.modality == "image"
 
 
 @pytest.mark.parametrize(

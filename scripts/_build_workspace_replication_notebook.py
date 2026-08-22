@@ -63,9 +63,9 @@ The order is mandatory:
    Causal outcomes are therefore unable to select a different layer or band.
    A passing development result still requires fresh confirmation.
 2. **Clean multimodal source loading.** On development media, compare the
-   matched pooled J and pooled R instruments at each layer and prompt position.
-   The instrument, pair, and position rule are selected from these clean rows;
-   no multimodal causal outcome is consulted.
+   available modality-matched and pooled J/R instruments at each covered layer
+   and prompt position. The instrument, pair, and position rule are selected
+   from these clean rows; no multimodal causal outcome is consulted.
 3. **Freeze the design.** Require the clean-loading-selected multimodal
    instrument and band to remain available, and freeze their artifact identity,
    pair, and modality-specific position rule. Alpha roles are fixed by the
@@ -73,7 +73,24 @@ The order is mandatory:
 4. **Fresh confirmation.** Open new photographs/recordings, prove zero overlap,
    and test both swap directions with unrestricted identity and downstream
    property outputs against zero, random, unrelated, and norm-matched
-   direct-answer controls. Every two-token condition is saved atomically.
+   direct-answer controls. Every generation condition is saved atomically.
+
+`repair_existing_l21_l40` is the focused protocol-repair mode. It fits no new
+lens. It reuses the existing matched J-lenses plus the independently fitted L21
+and L27-L40 text/pooled R-lenses, keeping the L22-L26 gap explicit. In every
+modality the evidence is placed in the user turn and the assistant turn ends in
+the same answer-neutral sentence stem; the model then generates up to four
+tokens. It first requires clean downstream-property capability, then performs
+bidirectional layer × position × modality loading tomography, then tests an
+exact alpha=1 development swap against zero/random/unrelated controls. Lower
+alphas are development-only diagnostics. Only a passing development gate can
+freeze and open a 16-image-per-direction fresh confirmation, where Holm
+correction covers all direction × modality × control tests. The confirmation
+uses exact alpha=1 only and requires both directions in all three modalities.
+No candidate list, answer token, or teacher-forced continuation is supplied.
+Layers whose weakest direction × modality source cosine does not exceed 0.01
+are excluded before the band is chosen; this prevents the earlier near-zero L21
+loading from passing merely because its unrelated coordinate was even smaller.
 
 If the text replication or clean-loading gate fails, later causal spending is
 blocked. No threshold, pair, layer, position, or alpha may be changed after its
@@ -134,6 +151,7 @@ RUN_STAGE0_FIT_MATCHED_R_LENSES = False
 RUN_STAGE1_TEXT_REPLICATION = False
 RUN_STAGE1B_TEXT_DIAGNOSTIC = False
 RUN_STAGE2_MULTIMODAL_LOADING_DEVELOPMENT = False
+RUN_STAGE2B_MULTIMODAL_CAUSAL_DEVELOPMENT = False
 RUN_STAGE3_FREEZE_DESIGN = False
 RUN_STAGE4_FRESH_CONFIRMATION = False
 RUN_STAGE5_WRITE_REPORT = False
@@ -142,6 +160,13 @@ RUN_STAGE5_WRITE_REPORT = False
 # the confirmed text result and the outcome-blind development ranking, freezes
 # its top pair/instrument, and opens only the untouched confirmation media.
 RUN_L21_MULTIMODAL_PROSPECTIVE_FOLLOWUP = False
+
+# Prospective repair of the completed trimodal NO_GO. This is a new study,
+# never an amendment: it uses one answer-neutral assistant-prefill endpoint in
+# every modality, gates on clean capability, selects its lens/layer/position
+# from clean loading only, runs development swaps, and opens fresh media only
+# after all earlier gates pass.
+RUN_MULTIMODAL_PROTOCOL_REPAIR = False
 
 # Tokenizer only: no weights, no GPU, ~a few MB. Run this before any paid
 # session -- TEXT_CONCEPT_TOKENS is otherwise built after the model is
@@ -152,6 +177,7 @@ CONFIRM_MODEL_LOAD = False
 CONFIRM_R_LENS_FIT_BUDGET = False
 CONFIRM_TEXT_DIAGNOSTIC_BUDGET = False
 CONFIRM_DEVELOPMENT_BUDGET = False
+CONFIRM_DEVELOPMENT_CAUSAL_BUDGET = False
 CONFIRM_CONFIRMATION_BUDGET = False
 
 MODEL_REPO_ID = "google/gemma-4-E4B-it"
@@ -214,11 +240,18 @@ elif STUDY_LAYER_WINDOW == "frozen_r_l21_confirmation":
         if RUN_L21_MULTIMODAL_PROSPECTIVE_FOLLOWUP
         else "frozen-r-l21-probe-swap-clean-cohort.v2"
     )
+elif STUDY_LAYER_WINDOW == "repair_existing_l21_l40":
+    # Existing, already-fitted R-lens coverage: the independently confirmed
+    # L21 artifact plus the completed contiguous L27-L40 shards. The gap
+    # L22-L26 is explicit, so no selected causal band can cross it.
+    LAYERS = (21, *range(27, 41))
+    SCIENTIFIC_IMPLEMENTATION_ID = "multimodal-prefill-loading-repair.v1"
 else:
     raise ValueError(
         "STUDY_LAYER_WINDOW must be 'late_jr_l33_l40', 'early_r_l27_l32', "
         "'combined_r_l27_l40', 'mid_r_l21_l29', "
-        "'frozen_r_l21_confirmation', or 'all_r_l01_l40'"
+        "'frozen_r_l21_confirmation', 'repair_existing_l21_l40', or "
+        "'all_r_l01_l40'"
     )
 TEXT_PRIMARY_ALPHA = 2.0 if STUDY_LAYER_WINDOW == "combined_r_l27_l40" else 1.0
 # Instrument-power override, set from the POSITIVE CONTROL only.
@@ -252,9 +285,14 @@ IMPLICIT_UNRELATED_CONCEPTS = (
     ("zebra", "giraffe") if TEXT_TASK_SET == "frozen_v1" else CONTROL_CONCEPTS
 )
 DEVELOPMENT_IMAGES_PER_SOURCE = 8
-CONFIRMATION_IMAGES_PER_SOURCE = 8
+CONFIRMATION_IMAGES_PER_SOURCE = (
+    16 if RUN_MULTIMODAL_PROTOCOL_REPAIR else 8
+)
 MIN_SOURCE_ADVANTAGE = 0.0
-MIN_SOURCE_COSINE = 0.0
+# The earlier exploratory L21 selection passed on source cosines around .002.
+# The repair requires an order-of-magnitude-visible clean coordinate in every
+# direction and modality before a layer can enter the causal band.
+MIN_SOURCE_COSINE = 0.01 if RUN_MULTIMODAL_PROTOCOL_REPAIR else 0.0
 R_LENS_CHECKPOINT_EVERY = 5
 # Cotangent rows per backward pass, and therefore the replicated forward batch.
 # Purely a memory/speed tradeoff: the full d_model x d_model Jacobian is
@@ -270,6 +308,7 @@ R_LENS_DIM_BATCH = 4 if STUDY_LAYER_WINDOW == "all_r_l01_l40" else 8
 # scored. This is in SCIENTIFIC_CONFIG, so it changes the fingerprint.
 R_LENS_ARMS = ("text",) if STUDY_LAYER_WINDOW == "all_r_l01_l40" else ("text", "pooled")
 L21_CONFIRMATION_MODE = STUDY_LAYER_WINDOW == "frozen_r_l21_confirmation"
+MULTIMODAL_REPAIR_MODE = STUDY_LAYER_WINDOW == "repair_existing_l21_l40"
 L21_PRIMARY_COHORT_RULE = "token_eligible_and_clean_capable.v2"
 L21_TEXT_PARENT_RUN_BASENAME = "mmworkspace_real_9cd9ce8e00c5"
 L21_TEXT_PARENT_FINGERPRINT = (
@@ -307,6 +346,21 @@ if RUN_L21_MULTIMODAL_PROSPECTIVE_FOLLOWUP:
             "the prospective multimodal follow-up reuses completed text and "
             "development evidence; Stages 0, 1, 1B, and 2 must remain False"
         )
+if RUN_MULTIMODAL_PROTOCOL_REPAIR:
+    if not MULTIMODAL_REPAIR_MODE:
+        raise RuntimeError(
+            "RUN_MULTIMODAL_PROTOCOL_REPAIR requires "
+            "STUDY_LAYER_WINDOW='repair_existing_l21_l40'"
+        )
+    if RUN_L21_MULTIMODAL_PROSPECTIVE_FOLLOWUP:
+        raise RuntimeError(
+            "the repaired prospective study and the completed-run follow-up "
+            "are distinct modes"
+        )
+    if RUN_STAGE0_FIT_MATCHED_R_LENSES:
+        raise RuntimeError(
+            "the repair reuses existing lenses; fitting is forbidden"
+        )
 EVIDENCE_POSITION_MARGIN = 0.0
 MIN_CONFIRMATION_SUCCESS_RATE = 0.50
 CONFIRMATION_FAMILYWISE_ALPHA = 0.05
@@ -316,9 +370,21 @@ L21_TEXT_MIN_EXACT_SUCCESS_RATE = 0.15
 L21_TEXT_MIN_SUCCESS_CATEGORIES = 2
 L21_MULTIMODAL_MIN_SUCCESS_RATE = 0.25
 L21_MULTIMODAL_MIN_SUCCESSES_PER_MODALITY = 4
-DEVELOPMENT_SEED = "paper-first-loading-development-20260820-v1"
-CONFIRMATION_SEED = "paper-first-fresh-confirmation-20260820-v1"
-PROMPT_PROTOCOL = "mmpilot.implicit_animal_property_open_output.v1"
+DEVELOPMENT_SEED = (
+    "multimodal-prefill-repair-development-20260821-v1"
+    if RUN_MULTIMODAL_PROTOCOL_REPAIR
+    else "paper-first-loading-development-20260820-v1"
+)
+CONFIRMATION_SEED = (
+    "multimodal-prefill-repair-confirmation-20260821-v1"
+    if RUN_MULTIMODAL_PROTOCOL_REPAIR
+    else "paper-first-fresh-confirmation-20260820-v1"
+)
+PROMPT_PROTOCOL = (
+    "mmpilot.multimodal_assistant_prefill_completion.v1"
+    if RUN_MULTIMODAL_PROTOCOL_REPAIR
+    else "mmpilot.implicit_animal_property_open_output.v1"
+)
 
 # The fitter allocates and frees large transient tensors every backward pass;
 # expandable_segments lets the caching allocator reuse those blocks instead of
@@ -332,6 +398,7 @@ MODEL_STAGE = any((
     RUN_STAGE1_TEXT_REPLICATION,
     RUN_STAGE1B_TEXT_DIAGNOSTIC,
     RUN_STAGE2_MULTIMODAL_LOADING_DEVELOPMENT,
+    RUN_STAGE2B_MULTIMODAL_CAUSAL_DEVELOPMENT,
     RUN_STAGE4_FRESH_CONFIRMATION,
 ))
 if RUN_STAGE0_FIT_MATCHED_R_LENSES and not CONFIRM_R_LENS_FIT_BUDGET:
@@ -342,6 +409,14 @@ if RUN_STAGE1B_TEXT_DIAGNOSTIC and not CONFIRM_TEXT_DIAGNOSTIC_BUDGET:
     print("TEXT DIAGNOSTIC BLOCKED: set CONFIRM_TEXT_DIAGNOSTIC_BUDGET")
 if RUN_STAGE2_MULTIMODAL_LOADING_DEVELOPMENT and not CONFIRM_DEVELOPMENT_BUDGET:
     print("DEVELOPMENT BLOCKED: set CONFIRM_DEVELOPMENT_BUDGET")
+if (
+    RUN_STAGE2B_MULTIMODAL_CAUSAL_DEVELOPMENT
+    and not CONFIRM_DEVELOPMENT_CAUSAL_BUDGET
+):
+    print(
+        "DEVELOPMENT CAUSAL BLOCKED: set "
+        "CONFIRM_DEVELOPMENT_CAUSAL_BUDGET"
+    )
 if RUN_STAGE4_FRESH_CONFIRMATION and not CONFIRM_CONFIRMATION_BUDGET:
     print("CONFIRMATION BLOCKED: set CONFIRM_CONFIRMATION_BUDGET")
 if (
@@ -381,18 +456,21 @@ else:
     EARLY_R_LENS_RUN_DIR = LATE_R_LENS_RUN_DIR = None
 
 L21_DISCOVERY = None
-if REAL_MODE and L21_CONFIRMATION_MODE:
+if REAL_MODE and (L21_CONFIRMATION_MODE or MULTIMODAL_REPAIR_MODE):
     from jlens.mmpilot.l21_confirmation import discover_l21_run
 
     L21_DISCOVERY = discover_l21_run(RUNS_ROOT)
     L21_DISCOVERY_RUN_DIR = Path(L21_DISCOVERY["run_dir"])
     print("frozen L21 discovery", L21_DISCOVERY_RUN_DIR)
     print("source fingerprint", L21_DISCOVERY["fingerprint_digest"])
-elif L21_CONFIRMATION_MODE:
+elif L21_CONFIRMATION_MODE or MULTIMODAL_REPAIR_MODE:
     L21_DISCOVERY_RUN_DIR = None
 
 L21_MULTIMODAL_PARENT = None
-if REAL_MODE and RUN_L21_MULTIMODAL_PROSPECTIVE_FOLLOWUP:
+if REAL_MODE and (
+    RUN_L21_MULTIMODAL_PROSPECTIVE_FOLLOWUP
+    or RUN_MULTIMODAL_PROTOCOL_REPAIR
+):
     from jlens.mmpilot.store import payload_checksum
 
     _parent_dir = RUNS_ROOT / "mmworkspace" / L21_TEXT_PARENT_RUN_BASENAME
@@ -515,21 +593,45 @@ print("  newly computed forward passes",
 print("  backward passes 0")
 print("  resume one two-token condition; maximum completed work lost 0")
 print("DEVELOPMENT UPPER BOUND")
-print("  clean loading forwards", len(CANDIDATE_PAIRS) * DEVELOPMENT_IMAGES_PER_SOURCE * 3)
+_loading_directions = 2 if RUN_MULTIMODAL_PROTOCOL_REPAIR else 1
+print(
+    "  clean loading forwards per instrument",
+    len(CANDIDATE_PAIRS) * _loading_directions
+    * DEVELOPMENT_IMAGES_PER_SOURCE * 3,
+)
 print("  no intervention forwards in Stage 2")
+if RUN_MULTIMODAL_PROTOCOL_REPAIR:
+    print("REPAIRED DEVELOPMENT CAUSAL UPPER BOUND")
+    print("  exact alpha=1 plus zero/random/unrelated and three lower-alpha diagnostics")
+    print(
+        "  generated-token forwards (maximum)",
+        2 * DEVELOPMENT_IMAGES_PER_SOURCE * 3 * 7
+        * MULTIMODAL_MAX_NEW_TOKENS,
+    )
 print("FRESH CONFIRMATION UPPER BOUND")
 print("  clean generation forwards",
-      CONFIRMATION_IMAGES_PER_SOURCE * 3 * 2 * 2 * 2)
-_confirmation_conditions = 4 if L21_CONFIRMATION_MODE else 6
+      CONFIRMATION_IMAGES_PER_SOURCE * 3 * 2 * 2
+      * (MULTIMODAL_MAX_NEW_TOKENS if RUN_MULTIMODAL_PROTOCOL_REPAIR else 2))
+_confirmation_conditions = (
+    4 if (L21_CONFIRMATION_MODE or RUN_MULTIMODAL_PROTOCOL_REPAIR) else 6
+)
+_confirmation_tokens = (
+    MULTIMODAL_MAX_NEW_TOKENS if RUN_MULTIMODAL_PROTOCOL_REPAIR else 2
+)
 print("  causal/control conditions", _confirmation_conditions,
-      "two directions, two-token generation",
-      CONFIRMATION_IMAGES_PER_SOURCE * 3 * 2 * 2 * _confirmation_conditions * 2)
-print("RESUME UNIT: one two-token condition JSON; completed work lost = 0")
-print("MATCHED R-LENS FIT — same frozen 99 examples as each J-Lens arm")
-print("  arms text + pooled; layers", list(LAYERS))
-print("  each arm 99 processor examples, one forward + 320 backward passes/example")
-print("  atomic checkpoint every", R_LENS_CHECKPOINT_EVERY, "examples")
-print("  disconnect loses at most one incomplete checkpoint batch")
+      "two directions, generated-token forwards",
+      CONFIRMATION_IMAGES_PER_SOURCE * 3 * 2 * 2
+      * _confirmation_conditions * _confirmation_tokens)
+print("RESUME UNIT: one generation condition JSON; completed work lost = 0")
+if RUN_MULTIMODAL_PROTOCOL_REPAIR:
+    print("LENS FITTING")
+    print("  none — reuses verified L21 and L27-L40 J/R artifacts")
+else:
+    print("MATCHED R-LENS FIT — same frozen 99 examples as each J-Lens arm")
+    print("  arms text + pooled; layers", list(LAYERS))
+    print("  each arm 99 processor examples, one forward + 320 backward passes/example")
+    print("  atomic checkpoint every", R_LENS_CHECKPOINT_EVERY, "examples")
+    print("  disconnect loses at most one incomplete checkpoint batch")
 if STUDY_LAYER_WINDOW == "combined_r_l27_l40":
     print("COMBINED PAPER BAND")
     print("  reuses completed R-lens shards; fitting passes 0")
@@ -542,16 +644,20 @@ if REAL_MODE:
         CORRECTED_RUN_DIR, MATCHED_LENS_RUN_DIR,
         EXPANDED_MANIFEST_CACHE, MATCHED_FIT_PLAN_PATH,
     ]
-    if STUDY_LAYER_WINDOW == "combined_r_l27_l40":
+    if STUDY_LAYER_WINDOW in {
+        "combined_r_l27_l40", "repair_existing_l21_l40"
+    }:
         _required_paths.extend((EARLY_R_LENS_RUN_DIR, LATE_R_LENS_RUN_DIR))
-    if L21_CONFIRMATION_MODE:
+    if L21_CONFIRMATION_MODE or MULTIMODAL_REPAIR_MODE:
         _required_paths.append(L21_DISCOVERY_RUN_DIR)
     missing = [path for path in _required_paths if not path.exists()]
     if missing:
         raise FileNotFoundError("configured artifact(s) missing:\n  " + "\n  ".join(map(str, missing)))
 
 COMBINED_R_SOURCE_PROVENANCE = None
-if REAL_MODE and STUDY_LAYER_WINDOW == "combined_r_l27_l40":
+if REAL_MODE and STUDY_LAYER_WINDOW in {
+    "combined_r_l27_l40", "repair_existing_l21_l40"
+}:
     from jlens.metadata import file_sha256
     from jlens.mmpilot.store import payload_checksum
     from jlens.relprop import R_LENS_METHOD
@@ -609,7 +715,7 @@ if REAL_MODE and STUDY_LAYER_WINDOW == "combined_r_l27_l40":
         )
     _combined_payload = {
         "version": "mmpilot.combined_r_lens_band.v1",
-        "layers": list(LAYERS),
+        "layers": list(range(27, 41)),
         "same_frozen_fit_plan": True,
         "same_method": True,
         "no_refitting": True,
@@ -749,9 +855,24 @@ if REAL_MODE:
     _workspace_plan_sources = []
     _workspace_roots_to_exclude = (
         (EARLY_R_LENS_RUN_DIR, LATE_R_LENS_RUN_DIR)
-        if STUDY_LAYER_WINDOW == "combined_r_l27_l40"
+        if STUDY_LAYER_WINDOW in {
+            "combined_r_l27_l40", "repair_existing_l21_l40"
+        }
         else ()
     )
+    if RUN_MULTIMODAL_PROTOCOL_REPAIR:
+        # Population plans carry identities but no model outcomes. Harvesting
+        # every completed legacy workspace plan makes the new confirmation
+        # genuinely fresh without inspecting a favorable or unfavorable row.
+        _legacy_roots = sorted(
+            path.parent
+            for path in (RUNS_ROOT / "mmworkspace").glob(
+                "mmworkspace_real_*/population_plan.json"
+            )
+        )
+        _workspace_roots_to_exclude = tuple(dict.fromkeys(
+            (*_workspace_roots_to_exclude, *_legacy_roots)
+        ))
     for _workspace_root in _workspace_roots_to_exclude:
         if _workspace_root is None:
             continue
@@ -839,6 +960,8 @@ code(
     r'''
 from jlens.mmpilot.store import RunFingerprint, UnitStore, payload_checksum
 from jlens.mmpilot.workspace_replication import (
+    MULTIMODAL_COMPLETION_INSTRUCTION, MULTIMODAL_INPUT_PROTOCOL_VERSION,
+    MULTIMODAL_MAX_NEW_TOKENS,
     PROTOCOL_VERSION, TEXT_ANSWER_MATCH_RULE, TEXT_COMPLETION_INSTRUCTION,
     TEXT_DIAGNOSTIC_VERSION, TEXT_POST_CAST_MAX_RELATIVE_ERROR,
     TEXT_INPUT_PROTOCOL_VERSION, TEXT_MAX_NEW_TOKENS, TEXT_OUTPUT_ENDPOINT_VERSION,
@@ -846,6 +969,7 @@ from jlens.mmpilot.workspace_replication import (
     text_task_digest,
 )
 from jlens.relprop import R_LENS_METHOD
+from jlens.mmpilot.multimodal_workspace_repair import REPAIR_PROTOCOL_VERSION
 
 SCIENTIFIC_CONFIG = {
     "protocol": PROTOCOL_VERSION,
@@ -854,6 +978,19 @@ SCIENTIFIC_CONFIG = {
     "text_answer_match_rule": TEXT_ANSWER_MATCH_RULE,
     "output_endpoint": TEXT_OUTPUT_ENDPOINT_VERSION,
     "max_new_tokens": TEXT_MAX_NEW_TOKENS,
+    "multimodal_repair": {
+        "enabled": RUN_MULTIMODAL_PROTOCOL_REPAIR,
+        "protocol": REPAIR_PROTOCOL_VERSION,
+        "input_protocol": MULTIMODAL_INPUT_PROTOCOL_VERSION,
+        "completion_instruction": MULTIMODAL_COMPLETION_INSTRUCTION,
+        "max_new_tokens": MULTIMODAL_MAX_NEW_TOKENS,
+        "capability_before_loading": True,
+        "loading_before_causal_development": True,
+        "development_before_fresh_confirmation": True,
+        "teacher_forcing_used": False,
+        "candidate_list_supplied": False,
+        "refitting_performed": False,
+    },
     "model_repo_id": MODEL_REPO_ID, "model_revision": MODEL_REVISION,
     "study_layer_window": STUDY_LAYER_WINDOW,
     "audio_protocol_fingerprint": AUDIO_PROTOCOL_FINGERPRINT,
@@ -918,7 +1055,12 @@ SCIENTIFIC_CONFIG = {
     "commit": SCIENTIFIC_IMPLEMENTATION_ID,
 }
 FINGERPRINT_DIGEST = payload_checksum(SCIENTIFIC_CONFIG)
-RUN_DIR = RUNS_ROOT / "mmworkspace" / f"mmworkspace_{'real' if REAL_MODE else 'mock'}_{FINGERPRINT_DIGEST.split(':')[-1][:12]}"
+_run_family = "mmrepair" if RUN_MULTIMODAL_PROTOCOL_REPAIR else "mmworkspace"
+RUN_DIR = (
+    RUNS_ROOT / _run_family /
+    f"{_run_family}_{'real' if REAL_MODE else 'mock'}_"
+    f"{FINGERPRINT_DIGEST.split(':')[-1][:12]}"
+)
 RUN_DIR.mkdir(parents=True, exist_ok=True)
 FINGERPRINT = RunFingerprint(
     mode="real" if REAL_MODE else "mock", model_repo_id=MODEL_REPO_ID,
@@ -972,11 +1114,9 @@ if REAL_MODE and MODEL_STAGE and CONFIRM_MODEL_LOAD:
     assert_audio_protocol(BUNDLE.audio_interface, expected_fingerprint=AUDIO_PROTOCOL_FINGERPRINT)
     BACKEND = BUNDLE.backend
     from jlens.mmpilot.workspace_replication import semantic_answer_concept
-    if L21_CONFIRMATION_MODE:
+    if L21_CONFIRMATION_MODE or MULTIMODAL_REPAIR_MODE:
         names = sorted(
-            {task.source for task in TEXT_TASKS}
-            | {task.target for task in TEXT_TASKS}
-            | {name for pair in CANDIDATE_PAIRS for name in pair}
+            {name for pair in CANDIDATE_PAIRS for name in pair}
             | set(CONTROL_CONCEPTS)
         )
     else:
@@ -998,7 +1138,7 @@ if REAL_MODE and MODEL_STAGE and CONFIRM_MODEL_LOAD:
                 BACKEND.encode_candidate, name
             )
         except MultiTokenConceptError as error:
-            if not L21_CONFIRMATION_MODE:
+            if not (L21_CONFIRMATION_MODE or MULTIMODAL_REPAIR_MODE):
                 raise
             UNRESOLVABLE_TEXT_CONCEPTS[name] = str(error)
     TEXT_TOKEN_ELIGIBLE_TASK_IDS = {
@@ -1067,6 +1207,48 @@ if REAL_MODE and MODEL_STAGE and CONFIRM_MODEL_LOAD:
             "R-lens mode: late J-lens artifacts are historical controls "
             "only and are not applied outside their fitted layer grid",
         )
+    elif STUDY_LAYER_WINDOW == "repair_existing_l21_l40":
+        print(
+            "repair mode: joining the existing L21 discovery matrix with the "
+            "completed L27-L40 R-lens shards; L22-L26 remain absent"
+        )
+        for _arm in R_LENS_ARMS:
+            _l21_full = JacobianLens.load(
+                L21_DISCOVERY["artifacts"][_arm]["path"]
+            )
+            _early = JacobianLens.load(
+                COMBINED_R_SOURCE_PROVENANCE["sources"][0]["arms"][_arm]["path"]
+            )
+            _late = JacobianLens.load(
+                COMBINED_R_SOURCE_PROVENANCE["sources"][1]["arms"][_arm]["path"]
+            )
+            if not (
+                _l21_full.n_prompts == _early.n_prompts == _late.n_prompts == 99
+                and _l21_full.d_model == _early.d_model == _late.d_model
+            ):
+                raise RuntimeError(
+                    f"existing {_arm} R-lens artifacts disagree on fit count or width"
+                )
+            _jacobians = {21: _l21_full.jacobians[21]}
+            for _source in (_early, _late):
+                overlap = set(_jacobians) & set(_source.jacobians)
+                if overlap:
+                    raise RuntimeError(
+                        f"repair {_arm} R-lens sources overlap at {sorted(overlap)}"
+                    )
+                _jacobians.update(_source.jacobians)
+            if sorted(_jacobians) != list(LAYERS):
+                raise RuntimeError(
+                    f"repair {_arm} R-lens coverage is {sorted(_jacobians)}, "
+                    f"not {list(LAYERS)}"
+                )
+            R_LENSES[_arm] = JacobianLens(
+                jacobians=_jacobians, n_prompts=99, d_model=_early.d_model
+            )
+            R_LENS_SOURCE_PATHS[_arm] = Path(
+                L21_DISCOVERY["artifacts"][_arm]["path"]
+            )
+            print("R-lens", _arm, "existing coverage", sorted(_jacobians))
     else:
         print(
             "combined R-lens mode: joining the completed L27-L32 and L33-L40 "
@@ -1122,7 +1304,9 @@ if REAL_MODE and MODEL_STAGE and CONFIRM_MODEL_LOAD:
             if EARLY_R_LENS_RUN_DIR is not None
             else None
         )
-        if STUDY_LAYER_WINDOW == "combined_r_l27_l40":
+        if STUDY_LAYER_WINDOW in {
+            "combined_r_l27_l40", "repair_existing_l21_l40"
+        }:
             pass
         elif L21_CONFIRMATION_MODE:
             _candidate = JacobianLens.load(str(_l21_source_path))
@@ -1191,13 +1375,16 @@ if REAL_MODE and MODEL_STAGE and CONFIRM_MODEL_LOAD:
             INSTRUMENT_VECTORS[f"matched_{_arm}_r"] = _vectors_for(R_LENSES[_arm])
     if R_LENSES:
         from jlens.metadata import file_sha256
-        if STUDY_LAYER_WINDOW == "combined_r_l27_l40":
+        if STUDY_LAYER_WINDOW in {
+            "combined_r_l27_l40", "repair_existing_l21_l40"
+        }:
             _inventory = {
                 "method_digest": R_LENS_METHOD.digest,
                 "architecture_audit_checksum": R_LENS_ARCHITECTURE_AUDIT[
                     "audit_checksum"
                 ],
                 "combined_without_refitting": True,
+                "includes_independent_l21_source": MULTIMODAL_REPAIR_MODE,
                 "combined_source_digest": COMBINED_R_SOURCE_PROVENANCE[
                     "source_digest"
                 ],
@@ -1208,7 +1395,12 @@ if REAL_MODE and MODEL_STAGE and CONFIRM_MODEL_LOAD:
                         "source_artifacts": [
                             source["arms"][arm]
                             for source in COMBINED_R_SOURCE_PROVENANCE["sources"]
-                        ],
+                        ] + ([{
+                            "role": "independent_l21",
+                            "path": L21_DISCOVERY["artifacts"][arm]["path"],
+                            "checksum": L21_DISCOVERY["artifacts"][arm]["checksum"],
+                            "layer": 21,
+                        }] if MULTIMODAL_REPAIR_MODE else []),
                     }
                     for arm, lens in sorted(R_LENSES.items())
                 },
@@ -1258,7 +1450,7 @@ markdown("## 6. Stage 1 — paper-task text replication and source-loading audit
 code(
     r'''
 TEXT_VERDICT = STORE.load("metric", "text_replication_verdict")
-if RUN_L21_MULTIMODAL_PROSPECTIVE_FOLLOWUP:
+if RUN_L21_MULTIMODAL_PROSPECTIVE_FOLLOWUP or RUN_MULTIMODAL_PROTOCOL_REPAIR:
     TEXT_VERDICT = dict(L21_MULTIMODAL_PARENT["text_report"])
 LOADING_FIRST_SELECTION = STORE.load("metric", "loading_first_selection")
 ACTIVE_TEXT_LAYERS = tuple(LAYERS)
@@ -1988,7 +2180,7 @@ if (
     and RUN_STAGE2_MULTIMODAL_LOADING_DEVELOPMENT
     and CONFIRM_MODEL_LOAD
     and CONFIRM_DEVELOPMENT_BUDGET
-    and TEXT_CAUSAL_GATE_MET
+    and (TEXT_CAUSAL_GATE_MET or RUN_MULTIMODAL_PROTOCOL_REPAIR)
 ):
     from jlens.mmpilot.coordinate_swap import resolve_concept_token
     from jlens.mmpilot.media_io import RetryJournal, drive_media_loaders
@@ -2001,14 +2193,18 @@ if (
     MEDIA = drive_media_loaders(journal=RetryJournal())
     names = sorted({name for pair in CANDIDATE_PAIRS for name in pair} | set(CONTROL_CONCEPTS))
     TOKENS = {name: resolve_concept_token(BACKEND.encode_candidate, name) for name in names}
-    _pooled_candidates = {}
-    if set(LAYERS).issubset(MATCHED_LENSES["pooled"].jacobians):
-        _pooled_candidates["matched_pooled_j"] = MATCHED_LENSES["pooled"]
-    if "pooled" in R_LENSES:
-        _pooled_candidates["matched_pooled_r"] = R_LENSES["pooled"]
-    if not _pooled_candidates:
+    _instrument_candidates = {}
+    for _arm, _lens in sorted(MATCHED_LENSES.items()):
+        _available = tuple(sorted(set(LAYERS) & set(_lens.jacobians)))
+        if _available:
+            _instrument_candidates[f"matched_{_arm}_j"] = (_lens, _available)
+    for _arm, _lens in sorted(R_LENSES.items()):
+        _available = tuple(sorted(set(LAYERS) & set(_lens.jacobians)))
+        if _available:
+            _instrument_candidates[f"matched_{_arm}_r"] = (_lens, _available)
+    if not _instrument_candidates:
         raise RuntimeError(
-            "no pooled lens covers the configured study layer window"
+            "no existing matched J/R lens covers the configured study layers"
         )
     MULTIMODAL_VECTORS = {
         instrument: {
@@ -2017,49 +2213,131 @@ if (
                     lens, BACKEND.unembedding_weight(),
                     layer=layer, token_id=token.token_id,
                 ) for name, token in TOKENS.items()
-            } for layer in LAYERS
+            } for layer in available_layers
         }
-        for instrument, lens in _pooled_candidates.items()
+        for instrument, (lens, available_layers) in _instrument_candidates.items()
     }
-    def build_inputs(group, modality):
-        question = "Identify the animal from the evidence internally, then answer: How many legs does that animal typically have? Answer with one digit:\nAnswer:"
+    from jlens.mmpilot.workspace_replication import (
+        MULTIMODAL_MAX_NEW_TOKENS,
+        build_multimodal_assistant_prefill_inputs,
+        unrestricted_greedy_completion,
+    )
+    _identity_prefill = "The animal in the evidence is"
+    _property_prefill = "The number of legs on the animal in the evidence is"
+    def build_inputs(group, modality, prompt_kind="property"):
+        prefill = (
+            _identity_prefill if prompt_kind == "identity" else _property_prefill
+        )
         if modality == "text":
-            return BACKEND.build_inputs(prompt=f"Caption: {group['caption']}\n{question}", modality="text")
+            return build_multimodal_assistant_prefill_inputs(
+                BACKEND, modality="text", caption=group["caption"],
+                assistant_prefill=prefill,
+            )
         if modality == "image":
-            return BACKEND.build_inputs(prompt=question, modality="image", image=MEDIA["load_image"](group["image_path"]), media_path=group["image_path"])
+            return build_multimodal_assistant_prefill_inputs(
+                BACKEND, modality="image",
+                image=MEDIA["load_image"](group["image_path"]),
+                media_path=group["image_path"], assistant_prefill=prefill,
+            )
         waveform, rate = MEDIA["load_audio"](group["audio_path"])
-        return BACKEND.build_inputs(prompt=question, modality="spoken_audio", audio=waveform, sampling_rate=rate, media_path=group["audio_path"])
+        return build_multimodal_assistant_prefill_inputs(
+            BACKEND, modality="spoken_audio", audio=waveform,
+            sampling_rate=rate, media_path=group["audio_path"],
+            assistant_prefill=prefill,
+        )
+    CAPABILITY_REPORT = None
+    if RUN_MULTIMODAL_PROTOCOL_REPAIR:
+        from jlens.mmpilot.multimodal_workspace_repair import (
+            multimodal_capability_report,
+        )
+        _answers = {"bird": "2", "cat": "4", "zebra": "4", "giraffe": "4"}
+        _capability_rows = []
+        for group in DEV_GROUPS:
+            concept = str(group["concept"])
+            for modality in ("text", "image", "spoken_audio"):
+                for prompt_kind in ("identity", "property"):
+                    key = safe_key(
+                        "repair-capability", concept, group["group_id"],
+                        modality, prompt_kind,
+                    )
+                    stored = STORE.load("capability", key)
+                    if stored is None:
+                        answer = concept if prompt_kind == "identity" else _answers[concept]
+                        completion = unrestricted_greedy_completion(
+                            BACKEND, build_inputs(group, modality, prompt_kind),
+                            answer=answer,
+                            max_new_tokens=MULTIMODAL_MAX_NEW_TOKENS,
+                        )
+                        stored = {
+                            "concept": concept, "group_id": group["group_id"],
+                            "image_id": group["image_id"],
+                            "modality": modality, "prompt_kind": prompt_kind,
+                            "clean_correct": bool(completion["answer_match"]),
+                            "clean_surface": completion["generated_text"],
+                            "completion": completion,
+                        }
+                        STORE.save("capability", key, stored)
+                        work = "computed"
+                    else:
+                        work = "reused"
+                    _capability_rows.append(stored)
+                    print(
+                        "repair capability", concept, modality, prompt_kind,
+                        work, repr(stored["clean_surface"]),
+                        stored["clean_correct"],
+                    )
+        CAPABILITY_REPORT = multimodal_capability_report(
+            _capability_rows, concepts=source_names,
+            min_property_rate=0.75,
+        )
+        STORE.save("metric", "multimodal_repair_capability", CAPABILITY_REPORT)
+        (RUN_DIR / "multimodal_repair_capability_report.json").write_text(
+            json.dumps(CAPABILITY_REPORT, indent=2)
+        )
+        print(json.dumps(CAPABILITY_REPORT, indent=2))
     loading_by_instrument = {name: [] for name in MULTIMODAL_VECTORS}
     by_concept = {}
     for group in DEV_GROUPS:
         by_concept.setdefault(str(group.get("concept")), []).append(group)
     for instrument, vectors in sorted(MULTIMODAL_VECTORS.items()):
-      for source, target in CANDIDATE_PAIRS:
-        for group in by_concept.get(source, []):
-            for modality in ("text", "image", "spoken_audio"):
-                key = safe_key(
-                    "loading", instrument, source, target,
-                    group["group_id"], modality,
-                )
-                stored = STORE.load("activation", key)
-                if stored is None:
-                    inputs = build_inputs(group, modality)
-                    stored = {
-                        "source": source, "target": target,
-                        "group_id": group["group_id"], "image_id": group["image_id"],
-                        "modality": modality,
-                        "rows": capture_source_loading(
-                            BACKEND, inputs, vectors_by_layer=vectors,
-                            source=source, target=target, unrelated=CONTROL_CONCEPTS,
-                            sample_id=f"{group['group_id']}:{modality}", modality=modality,
-                        ),
-                    }
-                    STORE.save("activation", key, stored)
-                    work = "computed"
-                else:
-                    work = "reused"
-                loading_by_instrument[instrument].extend(stored["rows"])
-                print("loading", instrument, source, target, group["group_id"], modality, work)
+        for pair_left, pair_right in CANDIDATE_PAIRS:
+            directed_pairs = (
+                ((pair_left, pair_right), (pair_right, pair_left))
+                if RUN_MULTIMODAL_PROTOCOL_REPAIR
+                else ((pair_left, pair_right),)
+            )
+            for source, target in directed_pairs:
+                for group in by_concept.get(source, []):
+                    for modality in ("text", "image", "spoken_audio"):
+                        key = safe_key(
+                            "loading", instrument, source, target,
+                            group["group_id"], modality,
+                        )
+                        stored = STORE.load("activation", key)
+                        if stored is None:
+                            inputs = build_inputs(group, modality)
+                            stored = {
+                                "source": source, "target": target,
+                                "group_id": group["group_id"],
+                                "image_id": group["image_id"],
+                                "modality": modality,
+                                "rows": capture_source_loading(
+                                    BACKEND, inputs, vectors_by_layer=vectors,
+                                    source=source, target=target,
+                                    unrelated=CONTROL_CONCEPTS,
+                                    sample_id=f"{group['group_id']}:{modality}",
+                                    modality=modality,
+                                ),
+                            }
+                            STORE.save("activation", key, stored)
+                            work = "computed"
+                        else:
+                            work = "reused"
+                        loading_by_instrument[instrument].extend(stored["rows"])
+                        print(
+                            "loading", instrument, source, target,
+                            group["group_id"], modality, work,
+                        )
     _instrument_rows = []
     for instrument, loading_rows in sorted(loading_by_instrument.items()):
         pair_selection = select_pair_from_loading(
@@ -2093,27 +2371,67 @@ if (
             ),
             "causal_result_consulted": False,
         })
-    _instrument_rows.sort(
-        key=lambda row: (
-            -row["band_length"], -row["pair_score"], row["instrument"]
+    if RUN_MULTIMODAL_PROTOCOL_REPAIR:
+        from jlens.mmpilot.multimodal_workspace_repair import (
+            select_loading_tomography,
         )
-    )
-    _selected = next(
-        (row for row in _instrument_rows if row["band_length"] > 0), None
-    )
-    MULTIMODAL_INSTRUMENT_SELECTION = {
-        "version": "mmpilot.loading_first_multimodal_instrument.v1",
-        "ranking": _instrument_rows,
-        "selected_instrument": _selected["instrument"] if _selected else None,
-        "verdict": "MULTIMODAL_INSTRUMENT_GO" if _selected else "MULTIMODAL_INSTRUMENT_NO_GO",
-        "causal_result_consulted": False,
-    }
-    MULTIMODAL_INSTRUMENT_SELECTION["selection_digest"] = payload_checksum(
-        MULTIMODAL_INSTRUMENT_SELECTION
-    )
-    LOADING_REPORT = _selected["loading_report"] if _selected else None
-    PAIR_SELECTION = _selected["pair_selection"] if _selected else None
-    LOCALIZATION = _selected["localization"] if _selected else None
+        MULTIMODAL_INSTRUMENT_SELECTION = select_loading_tomography(
+            loading_by_instrument,
+            instrument_layers={
+                name: sorted(vectors) for name, vectors in MULTIMODAL_VECTORS.items()
+            },
+            candidate_pairs=CANDIDATE_PAIRS,
+            capability=CAPABILITY_REPORT,
+            min_source_advantage=MIN_SOURCE_ADVANTAGE,
+            min_source_cosine=MIN_SOURCE_COSINE,
+            evidence_position_margin=EVIDENCE_POSITION_MARGIN,
+        )
+        _selected_name = MULTIMODAL_INSTRUMENT_SELECTION["selected_instrument"]
+        _selected_pair = MULTIMODAL_INSTRUMENT_SELECTION["selected_pair"]
+        _selected_record = next(
+            (
+                row for row in MULTIMODAL_INSTRUMENT_SELECTION["ranking"]
+                if row["instrument"] == _selected_name
+                and row["pair"] == _selected_pair
+            ),
+            None,
+        )
+        LOADING_REPORT = (
+            _selected_record["loading_report"] if _selected_record else None
+        )
+        PAIR_SELECTION = (
+            {
+                "version": "mmpilot.multimodal_bidirectional_loading_pair.v1",
+                "selected_pair": list(_selected_pair),
+                "selection_depended_on_causal_outcome": False,
+            }
+            if _selected_pair else None
+        )
+        LOCALIZATION = (
+            _selected_record["localization"] if _selected_record else None
+        )
+    else:
+        _instrument_rows.sort(
+            key=lambda row: (
+                -row["band_length"], -row["pair_score"], row["instrument"]
+            )
+        )
+        _selected = next(
+            (row for row in _instrument_rows if row["band_length"] > 0), None
+        )
+        MULTIMODAL_INSTRUMENT_SELECTION = {
+            "version": "mmpilot.loading_first_multimodal_instrument.v1",
+            "ranking": _instrument_rows,
+            "selected_instrument": _selected["instrument"] if _selected else None,
+            "verdict": "MULTIMODAL_INSTRUMENT_GO" if _selected else "MULTIMODAL_INSTRUMENT_NO_GO",
+            "causal_result_consulted": False,
+        }
+        MULTIMODAL_INSTRUMENT_SELECTION["selection_digest"] = payload_checksum(
+            MULTIMODAL_INSTRUMENT_SELECTION
+        )
+        LOADING_REPORT = _selected["loading_report"] if _selected else None
+        PAIR_SELECTION = _selected["pair_selection"] if _selected else None
+        LOCALIZATION = _selected["localization"] if _selected else None
     STORE.save("metric", "loading_report", LOADING_REPORT)
     STORE.save("metric", "loading_pair_selection", PAIR_SELECTION)
     STORE.save("metric", "loading_localization", LOCALIZATION)
@@ -2121,6 +2439,10 @@ if (
         "metric", "multimodal_instrument_selection",
         MULTIMODAL_INSTRUMENT_SELECTION,
     )
+    if RUN_MULTIMODAL_PROTOCOL_REPAIR:
+        (RUN_DIR / "multimodal_loading_tomography_report.json").write_text(
+            json.dumps(MULTIMODAL_INSTRUMENT_SELECTION, indent=2)
+        )
     print(json.dumps(MULTIMODAL_INSTRUMENT_SELECTION, indent=2))
     print(json.dumps(PAIR_SELECTION, indent=2))
     print(json.dumps(LOCALIZATION, indent=2))
@@ -2128,6 +2450,224 @@ elif RUN_STAGE2_MULTIMODAL_LOADING_DEVELOPMENT:
     print(
         "Stage 2 did not spend: it requires a passing predeclared text swap "
         "or audited alpha=1 diagnostic candidate, plus the model and budget gates."
+    )
+'''
+)
+
+markdown("## 7b. Stage 2B — gated causal development on already-open media")
+code(
+    r'''
+DEVELOPMENT_CAUSAL_REPORT = STORE.load(
+    "metric", "multimodal_repair_development_causal"
+)
+if (
+    REAL_MODE
+    and RUN_STAGE2B_MULTIMODAL_CAUSAL_DEVELOPMENT
+    and CONFIRM_MODEL_LOAD
+    and CONFIRM_DEVELOPMENT_CAUSAL_BUDGET
+):
+    from jlens.mmpilot.coordinate_swap import (
+        random_two_direction_basis, resolve_concept_token,
+    )
+    from jlens.mmpilot.media_io import RetryJournal, drive_media_loaders
+    from jlens.mmpilot.multimodal_lens import build_swap_bases_for_lens
+    from jlens.mmpilot.multimodal_workspace_repair import causal_swap_report
+    from jlens.mmpilot.store import safe_key
+    from jlens.mmpilot.workspace_replication import (
+        MULTIMODAL_MAX_NEW_TOKENS,
+        build_multimodal_assistant_prefill_inputs,
+        unrestricted_greedy_completion,
+        unrestricted_greedy_swap_trial,
+    )
+
+    if not RUN_MULTIMODAL_PROTOCOL_REPAIR:
+        raise RuntimeError("Stage 2B is reserved for the protocol-repair study")
+    MULTIMODAL_INSTRUMENT_SELECTION = (
+        MULTIMODAL_INSTRUMENT_SELECTION
+        or STORE.load("metric", "multimodal_instrument_selection")
+    )
+    if (
+        MULTIMODAL_INSTRUMENT_SELECTION is None
+        or MULTIMODAL_INSTRUMENT_SELECTION.get("verdict")
+        != "MULTIMODAL_LOADING_TOMOGRAPHY_GO"
+    ):
+        print("Stage 2B did not spend: clean capability/loading tomography is NO_GO")
+    else:
+        _instrument = MULTIMODAL_INSTRUMENT_SELECTION["selected_instrument"]
+        _pair = tuple(MULTIMODAL_INSTRUMENT_SELECTION["selected_pair"])
+        _band = tuple(map(int, MULTIMODAL_INSTRUMENT_SELECTION["selected_band"]))
+        _position_rules = dict(
+            MULTIMODAL_INSTRUMENT_SELECTION["position_rule_by_modality"]
+        )
+        if _instrument.startswith("matched_") and _instrument.endswith("_j"):
+            _arm = _instrument[len("matched_") : -len("_j")]
+            _lens = MATCHED_LENSES[_arm]
+        elif _instrument.startswith("matched_") and _instrument.endswith("_r"):
+            _arm = _instrument[len("matched_") : -len("_r")]
+            _lens = R_LENSES[_arm]
+        else:
+            raise RuntimeError(f"unknown selected instrument {_instrument!r}")
+        _names = {*_pair, *CONTROL_CONCEPTS}
+        _tokens = {
+            name: resolve_concept_token(BACKEND.encode_candidate, name)
+            for name in _names
+        }
+        _media = drive_media_loaders(journal=RetryJournal())
+        _answers = {"bird": "2", "cat": "4", "zebra": "4", "giraffe": "4"}
+        _prefill = "The number of legs on the animal in the evidence is"
+
+        def _repair_inputs(group, modality):
+            if modality == "text":
+                return build_multimodal_assistant_prefill_inputs(
+                    BACKEND, modality="text", caption=group["caption"],
+                    assistant_prefill=_prefill,
+                )
+            if modality == "image":
+                return build_multimodal_assistant_prefill_inputs(
+                    BACKEND, modality="image",
+                    image=_media["load_image"](group["image_path"]),
+                    media_path=group["image_path"], assistant_prefill=_prefill,
+                )
+            waveform, rate = _media["load_audio"](group["audio_path"])
+            return build_multimodal_assistant_prefill_inputs(
+                BACKEND, modality="spoken_audio", audio=waveform,
+                sampling_rate=rate, media_path=group["audio_path"],
+                assistant_prefill=_prefill,
+            )
+
+        _rows = []
+        for direction_index, (source, target) in enumerate(
+            ((_pair[0], _pair[1]), (_pair[1], _pair[0]))
+        ):
+            _exact = build_swap_bases_for_lens(
+                _lens, BACKEND.unembedding_weight(), layers=_band,
+                source=_tokens[source], target=_tokens[target],
+            )
+            _random = {
+                layer: random_two_direction_basis(
+                    basis, seed=20260821 + 100 * direction_index + layer
+                )
+                for layer, basis in _exact.items()
+            }
+            _unrelated = build_swap_bases_for_lens(
+                _lens, BACKEND.unembedding_weight(), layers=_band,
+                source=_tokens[CONTROL_CONCEPTS[0]],
+                target=_tokens[CONTROL_CONCEPTS[1]],
+            )
+            for group in [
+                row for row in DEV_GROUPS if str(row["concept"]) == source
+            ]:
+                for modality in ("text", "image", "spoken_audio"):
+                    inputs = _repair_inputs(group, modality)
+                    clean_key = safe_key(
+                        "repair-capability", source, group["group_id"],
+                        modality, "property",
+                    )
+                    clean = STORE.load("capability", clean_key)
+                    if clean is None:
+                        completion = unrestricted_greedy_completion(
+                            BACKEND, inputs, answer=_answers[source],
+                            max_new_tokens=MULTIMODAL_MAX_NEW_TOKENS,
+                        )
+                        clean = {
+                            "concept": source, "group_id": group["group_id"],
+                            "image_id": group["image_id"], "modality": modality,
+                            "prompt_kind": "property",
+                            "clean_correct": bool(completion["answer_match"]),
+                            "clean_surface": completion["generated_text"],
+                            "completion": completion,
+                        }
+                        STORE.save("capability", clean_key, clean)
+                    conditions = {}
+                    for name, bases, alpha in (
+                        ("exact_alpha1", _exact, 1.0),
+                        ("zero", _exact, 0.0),
+                        ("random_alpha1", _random, 1.0),
+                        ("unrelated_alpha1", _unrelated, 1.0),
+                        ("exact_alpha025", _exact, 0.25),
+                        ("exact_alpha05", _exact, 0.5),
+                        ("exact_alpha075", _exact, 0.75),
+                    ):
+                        key = safe_key(
+                            "repair-development", _instrument, source, target,
+                            group["group_id"], modality, name,
+                        )
+                        trial = STORE.load("intervention", key)
+                        if trial is None:
+                            trial = unrestricted_greedy_swap_trial(
+                                BACKEND, inputs, bases=bases, alpha=alpha,
+                                answer=_answers[target],
+                                max_new_tokens=MULTIMODAL_MAX_NEW_TOKENS,
+                                position_rule=_position_rules[modality],
+                                realization_policy=TEXT_MODEL_DTYPE_REALIZATION,
+                            )
+                            diagnostics = dict(
+                                trial.get("intervention_diagnostics") or {}
+                            )
+                            trial = {
+                                **trial,
+                                "success": bool(trial["answer_match"]),
+                                "integrity_passed": bool(
+                                    diagnostics.get("all_hooks_fired")
+                                    and diagnostics.get("all_finite")
+                                    and diagnostics.get(
+                                        "all_model_dtype_realizations_converged",
+                                        True,
+                                    )
+                                    and diagnostics.get("post_cast_audit_passed", True)
+                                ),
+                            }
+                            STORE.save("intervention", key, trial)
+                            work = "computed"
+                        else:
+                            work = "reused"
+                        conditions[name] = trial
+                        print(
+                            "repair development", source, target, modality,
+                            group["group_id"], name, work,
+                            repr(trial["generated_text"]), trial["success"],
+                        )
+                    _rows.append({
+                        "source": source, "target": target,
+                        "direction": f"{source}->{target}",
+                        "group_id": group["group_id"],
+                        "image_id": group["image_id"], "modality": modality,
+                        "clean_correct": bool(clean["clean_correct"]),
+                        "clean_surface": clean["clean_surface"],
+                        "conditions": conditions,
+                    })
+        DEVELOPMENT_CAUSAL_REPORT = causal_swap_report(
+            _rows, stage="development",
+            min_clean_rate=0.75, min_primary_rate=0.25,
+            min_primary_successes=4, familywise_alpha=0.05,
+        )
+        DEVELOPMENT_CAUSAL_REPORT = {
+            **DEVELOPMENT_CAUSAL_REPORT,
+            "instrument": _instrument, "pair": list(_pair),
+            "layer_band": list(_band),
+            "position_rule_by_modality": _position_rules,
+            "alpha_sensitivity_is_development_only": True,
+            "rows": _rows,
+        }
+        DEVELOPMENT_CAUSAL_REPORT["report_checksum"] = payload_checksum({
+            key: value for key, value in DEVELOPMENT_CAUSAL_REPORT.items()
+            if key != "report_checksum"
+        })
+        STORE.save(
+            "metric", "multimodal_repair_development_causal",
+            DEVELOPMENT_CAUSAL_REPORT,
+        )
+        (RUN_DIR / "multimodal_repair_development_causal_report.json").write_text(
+            json.dumps(DEVELOPMENT_CAUSAL_REPORT, indent=2, default=str)
+        )
+        print(json.dumps({
+            key: value for key, value in DEVELOPMENT_CAUSAL_REPORT.items()
+            if key != "rows"
+        }, indent=2))
+elif RUN_STAGE2B_MULTIMODAL_CAUSAL_DEVELOPMENT:
+    print(
+        "Stage 2B did not spend: it requires repair mode, the model, and its "
+        "explicit development-causal budget gate"
     )
 '''
 )
@@ -2147,7 +2687,45 @@ if RUN_STAGE3_FREEZE_DESIGN:
     TEXT_DIAGNOSTIC_REPORT = TEXT_DIAGNOSTIC_REPORT or STORE.load(
         "metric", "text_swap_diagnostic_report"
     )
-    if (
+    if RUN_MULTIMODAL_PROTOCOL_REPAIR:
+        from jlens.mmpilot.multimodal_workspace_repair import (
+            freeze_repair_confirmation_design,
+        )
+        _capability = STORE.load("metric", "multimodal_repair_capability")
+        _tomography = STORE.load("metric", "multimodal_instrument_selection")
+        _development = STORE.load(
+            "metric", "multimodal_repair_development_causal"
+        )
+        if not (_capability and _tomography and _development):
+            print(
+                "Stage 3 did not freeze: capability, tomography, and causal "
+                "development must all be complete"
+            )
+        else:
+            CONFIRMATION_DESIGN = freeze_repair_confirmation_design(
+                capability=_capability,
+                tomography=_tomography,
+                development=_development,
+                development_population_digest=payload_checksum(
+                    POPULATION_PLAN["development"]
+                ),
+                confirmation_population_digest=FRESHNESS["population_digest"],
+                forbidden_development_image_ids=DEV_IMAGE_IDS,
+                forbidden_prior_image_ids=PRIOR_EXCLUDED_IMAGES,
+            )
+            CONFIRMATION_DESIGN["forbidden_development_group_ids"] = sorted(
+                DEV_GROUP_IDS
+            )
+            CONFIRMATION_DESIGN["design_digest"] = payload_checksum({
+                key: value for key, value in CONFIRMATION_DESIGN.items()
+                if key != "design_digest"
+            })
+            STORE.save("metric", "confirmation_design", CONFIRMATION_DESIGN)
+            (RUN_DIR / "frozen_confirmation_design.json").write_text(
+                json.dumps(CONFIRMATION_DESIGN, indent=2)
+            )
+            print(json.dumps(CONFIRMATION_DESIGN, indent=2))
+    elif (
         not TEXT_CAUSAL_GATE_MET
         or LOCALIZATION is None
         or PAIR_SELECTION is None
@@ -2222,8 +2800,10 @@ if REAL_MODE and RUN_STAGE4_FRESH_CONFIRMATION and CONFIRM_MODEL_LOAD and CONFIR
     )
     from jlens.mmpilot.store import safe_key
     from jlens.mmpilot.workspace_replication import (
-        TEXT_MAX_NEW_TOKENS, TEXT_MODEL_DTYPE_REALIZATION,
+        MULTIMODAL_MAX_NEW_TOKENS, TEXT_MAX_NEW_TOKENS,
+        TEXT_MODEL_DTYPE_REALIZATION,
         assert_fresh_population, semantic_answer_concept,
+        build_multimodal_assistant_prefill_inputs,
         unrestricted_greedy_completion, unrestricted_greedy_swap_trial,
         unrestricted_greedy_direct_answer_trial,
     )
@@ -2239,10 +2819,12 @@ if REAL_MODE and RUN_STAGE4_FRESH_CONFIRMATION and CONFIRM_MODEL_LOAD and CONFIR
         _selected_multimodal = MULTIMODAL_INSTRUMENT_SELECTION[
             "selected_instrument"
         ]
-        if _selected_multimodal == "matched_pooled_j":
-            SELECTED_MULTIMODAL_LENS = MATCHED_LENSES["pooled"]
-        elif _selected_multimodal == "matched_pooled_r" and "pooled" in R_LENSES:
-            SELECTED_MULTIMODAL_LENS = R_LENSES["pooled"]
+        if _selected_multimodal.startswith("matched_") and _selected_multimodal.endswith("_j"):
+            _selected_arm = _selected_multimodal[len("matched_") : -len("_j")]
+            SELECTED_MULTIMODAL_LENS = MATCHED_LENSES[_selected_arm]
+        elif _selected_multimodal.startswith("matched_") and _selected_multimodal.endswith("_r"):
+            _selected_arm = _selected_multimodal[len("matched_") : -len("_r")]
+            SELECTED_MULTIMODAL_LENS = R_LENSES[_selected_arm]
         else:
             raise RuntimeError(
                 "the frozen multimodal instrument is unavailable in this session"
@@ -2301,6 +2883,30 @@ if REAL_MODE and RUN_STAGE4_FRESH_CONFIRMATION and CONFIRM_MODEL_LOAD and CONFIR
         question_identity = "Identify the animal from the evidence internally. Answer with only the animal name:\nAnswer:"
         question_property = "Identify the animal from the evidence internally, then answer: How many legs does that animal typically have? Answer with one digit:\nAnswer:"
         def build_inputs(group, modality, kind):
+            if RUN_MULTIMODAL_PROTOCOL_REPAIR:
+                prefill = (
+                    "The animal in the evidence is"
+                    if kind == "identity"
+                    else "The number of legs on the animal in the evidence is"
+                )
+                if modality == "text":
+                    return build_multimodal_assistant_prefill_inputs(
+                        BACKEND, modality="text", caption=group["caption"],
+                        assistant_prefill=prefill,
+                    )
+                if modality == "image":
+                    return build_multimodal_assistant_prefill_inputs(
+                        BACKEND, modality="image",
+                        image=MEDIA["load_image"](group["image_path"]),
+                        media_path=group["image_path"],
+                        assistant_prefill=prefill,
+                    )
+                waveform, rate = MEDIA["load_audio"](group["audio_path"])
+                return build_multimodal_assistant_prefill_inputs(
+                    BACKEND, modality="spoken_audio", audio=waveform,
+                    sampling_rate=rate, media_path=group["audio_path"],
+                    assistant_prefill=prefill,
+                )
             question = question_identity if kind == "identity" else question_property
             if modality == "text":
                 return BACKEND.build_inputs(prompt=f"Caption: {group['caption']}\n{question}", modality="text")
@@ -2333,7 +2939,7 @@ if REAL_MODE and RUN_STAGE4_FRESH_CONFIRMATION and CONFIRM_MODEL_LOAD and CONFIR
         )
         condition_specs = (
             _primary_condition_specs
-            if L21_CONFIRMATION_MODE
+            if L21_CONFIRMATION_MODE or RUN_MULTIMODAL_PROTOCOL_REPAIR
             else _primary_condition_specs + (
                 (_sensitivity_key, "exact", _sensitivity_alpha),
                 ("direct_answer_norm_matched", "direct", None),
@@ -2360,7 +2966,11 @@ if REAL_MODE and RUN_STAGE4_FRESH_CONFIRMATION and CONFIRM_MODEL_LOAD and CONFIR
                         if clean_unit is None:
                             clean_unit = unrestricted_greedy_completion(
                                 BACKEND, inputs, answer=source_answer,
-                                max_new_tokens=TEXT_MAX_NEW_TOKENS,
+                                max_new_tokens=(
+                                    MULTIMODAL_MAX_NEW_TOKENS
+                                    if RUN_MULTIMODAL_PROTOCOL_REPAIR
+                                    else TEXT_MAX_NEW_TOKENS
+                                ),
                             )
                             STORE.save("capability", clean_key, clean_unit)
                         conditions = {}
@@ -2386,7 +2996,11 @@ if REAL_MODE and RUN_STAGE4_FRESH_CONFIRMATION and CONFIRM_MODEL_LOAD and CONFIR
                                     trial = unrestricted_greedy_swap_trial(
                                         BACKEND, inputs, bases=assets[basis_name],
                                         alpha=alpha, answer=target_answer,
-                                        max_new_tokens=TEXT_MAX_NEW_TOKENS,
+                                        max_new_tokens=(
+                                            MULTIMODAL_MAX_NEW_TOKENS
+                                            if RUN_MULTIMODAL_PROTOCOL_REPAIR
+                                            else TEXT_MAX_NEW_TOKENS
+                                        ),
                                         position_rule=CONFIRMATION_DESIGN[
                                             "position_rule_by_modality"
                                         ][modality],
@@ -2423,6 +3037,7 @@ if REAL_MODE and RUN_STAGE4_FRESH_CONFIRMATION and CONFIRM_MODEL_LOAD and CONFIR
                 diagnostics.get("all_hooks_fired")
                 and diagnostics.get("all_finite")
                 and diagnostics.get("all_model_dtype_realizations_converged", True)
+                and diagnostics.get("post_cast_audit_passed", True)
             )
         cells = []
         for direction_source, direction_target in directions:
@@ -2443,14 +3058,20 @@ if REAL_MODE and RUN_STAGE4_FRESH_CONFIRMATION and CONFIRM_MODEL_LOAD and CONFIR
                         "primary_success": sum(row["conditions"][_exact_key]["success"] for row in cell) / len(cell),
                         "sensitivity_alpha": _sensitivity_alpha,
                         "sensitivity_success": (
-                            None if L21_CONFIRMATION_MODE else
+                            None if (
+                                L21_CONFIRMATION_MODE
+                                or RUN_MULTIMODAL_PROTOCOL_REPAIR
+                            ) else
                             sum(row["conditions"][_sensitivity_key]["success"] for row in cell) / len(cell)
                         ),
                         "zero_success": sum(row["conditions"]["zero"]["success"] for row in cell) / len(cell),
                         "random_primary_success": sum(row["conditions"][_random_key]["success"] for row in cell) / len(cell),
                         "unrelated_primary_success": sum(row["conditions"][_unrelated_key]["success"] for row in cell) / len(cell),
                         "direct_answer_success": (
-                            None if L21_CONFIRMATION_MODE else
+                            None if (
+                                L21_CONFIRMATION_MODE
+                                or RUN_MULTIMODAL_PROTOCOL_REPAIR
+                            ) else
                             sum(row["conditions"]["direct_answer_norm_matched"]["success"] for row in cell) / len(cell)
                         ),
                         "all_condition_integrity": all(
@@ -2515,7 +3136,10 @@ if REAL_MODE and RUN_STAGE4_FRESH_CONFIRMATION and CONFIRM_MODEL_LOAD and CONFIR
             )
         integrity = all(cell["all_condition_integrity"] for cell in cells)
         capability = all(cell["clean_capability"] >= 0.75 for cell in cells)
-        positive_control = L21_CONFIRMATION_MODE or all(
+        positive_control = (
+            L21_CONFIRMATION_MODE
+            or RUN_MULTIMODAL_PROTOCOL_REPAIR
+        ) or all(
             cell["direct_answer_success"] >= 0.50 for cell in cells
         )
         primary = all(
@@ -2572,7 +3196,45 @@ if REAL_MODE and RUN_STAGE4_FRESH_CONFIRMATION and CONFIRM_MODEL_LOAD and CONFIR
             "atomic_resume_unit": "one two-token condition",
             "maximum_completed_forward_passes_lost_on_disconnect": 0,
         }
-        if L21_CONFIRMATION_MODE:
+        if RUN_MULTIMODAL_PROTOCOL_REPAIR:
+            from jlens.mmpilot.multimodal_workspace_repair import (
+                causal_swap_report,
+            )
+
+            _repair_rows = []
+            for row in rows:
+                if row["prompt_kind"] != "property":
+                    continue
+                _conditions = {}
+                for name, trial in row["conditions"].items():
+                    _conditions[name] = {
+                        **trial,
+                        "integrity_passed": condition_integrity(trial),
+                    }
+                _repair_rows.append({**row, "conditions": _conditions})
+            CONFIRMATION_REPORT = causal_swap_report(
+                _repair_rows,
+                stage="confirmation",
+                min_clean_rate=0.75,
+                min_primary_rate=0.25,
+                min_primary_successes=4,
+                familywise_alpha=CONFIRMATION_FAMILYWISE_ALPHA,
+            )
+            CONFIRMATION_REPORT.update({
+                "design": CONFIRMATION_DESIGN,
+                "freshness": freshness,
+                "rows": rows,
+                "identity_diagnostic_cells": [
+                    cell for cell in cells if cell["prompt_kind"] == "identity"
+                ],
+                "legacy_diagnostics": {
+                    key: value for key, value in _legacy_confirmation_report.items()
+                    if key != "rows"
+                },
+                "atomic_resume_unit": "one unrestricted generation condition",
+                "maximum_completed_forward_passes_lost_on_disconnect": 0,
+            })
+        elif L21_CONFIRMATION_MODE:
             from jlens.mmpilot.l21_confirmation import (
                 L21MultimodalThresholds,
                 l21_multimodal_confirmation_verdict,
@@ -2632,6 +3294,10 @@ if REAL_MODE and RUN_STAGE4_FRESH_CONFIRMATION and CONFIRM_MODEL_LOAD and CONFIR
         CONFIRMATION_REPORT["report_checksum"] = payload_checksum(CONFIRMATION_REPORT)
         STORE.save("metric", "fresh_confirmation_report", CONFIRMATION_REPORT)
         (RUN_DIR / "fresh_multimodal_confirmation_report.json").write_text(json.dumps(CONFIRMATION_REPORT, indent=2, default=str))
+        if RUN_MULTIMODAL_PROTOCOL_REPAIR:
+            (RUN_DIR / "multimodal_workspace_repair_confirmation_report.json").write_text(
+                json.dumps(CONFIRMATION_REPORT, indent=2, default=str)
+            )
         print(json.dumps({k: v for k, v in CONFIRMATION_REPORT.items() if k != "rows"}, indent=2))
 elif RUN_STAGE4_FRESH_CONFIRMATION:
     print("Stage 4 did not spend: real mode/model/budget gate is not met.")
@@ -2657,14 +3323,28 @@ if RUN_STAGE5_WRITE_REPORT:
         MULTIMODAL_INSTRUMENT_SELECTION
         or STORE.load("metric", "multimodal_instrument_selection")
     )
+    CAPABILITY_REPORT = (
+        globals().get("CAPABILITY_REPORT")
+        or STORE.load("metric", "multimodal_repair_capability")
+    )
+    DEVELOPMENT_CAUSAL_REPORT = (
+        globals().get("DEVELOPMENT_CAUSAL_REPORT")
+        or STORE.load("metric", "multimodal_repair_development_causal")
+    )
     FINAL = {
-        "schema": "jlens.mmpilot.paper_first_workspace_study.v3",
+        "schema": (
+            "jlens.mmpilot.multimodal_workspace_repair_study.v1"
+            if RUN_MULTIMODAL_PROTOCOL_REPAIR
+            else "jlens.mmpilot.paper_first_workspace_study.v3"
+        ),
         "scientific_config": SCIENTIFIC_CONFIG,
         "population_plan": POPULATION_PLAN,
         "text_replication": TEXT_VERDICT,
         "text_swap_diagnostic": TEXT_DIAGNOSTIC_REPORT,
         "text_loading_first_instrument": LOADING_FIRST_SELECTION,
         "multimodal_loading_first_instrument": MULTIMODAL_INSTRUMENT_SELECTION,
+        "multimodal_capability": CAPABILITY_REPORT,
+        "multimodal_causal_development": DEVELOPMENT_CAUSAL_REPORT,
         "r_lens_inventory": (
             json.loads((RUN_DIR / "r_lens_inventory.json").read_text())
             if (RUN_DIR / "r_lens_inventory.json").is_file()
@@ -2691,13 +3371,16 @@ if RUN_STAGE5_WRITE_REPORT:
                 and CONFIRMATION_REPORT.get("verdict") in {
                     "FRESH_MULTIMODAL_DOWNSTREAM_RECOMPUTATION_GO",
                     "L21_TRIMODAL_DOWNSTREAM_RECOMPUTATION_GO",
+                    "MULTIMODAL_SWAP_CONFIRMATION_GO",
                 }
             ),
         },
         "claim_boundary": (
-            "A multimodal downstream-recomputation claim is licensed only by "
-            "FRESH_MULTIMODAL_DOWNSTREAM_RECOMPUTATION_GO. Development loading "
-            "and alpha=.75 sensitivity cannot substitute for it."
+            "A strong multimodal downstream-recomputation claim is licensed "
+            "only by a passing untouched confirmation under the frozen exact "
+            "alpha=1 coordinate-exchange design. Clean capability, loading "
+            "tomography, development swaps, and alpha sensitivity are gates or "
+            "diagnostics; none can substitute for fresh confirmation."
         ),
     }
     FINAL["report_checksum"] = payload_checksum(FINAL)
