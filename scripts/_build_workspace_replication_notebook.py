@@ -583,24 +583,29 @@ TEXT_DIAGNOSTIC_CONDITIONS = __import__(
     fromlist=["TEXT_DIAGNOSTIC_CONDITIONS"],
 ).TEXT_DIAGNOSTIC_CONDITIONS
 print("TEXT TASKS", len(TEXT_TASKS))
-print("  unrestricted generation passes", len(TEXT_TASKS) * 2 * 4)
-print("  clean source-loading passes", len(TEXT_TASKS))
-print("  Stage-1 total passes", len(TEXT_TASKS) * 2 * 4 + len(TEXT_TASKS))
-print("TEXT DIAGNOSTIC UPPER BOUND — actual run uses exactly one clean-loading-selected band")
-print("  old singleton/suffix grid shown only as a strict cost ceiling",
-      len(TEXT_DIAGNOSTIC_BANDS), [list(band) for band in TEXT_DIAGNOSTIC_BANDS])
-print("  conditions per task/band", list(TEXT_DIAGNOSTIC_CONDITIONS))
-print("  unrestricted forward passes",
-      len(TEXT_TASKS) * len(TEXT_DIAGNOSTIC_BANDS)
-      * len(TEXT_DIAGNOSTIC_CONDITIONS) * 2)
-print("  derived from same-run Stage 1",
-      len(TEXT_TASKS) * 3 * 2,
-      "(full-band exact/random/unrelated; no repeat forwards)")
-print("  newly computed forward passes",
-      len(TEXT_TASKS) * len(TEXT_DIAGNOSTIC_BANDS)
-      * len(TEXT_DIAGNOSTIC_CONDITIONS) * 2 - len(TEXT_TASKS) * 3 * 2)
-print("  backward passes 0")
-print("  resume one two-token condition; maximum completed work lost 0")
+if RUN_MULTIMODAL_PROTOCOL_REPAIR:
+    print("TEXT STAGES SKIPPED")
+    print("  pinned L21 text verdict is reused; Stage 1/1B passes 0")
+else:
+    print("  unrestricted generation passes", len(TEXT_TASKS) * 2 * 4)
+    print("  clean source-loading passes", len(TEXT_TASKS))
+    print("  Stage-1 total passes", len(TEXT_TASKS) * 2 * 4 + len(TEXT_TASKS))
+    print("TEXT DIAGNOSTIC UPPER BOUND — actual run uses exactly one clean-loading-selected band")
+    print("  old singleton/suffix grid shown only as a strict cost ceiling",
+          len(TEXT_DIAGNOSTIC_BANDS), [list(band) for band in TEXT_DIAGNOSTIC_BANDS])
+    print("  conditions per task/band", list(TEXT_DIAGNOSTIC_CONDITIONS))
+    print("  unrestricted forward passes",
+          len(TEXT_TASKS) * len(TEXT_DIAGNOSTIC_BANDS)
+          * len(TEXT_DIAGNOSTIC_CONDITIONS) * 2)
+    print("  derived from same-run Stage 1",
+          len(TEXT_TASKS) * 3 * 2,
+          "(full-band exact/random/unrelated; no repeat forwards)")
+    print("  newly computed forward passes",
+          len(TEXT_TASKS) * len(TEXT_DIAGNOSTIC_BANDS)
+          * len(TEXT_DIAGNOSTIC_CONDITIONS) * 2 - len(TEXT_TASKS) * 3 * 2)
+    print("  backward passes 0")
+    print("  resume one two-token condition; maximum completed work lost 0")
+_multimodal_generation_tokens = 4 if RUN_MULTIMODAL_PROTOCOL_REPAIR else 2
 print("DEVELOPMENT UPPER BOUND")
 _loading_directions = 2 if RUN_MULTIMODAL_PROTOCOL_REPAIR else 1
 print(
@@ -615,18 +620,16 @@ if RUN_MULTIMODAL_PROTOCOL_REPAIR:
     print(
         "  generated-token forwards (maximum)",
         2 * DEVELOPMENT_IMAGES_PER_SOURCE * 3 * 7
-        * MULTIMODAL_MAX_NEW_TOKENS,
+        * _multimodal_generation_tokens,
     )
 print("FRESH CONFIRMATION UPPER BOUND")
 print("  clean generation forwards",
       CONFIRMATION_IMAGES_PER_SOURCE * 3 * 2 * 2
-      * (MULTIMODAL_MAX_NEW_TOKENS if RUN_MULTIMODAL_PROTOCOL_REPAIR else 2))
+      * _multimodal_generation_tokens)
 _confirmation_conditions = (
     4 if (L21_CONFIRMATION_MODE or RUN_MULTIMODAL_PROTOCOL_REPAIR) else 6
 )
-_confirmation_tokens = (
-    MULTIMODAL_MAX_NEW_TOKENS if RUN_MULTIMODAL_PROTOCOL_REPAIR else 2
-)
+_confirmation_tokens = _multimodal_generation_tokens
 print("  causal/control conditions", _confirmation_conditions,
       "two directions, generated-token forwards",
       CONFIRMATION_IMAGES_PER_SOURCE * 3 * 2 * 2

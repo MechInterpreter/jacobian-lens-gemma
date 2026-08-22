@@ -171,3 +171,15 @@ def test_clean_completion_is_not_given_an_intervention_policy() -> None:
         assert "realization_policy" not in {
             keyword.arg for keyword in call.keywords if keyword.arg is not None
         }
+
+
+def test_budget_cell_does_not_reference_later_imports() -> None:
+    budget_cells = [
+        "".join(cell["source"])
+        for cell in _notebook()["cells"]
+        if cell["cell_type"] == "code"
+        and "DEVELOPMENT UPPER BOUND" in "".join(cell["source"])
+    ]
+    assert len(budget_cells) == 1
+    assert "MULTIMODAL_MAX_NEW_TOKENS" not in budget_cells[0]
+    assert "_multimodal_generation_tokens = 4" in budget_cells[0]
