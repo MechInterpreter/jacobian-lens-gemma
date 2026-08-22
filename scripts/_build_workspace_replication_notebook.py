@@ -152,6 +152,7 @@ RUN_STAGE1_TEXT_REPLICATION = False
 RUN_STAGE1B_TEXT_DIAGNOSTIC = False
 RUN_STAGE2_MULTIMODAL_LOADING_DEVELOPMENT = False
 RUN_STAGE2B_MULTIMODAL_CAUSAL_DEVELOPMENT = False
+RUN_STAGE2C_POSITION_DIAGNOSTIC = False
 RUN_STAGE3_FREEZE_DESIGN = False
 RUN_STAGE4_FRESH_CONFIRMATION = False
 RUN_STAGE5_WRITE_REPORT = False
@@ -178,6 +179,7 @@ CONFIRM_R_LENS_FIT_BUDGET = False
 CONFIRM_TEXT_DIAGNOSTIC_BUDGET = False
 CONFIRM_DEVELOPMENT_BUDGET = False
 CONFIRM_DEVELOPMENT_CAUSAL_BUDGET = False
+CONFIRM_POSITION_DIAGNOSTIC_BUDGET = False
 CONFIRM_CONFIRMATION_BUDGET = False
 
 MODEL_REPO_ID = "google/gemma-4-E4B-it"
@@ -404,6 +406,7 @@ MODEL_STAGE = any((
     RUN_STAGE1B_TEXT_DIAGNOSTIC,
     RUN_STAGE2_MULTIMODAL_LOADING_DEVELOPMENT,
     RUN_STAGE2B_MULTIMODAL_CAUSAL_DEVELOPMENT,
+    RUN_STAGE2C_POSITION_DIAGNOSTIC,
     RUN_STAGE4_FRESH_CONFIRMATION,
 ))
 if RUN_STAGE0_FIT_MATCHED_R_LENSES and not CONFIRM_R_LENS_FIT_BUDGET:
@@ -421,6 +424,11 @@ if (
     print(
         "DEVELOPMENT CAUSAL BLOCKED: set "
         "CONFIRM_DEVELOPMENT_CAUSAL_BUDGET"
+    )
+if RUN_STAGE2C_POSITION_DIAGNOSTIC and not CONFIRM_POSITION_DIAGNOSTIC_BUDGET:
+    print(
+        "POSITION DIAGNOSTIC BLOCKED: set "
+        "CONFIRM_POSITION_DIAGNOSTIC_BUDGET"
     )
 if RUN_STAGE4_FRESH_CONFIRMATION and not CONFIRM_CONFIRMATION_BUDGET:
     print("CONFIRMATION BLOCKED: set CONFIRM_CONFIRMATION_BUDGET")
@@ -622,6 +630,16 @@ if RUN_MULTIMODAL_PROTOCOL_REPAIR:
         2 * DEVELOPMENT_IMAGES_PER_SOURCE * 3 * 7
         * _multimodal_generation_tokens,
     )
+    print("POSITION DIAGNOSTIC FOLLOW-UP UPPER BOUND")
+    print("  original all-position result reused; no overwrite")
+    print("  new strategies final-token-only + modality-evidence-only")
+    print("  exact alpha=1 plus zero/random/unrelated")
+    print(
+        "  newly generated-token forwards (maximum)",
+        2 * DEVELOPMENT_IMAGES_PER_SOURCE * 3 * 2 * 4
+        * _multimodal_generation_tokens,
+    )
+    print("  fitting/backward passes 0; one condition JSON per resume unit")
 print("FRESH CONFIRMATION UPPER BOUND")
 print("  clean generation forwards",
       CONFIRMATION_IMAGES_PER_SOURCE * 3 * 2 * 2
@@ -2768,6 +2786,235 @@ elif RUN_STAGE2B_MULTIMODAL_CAUSAL_DEVELOPMENT:
 '''
 )
 
+markdown("## 7c. Stage 2C — exploratory prompt-position diagnostic")
+code(
+    r'''
+POSITION_DIAGNOSTIC_REPORT = STORE.load(
+    "metric", "multimodal_position_diagnostic"
+)
+if (
+    REAL_MODE
+    and RUN_STAGE2C_POSITION_DIAGNOSTIC
+    and CONFIRM_MODEL_LOAD
+    and CONFIRM_POSITION_DIAGNOSTIC_BUDGET
+):
+    from jlens.mmpilot.coordinate_swap import (
+        random_two_direction_basis, resolve_concept_token,
+    )
+    from jlens.mmpilot.media_io import RetryJournal, drive_media_loaders
+    from jlens.mmpilot.multimodal_lens import build_swap_bases_for_lens
+    from jlens.mmpilot.multimodal_workspace_repair import (
+        POSITION_DIAGNOSTIC_STRATEGIES,
+        causal_swap_report,
+        position_diagnostic_report,
+    )
+    from jlens.mmpilot.store import safe_key
+    from jlens.mmpilot.workspace_replication import (
+        MULTIMODAL_MAX_NEW_TOKENS,
+        TEXT_MODEL_DTYPE_REALIZATION,
+        build_multimodal_assistant_prefill_inputs,
+        unrestricted_greedy_swap_trial,
+    )
+
+    if not RUN_MULTIMODAL_PROTOCOL_REPAIR:
+        raise RuntimeError("Stage 2C is reserved for the protocol-repair study")
+    _original = STORE.load("metric", "multimodal_repair_development_causal")
+    _tomography = STORE.load("metric", "multimodal_instrument_selection")
+    if not _original or not _tomography:
+        raise RuntimeError(
+            "Stage 2C requires completed Stage 2 loading and Stage 2B causal "
+            "development in this same fingerprinted run"
+        )
+    if _original.get("verdict") != "MULTIMODAL_SWAP_DEVELOPMENT_NO_GO":
+        raise RuntimeError(
+            "Stage 2C is the prospective diagnostic for the completed "
+            "all-position NO_GO; refusing a different parent state"
+        )
+    _instrument = str(_original["instrument"])
+    _pair = tuple(map(str, _original["pair"]))
+    _band = tuple(map(int, _original["layer_band"]))
+    if _instrument.startswith("matched_") and _instrument.endswith("_j"):
+        _arm = _instrument[len("matched_") : -len("_j")]
+        _lens = MATCHED_LENSES[_arm]
+    elif _instrument.startswith("matched_") and _instrument.endswith("_r"):
+        _arm = _instrument[len("matched_") : -len("_r")]
+        _lens = R_LENSES[_arm]
+    else:
+        raise RuntimeError(f"unknown selected instrument {_instrument!r}")
+    _tokens = {
+        name: resolve_concept_token(BACKEND.encode_candidate, name)
+        for name in {*_pair, *CONTROL_CONCEPTS}
+    }
+    _media = drive_media_loaders(journal=RetryJournal())
+    _answers = {"bird": "2", "cat": "4", "zebra": "4", "giraffe": "4"}
+    _prefill = "The number of legs on the animal in the evidence is"
+
+    def _position_inputs(group, modality):
+        if modality == "text":
+            return build_multimodal_assistant_prefill_inputs(
+                BACKEND, modality="text", caption=group["caption"],
+                assistant_prefill=_prefill,
+            )
+        if modality == "image":
+            return build_multimodal_assistant_prefill_inputs(
+                BACKEND, modality="image",
+                image=_media["load_image"](group["image_path"]),
+                media_path=group["image_path"], assistant_prefill=_prefill,
+            )
+        waveform, rate = _media["load_audio"](group["audio_path"])
+        return build_multimodal_assistant_prefill_inputs(
+            BACKEND, modality="spoken_audio", audio=waveform,
+            sampling_rate=rate, media_path=group["audio_path"],
+            assistant_prefill=_prefill,
+        )
+
+    _strategy_reports = {}
+    # Preserve the parent result exactly. It is context, never silently
+    # rescored or overwritten after its outcome was seen.
+    _strategy_reports["all_prompt_positions"] = _original
+    for _strategy in ("final_prompt_token_only", "modality_evidence_only"):
+        _rules = dict(POSITION_DIAGNOSTIC_STRATEGIES[_strategy])
+        _rows = []
+        for _direction_index, (source, target) in enumerate(
+            ((_pair[0], _pair[1]), (_pair[1], _pair[0]))
+        ):
+            _exact = build_swap_bases_for_lens(
+                _lens, BACKEND.unembedding_weight(), layers=_band,
+                source=_tokens[source], target=_tokens[target],
+            )
+            _random = {
+                layer: random_two_direction_basis(
+                    basis, seed=20260822 + 100 * _direction_index + layer
+                )
+                for layer, basis in _exact.items()
+            }
+            _unrelated = build_swap_bases_for_lens(
+                _lens, BACKEND.unembedding_weight(), layers=_band,
+                source=_tokens[CONTROL_CONCEPTS[0]],
+                target=_tokens[CONTROL_CONCEPTS[1]],
+            )
+            for group in (
+                row for row in DEV_GROUPS if str(row["concept"]) == source
+            ):
+                for modality in ("text", "image", "spoken_audio"):
+                    inputs = _position_inputs(group, modality)
+                    clean = STORE.load(
+                        "capability",
+                        safe_key(
+                            "repair-capability", source, group["group_id"],
+                            modality, "property",
+                        ),
+                    )
+                    if clean is None:
+                        raise RuntimeError(
+                            "Stage 2C refuses to recreate capability rows; run "
+                            "the completed repair stages in this namespace first"
+                        )
+                    conditions = {}
+                    for name, bases, alpha in (
+                        ("exact_alpha1", _exact, 1.0),
+                        ("zero", _exact, 0.0),
+                        ("random_alpha1", _random, 1.0),
+                        ("unrelated_alpha1", _unrelated, 1.0),
+                    ):
+                        key = safe_key(
+                            "position-diagnostic", _strategy, _instrument,
+                            source, target, group["group_id"], modality, name,
+                        )
+                        trial = STORE.load("intervention", key)
+                        if trial is None:
+                            trial = unrestricted_greedy_swap_trial(
+                                BACKEND, inputs, bases=bases, alpha=alpha,
+                                answer=_answers[target],
+                                max_new_tokens=MULTIMODAL_MAX_NEW_TOKENS,
+                                position_rule=_rules[modality],
+                                realization_policy=TEXT_MODEL_DTYPE_REALIZATION,
+                            )
+                            diagnostics = dict(
+                                trial.get("intervention_diagnostics") or {}
+                            )
+                            trial = {
+                                **trial,
+                                "success": bool(trial["answer_match"]),
+                                "integrity_passed": bool(
+                                    diagnostics.get("all_hooks_fired")
+                                    and diagnostics.get("all_finite")
+                                    and diagnostics.get(
+                                        "all_model_dtype_realizations_converged",
+                                        True,
+                                    )
+                                    and diagnostics.get(
+                                        "post_cast_audit_passed", True
+                                    )
+                                ),
+                            }
+                            STORE.save("intervention", key, trial)
+                            work = "computed"
+                        else:
+                            work = "reused"
+                        conditions[name] = trial
+                        print(
+                            "position diagnostic", _strategy, source, target,
+                            modality, group["group_id"], name, work,
+                            repr(trial["generated_text"]), trial["success"],
+                        )
+                    _rows.append({
+                        "source": source, "target": target,
+                        "direction": f"{source}->{target}",
+                        "group_id": group["group_id"],
+                        "image_id": group["image_id"], "modality": modality,
+                        "clean_correct": bool(clean["clean_correct"]),
+                        "clean_surface": clean["clean_surface"],
+                        "conditions": conditions,
+                    })
+        _report = causal_swap_report(
+            _rows, stage="development", min_clean_rate=0.75,
+            min_primary_rate=0.25, min_primary_successes=4,
+            familywise_alpha=0.05,
+        )
+        _report = {
+            **_report,
+            "instrument": _instrument, "pair": list(_pair),
+            "layer_band": list(_band),
+            "position_strategy": _strategy,
+            "position_rule_by_modality": _rules,
+            "exploratory_after_original_all_position_no_go": True,
+            "rows": _rows,
+        }
+        _report["report_checksum"] = payload_checksum({
+            key: value for key, value in _report.items()
+            if key != "report_checksum"
+        })
+        STORE.save("metric", f"position_diagnostic_{_strategy}", _report)
+        _strategy_reports[_strategy] = _report
+    POSITION_DIAGNOSTIC_REPORT = position_diagnostic_report(
+        _strategy_reports,
+        original_development_report_checksum=_original["report_checksum"],
+    )
+    POSITION_DIAGNOSTIC_REPORT["reports"] = {
+        name: report["report_checksum"]
+        for name, report in _strategy_reports.items()
+    }
+    POSITION_DIAGNOSTIC_REPORT["implementation_commit"] = COMMIT
+    POSITION_DIAGNOSTIC_REPORT["report_checksum"] = payload_checksum({
+        key: value for key, value in POSITION_DIAGNOSTIC_REPORT.items()
+        if key != "report_checksum"
+    })
+    STORE.save(
+        "metric", "multimodal_position_diagnostic", POSITION_DIAGNOSTIC_REPORT
+    )
+    (RUN_DIR / "multimodal_position_diagnostic_report.json").write_text(
+        json.dumps(POSITION_DIAGNOSTIC_REPORT, indent=2, default=str)
+    )
+    print(json.dumps(POSITION_DIAGNOSTIC_REPORT, indent=2))
+elif RUN_STAGE2C_POSITION_DIAGNOSTIC:
+    print(
+        "Stage 2C did not spend: it requires repair mode, the model, and its "
+        "explicit position-diagnostic budget gate"
+    )
+'''
+)
+
 markdown("## 8. Stage 3 — freeze the causal design before confirmation media are opened")
 code(
     r'''
@@ -2785,6 +3032,7 @@ if RUN_STAGE3_FREEZE_DESIGN:
     )
     if RUN_MULTIMODAL_PROTOCOL_REPAIR:
         from jlens.mmpilot.multimodal_workspace_repair import (
+            freeze_position_selected_confirmation_design,
             freeze_repair_confirmation_design,
         )
         _capability = STORE.load("metric", "multimodal_repair_capability")
@@ -2792,11 +3040,42 @@ if RUN_STAGE3_FREEZE_DESIGN:
         _development = STORE.load(
             "metric", "multimodal_repair_development_causal"
         )
+        _position_diagnostic = STORE.load(
+            "metric", "multimodal_position_diagnostic"
+        )
         if not (_capability and _tomography and _development):
             print(
                 "Stage 3 did not freeze: capability, tomography, and causal "
                 "development must all be complete"
             )
+        elif (
+            _position_diagnostic
+            and _position_diagnostic.get("verdict")
+            == "MULTIMODAL_POSITION_DIAGNOSTIC_GO"
+        ):
+            CONFIRMATION_DESIGN = freeze_position_selected_confirmation_design(
+                capability=_capability,
+                tomography=_tomography,
+                position_diagnostic=_position_diagnostic,
+                development_population_digest=payload_checksum(
+                    POPULATION_PLAN["development"]
+                ),
+                confirmation_population_digest=FRESHNESS["population_digest"],
+                forbidden_development_image_ids=DEV_IMAGE_IDS,
+                forbidden_prior_image_ids=PRIOR_EXCLUDED_IMAGES,
+            )
+            CONFIRMATION_DESIGN["forbidden_development_group_ids"] = sorted(
+                DEV_GROUP_IDS
+            )
+            CONFIRMATION_DESIGN["design_digest"] = payload_checksum({
+                key: value for key, value in CONFIRMATION_DESIGN.items()
+                if key != "design_digest"
+            })
+            STORE.save("metric", "confirmation_design", CONFIRMATION_DESIGN)
+            (RUN_DIR / "frozen_confirmation_design.json").write_text(
+                json.dumps(CONFIRMATION_DESIGN, indent=2)
+            )
+            print(json.dumps(CONFIRMATION_DESIGN, indent=2))
         elif _development.get("verdict") != "MULTIMODAL_SWAP_DEVELOPMENT_GO":
             print("=" * 78)
             print("CONFIRMATION NOT LICENSED — CAUSAL DEVELOPMENT NO_GO")
@@ -2809,6 +3088,11 @@ if RUN_STAGE3_FREEZE_DESIGN:
                 "This preserves the development result without converting a "
                 "predeclared scientific NO_GO into a notebook exception."
             )
+            if _position_diagnostic:
+                print(
+                    "position diagnostic verdict",
+                    _position_diagnostic.get("verdict"),
+                )
         else:
             CONFIRMATION_DESIGN = freeze_repair_confirmation_design(
                 capability=_capability,
@@ -3439,6 +3723,10 @@ if RUN_STAGE5_WRITE_REPORT:
         globals().get("DEVELOPMENT_CAUSAL_REPORT")
         or STORE.load("metric", "multimodal_repair_development_causal")
     )
+    POSITION_DIAGNOSTIC_REPORT = (
+        globals().get("POSITION_DIAGNOSTIC_REPORT")
+        or STORE.load("metric", "multimodal_position_diagnostic")
+    )
     FINAL = {
         "schema": (
             "jlens.mmpilot.multimodal_workspace_repair_study.v1"
@@ -3453,6 +3741,7 @@ if RUN_STAGE5_WRITE_REPORT:
         "multimodal_loading_first_instrument": MULTIMODAL_INSTRUMENT_SELECTION,
         "multimodal_capability": CAPABILITY_REPORT,
         "multimodal_causal_development": DEVELOPMENT_CAUSAL_REPORT,
+        "multimodal_position_diagnostic": POSITION_DIAGNOSTIC_REPORT,
         "r_lens_inventory": (
             json.loads((RUN_DIR / "r_lens_inventory.json").read_text())
             if (RUN_DIR / "r_lens_inventory.json").is_file()

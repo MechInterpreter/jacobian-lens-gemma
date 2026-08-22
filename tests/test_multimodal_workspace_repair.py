@@ -1,7 +1,10 @@
 from jlens.mmpilot.multimodal_workspace_repair import (
+    POSITION_DIAGNOSTIC_STRATEGIES,
     causal_swap_report,
+    freeze_position_selected_confirmation_design,
     freeze_repair_confirmation_design,
     multimodal_capability_report,
+    position_diagnostic_report,
     select_loading_tomography,
 )
 
@@ -276,3 +279,66 @@ def test_confirmation_design_freezes_the_loading_selected_alpha1_design() -> Non
     assert design["layer_band"] == [20, 21]
     assert design["teacher_forcing_used"] is False
     assert design["candidate_list_supplied"] is False
+
+
+def _position_report(strategy, primary):
+    report = causal_swap_report(
+        _causal_rows(primary, [False] * len(primary), [False] * len(primary), [False] * len(primary)),
+        stage="development",
+        min_primary_successes=4,
+    )
+    report.update(
+        {
+            "instrument": "pooled-r",
+            "pair": ["bird", "giraffe"],
+            "layer_band": [20, 21],
+            "position_rule_by_modality": POSITION_DIAGNOSTIC_STRATEGIES[strategy],
+        }
+    )
+    return report
+
+
+def test_position_diagnostic_is_exploratory_and_requires_fresh_confirmation() -> None:
+    reports = {
+        "all_prompt_positions": _position_report(
+            "all_prompt_positions", [False] * 16
+        ),
+        "final_prompt_token_only": _position_report(
+            "final_prompt_token_only", [True] * 16
+        ),
+        "modality_evidence_only": _position_report(
+            "modality_evidence_only", [False] * 16
+        ),
+    }
+    diagnostic = position_diagnostic_report(
+        reports, original_development_report_checksum="sha256:original"
+    )
+    assert diagnostic["verdict"] == "MULTIMODAL_POSITION_DIAGNOSTIC_GO"
+    assert diagnostic["selected_strategy"] == "final_prompt_token_only"
+    assert diagnostic["causal_outcomes_selected_position_strategy"] is True
+    assert diagnostic["original_all_position_no_go_remains_unchanged"] is True
+    assert diagnostic["fresh_confirmation_required"] is True
+
+    capability = multimodal_capability_report(
+        _capability_rows(), concepts=("bird", "giraffe")
+    )
+    tomography = select_loading_tomography(
+        {"pooled-r": _loading_rows("pooled-r", 0.2)},
+        instrument_layers={"pooled-r": (20, 21)},
+        candidate_pairs=(("bird", "giraffe"),),
+        capability=capability,
+    )
+    design = freeze_position_selected_confirmation_design(
+        capability=capability,
+        tomography=tomography,
+        position_diagnostic=diagnostic,
+        development_population_digest="sha256:development",
+        confirmation_population_digest="sha256:confirmation",
+        forbidden_development_image_ids=("image-a",),
+        forbidden_prior_image_ids=("image-b",),
+    )
+    assert design["position_strategy"] == "final_prompt_token_only"
+    assert set(design["position_rule_by_modality"].values()) == {
+        "final_prompt_token_only"
+    }
+    assert design["causal_outcomes_selected_position_strategy"] is True

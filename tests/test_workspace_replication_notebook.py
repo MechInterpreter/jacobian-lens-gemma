@@ -87,6 +87,10 @@ def test_notebook_enforces_the_paper_first_order() -> None:
         "CAPABILITY_ADMISSIBLE_PAIRS",
         "FOCAL_ANIMAL_EXCLUSIONS",
         "CONFIRMATION NOT LICENSED — CAUSAL DEVELOPMENT NO_GO",
+        "POSITION_DIAGNOSTIC_STRATEGIES",
+        "position_diagnostic_report",
+        "freeze_position_selected_confirmation_design",
+        "original all-position result reused; no overwrite",
     ):
         assert required in source
     assert "answer_token_table(BACKEND" not in source
@@ -151,6 +155,7 @@ def test_all_result_switches_default_false() -> None:
         "RUN_STAGE1B_TEXT_DIAGNOSTIC",
         "RUN_STAGE2_MULTIMODAL_LOADING_DEVELOPMENT",
         "RUN_STAGE2B_MULTIMODAL_CAUSAL_DEVELOPMENT",
+        "RUN_STAGE2C_POSITION_DIAGNOSTIC",
         "RUN_STAGE3_FREEZE_DESIGN",
         "RUN_STAGE4_FRESH_CONFIRMATION",
         "RUN_STAGE5_WRITE_REPORT",
@@ -158,6 +163,7 @@ def test_all_result_switches_default_false() -> None:
         "CONFIRM_TEXT_DIAGNOSTIC_BUDGET",
         "CONFIRM_DEVELOPMENT_BUDGET",
         "CONFIRM_DEVELOPMENT_CAUSAL_BUDGET",
+        "CONFIRM_POSITION_DIAGNOSTIC_BUDGET",
         "CONFIRM_CONFIRMATION_BUDGET",
         "RUN_MULTIMODAL_PROTOCOL_REPAIR",
     ):

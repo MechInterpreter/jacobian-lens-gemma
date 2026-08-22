@@ -286,6 +286,9 @@ class _ControlTerminatingBackend(_GenerationBackend):
 
     def forward_logits(self, tensors):
         seq_len = int(tensors["input_ids"].shape[1])
+        hidden = torch.zeros((1, seq_len, 3), dtype=torch.float32)
+        for block in self.blocks:
+            hidden = block(hidden)
         logits = torch.zeros((1, seq_len, 4), dtype=torch.float32)
         selected = {1: 1, 2: 2}.get(seq_len, 3)
         logits[0, -1, selected] = 10.0
@@ -357,17 +360,19 @@ def test_complete_answer_swap_keeps_hooks_active_for_both_decode_steps() -> None
         target=target,
     )
     result = unrestricted_greedy_swap_trial(
-        _GenerationBackend(),
+        _ControlTerminatingBackend(),
         _generation_inputs(),
         bases={0: basis},
         alpha=1.0,
-        answer="8",
+        answer="4",
+        max_new_tokens=4,
     )
     assert result["answer_match"] is True
     assert result["hook_forward_passes_by_layer"] == {"0": 2}
     assert result["all_prompt_positions_patched"] is True
     diagnostics = result["intervention_diagnostics"]
     assert diagnostics["all_hooks_fired"] is True
+    assert diagnostics["expected_forward_passes"] == 2
     assert diagnostics["all_finite"] is True
     assert diagnostics["post_cast_audit_passed"] is True
     assert diagnostics["post_cast_residual_audit_passed"] is True

@@ -1097,7 +1097,9 @@ def unrestricted_greedy_swap_trial(
             str(layer): int(stats[layer].get("n_forward_passes") or 0)
             for layer in sorted(stats)
         },
-        "intervention_diagnostics": summarize_swap_diagnostics(stats),
+        "intervention_diagnostics": summarize_swap_diagnostics(
+            stats, expected_forward_passes=int(generated["n_forward_passes"])
+        ),
     }
 
 
@@ -1111,7 +1113,9 @@ def _finite_numbers(value) -> bool:
     return True
 
 
-def summarize_swap_diagnostics(stats: Mapping[int, Mapping]) -> dict:
+def summarize_swap_diagnostics(
+    stats: Mapping[int, Mapping], *, expected_forward_passes: int | None = None
+) -> dict:
     """Compact the real hook audit without persisting activation-sized arrays."""
 
     by_layer = {}
@@ -1201,15 +1205,25 @@ def summarize_swap_diagnostics(stats: Mapping[int, Mapping]) -> dict:
         for row in layers
         if row["max_post_cast_relative_residual_drift"] is not None
     ]
+    expected_passes = (
+        TEXT_MAX_NEW_TOKENS
+        if expected_forward_passes is None
+        else int(expected_forward_passes)
+    )
+    if expected_passes < 1:
+        raise WorkspaceReplicationRefused(
+            "swap diagnostics require at least one completed generation pass"
+        )
     payload = {
         "version": TEXT_DIAGNOSTIC_VERSION,
         "by_layer": by_layer,
         "all_hooks_fired": bool(layers)
         and all(
-            row["n_forward_passes"] == TEXT_MAX_NEW_TOKENS
-            and row["n_swap_records"] == TEXT_MAX_NEW_TOKENS
+            row["n_forward_passes"] == expected_passes
+            and row["n_swap_records"] == expected_passes
             for row in layers
         ),
+        "expected_forward_passes": expected_passes,
         "all_finite": bool(layers) and all(row["all_finite"] for row in layers),
         "all_layers_are_exact_alpha_one_exchange_before_cast": bool(layers)
         and all(row["all_alpha_one_exact_before_cast"] for row in layers),

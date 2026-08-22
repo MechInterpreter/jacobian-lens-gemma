@@ -36,6 +36,28 @@ TOMOGRAPHY_VERSION = "mmpilot.multimodal_loading_tomography.v2"
 DEVELOPMENT_VERSION = "mmpilot.multimodal_swap_development.v1"
 CONFIRMATION_VERSION = "mmpilot.multimodal_swap_fresh_confirmation.v1"
 DESIGN_VERSION = "mmpilot.multimodal_workspace_confirmation_design.v1"
+POSITION_DIAGNOSTIC_VERSION = "mmpilot.multimodal_position_diagnostic.v1"
+POSITION_DESIGN_VERSION = "mmpilot.multimodal_position_selected_design.v1"
+
+POSITION_DIAGNOSTIC_STRATEGIES = {
+    "all_prompt_positions": {
+        "text": "all_prompt_positions",
+        "image": "all_prompt_positions",
+        "spoken_audio": "all_prompt_positions",
+    },
+    "final_prompt_token_only": {
+        "text": "final_prompt_token_only",
+        "image": "final_prompt_token_only",
+        "spoken_audio": "final_prompt_token_only",
+    },
+    "modality_evidence_only": {
+        # Text inputs do not expose a modality-token span.  Their final prompt
+        # token is the answer-neutral location supported by the loading audit.
+        "text": "final_prompt_token_only",
+        "image": "evidence_span_only",
+        "spoken_audio": "evidence_span_only",
+    },
+}
 
 
 def _median(values: Sequence[float]) -> float:
@@ -475,6 +497,168 @@ def causal_swap_report(
     return {**payload, "report_checksum": payload_checksum(payload)}
 
 
+def position_diagnostic_report(
+    reports: Mapping[str, Mapping],
+    *,
+    original_development_report_checksum: str,
+) -> dict:
+    """Rank predeclared position strategies on opened development media.
+
+    This is explicitly exploratory: causal outcomes choose the strategy, so a
+    selected strategy can license only a separately frozen, untouched
+    confirmation.  It can never amend the original all-position NO_GO.
+    """
+
+    expected = set(POSITION_DIAGNOSTIC_STRATEGIES)
+    if set(map(str, reports)) != expected:
+        raise WorkspaceReplicationRefused(
+            "position diagnostics require exactly the predeclared strategies "
+            f"{sorted(expected)}"
+        )
+    ranking = []
+    shared = None
+    for strategy in sorted(expected):
+        report = dict(reports[strategy])
+        if report.get("stage") != "development":
+            raise WorkspaceReplicationRefused(
+                f"position strategy {strategy!r} is not a development report"
+            )
+        identity = {
+            "instrument": report.get("instrument"),
+            "pair": list(report.get("pair") or ()),
+            "layer_band": list(report.get("layer_band") or ()),
+        }
+        if shared is None:
+            shared = identity
+        elif identity != shared:
+            raise WorkspaceReplicationRefused(
+                "position strategies changed the instrument, pair, or layer band"
+            )
+        expected_rules = POSITION_DIAGNOSTIC_STRATEGIES[strategy]
+        if dict(report.get("position_rule_by_modality") or {}) != expected_rules:
+            raise WorkspaceReplicationRefused(
+                f"position strategy {strategy!r} does not match its frozen rules"
+            )
+        cells = list(report.get("cells") or ())
+        if len(cells) != 6:
+            raise WorkspaceReplicationRefused(
+                f"position strategy {strategy!r} must report six cells"
+            )
+        primary_successes = sum(int(cell.get("primary_successes") or 0) for cell in cells)
+        control_successes = sum(
+            int(round(float(control.get("control_rate") or 0.0) * int(cell["n"])))
+            for cell in cells
+            for control in dict(cell.get("controls") or {}).values()
+        )
+        ranking.append(
+            {
+                "strategy": strategy,
+                "verdict": report.get("verdict"),
+                "passed_cells": sum(bool(cell.get("passed")) for cell in cells),
+                "primary_successes": primary_successes,
+                "control_successes_across_three_arms": control_successes,
+                "all_integrity_passed": all(
+                    bool(cell.get("integrity_pass")) for cell in cells
+                ),
+                "report_checksum": report.get("report_checksum"),
+                "position_rule_by_modality": dict(
+                    report.get("position_rule_by_modality") or {}
+                ),
+            }
+        )
+    ranking.sort(
+        key=lambda row: (
+            row["verdict"] != "MULTIMODAL_SWAP_DEVELOPMENT_GO",
+            -int(row["passed_cells"]),
+            -int(row["primary_successes"]),
+            int(row["control_successes_across_three_arms"]),
+            str(row["strategy"]),
+        )
+    )
+    selected = next(
+        (
+            row
+            for row in ranking
+            if row["verdict"] == "MULTIMODAL_SWAP_DEVELOPMENT_GO"
+        ),
+        None,
+    )
+    payload = {
+        "version": POSITION_DIAGNOSTIC_VERSION,
+        "verdict": (
+            "MULTIMODAL_POSITION_DIAGNOSTIC_GO"
+            if selected
+            else "MULTIMODAL_POSITION_DIAGNOSTIC_NO_GO"
+        ),
+        **(shared or {}),
+        "strategies_predeclared_before_new_trials": sorted(expected),
+        "ranking": ranking,
+        "selected_strategy": selected["strategy"] if selected else None,
+        "selected_position_rule_by_modality": (
+            selected["position_rule_by_modality"] if selected else None
+        ),
+        "original_development_report_checksum": str(
+            original_development_report_checksum
+        ),
+        "original_all_position_no_go_remains_unchanged": True,
+        "causal_outcomes_selected_position_strategy": True,
+        "development_only": True,
+        "fresh_confirmation_required": True,
+        "teacher_forcing_used": False,
+        "candidate_list_supplied": False,
+    }
+    return {**payload, "report_checksum": payload_checksum(payload)}
+
+
+def freeze_position_selected_confirmation_design(
+    *,
+    capability: Mapping,
+    tomography: Mapping,
+    position_diagnostic: Mapping,
+    development_population_digest: str,
+    confirmation_population_digest: str,
+    forbidden_development_image_ids: Sequence[str],
+    forbidden_prior_image_ids: Sequence[str],
+) -> dict:
+    """Freeze a development-selected position strategy for fresh confirmation."""
+
+    if position_diagnostic.get("verdict") != "MULTIMODAL_POSITION_DIAGNOSTIC_GO":
+        raise WorkspaceReplicationRefused("position diagnostic did not pass")
+    selected = str(position_diagnostic.get("selected_strategy") or "")
+    if selected not in POSITION_DIAGNOSTIC_STRATEGIES:
+        raise WorkspaceReplicationRefused("position diagnostic selected no known strategy")
+    payload = {
+        "version": POSITION_DESIGN_VERSION,
+        "instrument": position_diagnostic.get("instrument"),
+        "pair": list(position_diagnostic.get("pair") or ()),
+        "layer_band": list(position_diagnostic.get("layer_band") or ()),
+        "position_strategy": selected,
+        "position_rule_by_modality": dict(POSITION_DIAGNOSTIC_STRATEGIES[selected]),
+        "primary_alpha": 1.0,
+        "primary_alpha_role": "exact_coordinate_exchange",
+        "input_protocol": "mmpilot.multimodal_assistant_prefill_completion.v2",
+        "output_endpoint": "unrestricted_greedy_complete_answer",
+        "max_new_tokens": 4,
+        "capability_report_checksum": capability.get("report_checksum"),
+        "tomography_selection_digest": tomography.get("selection_digest"),
+        "position_diagnostic_report_checksum": position_diagnostic.get(
+            "report_checksum"
+        ),
+        "development_population_digest": str(development_population_digest),
+        "confirmation_population_digest": str(confirmation_population_digest),
+        "forbidden_development_image_ids": sorted(
+            set(map(str, forbidden_development_image_ids))
+        ),
+        "forbidden_prior_image_ids": sorted(set(map(str, forbidden_prior_image_ids))),
+        "teacher_forcing_used": False,
+        "candidate_list_supplied": False,
+        "causal_outcomes_selected_position_strategy": True,
+        "fresh_confirmation_required": True,
+        "original_all_position_no_go_remains_unchanged": True,
+    }
+    return {**payload, "design_digest": payload_checksum(payload)}
+
+
 def freeze_repair_confirmation_design(
     *,
     capability: Mapping,
@@ -537,10 +721,15 @@ __all__ = [
     "CONFIRMATION_VERSION",
     "DEVELOPMENT_VERSION",
     "DESIGN_VERSION",
+    "POSITION_DESIGN_VERSION",
+    "POSITION_DIAGNOSTIC_STRATEGIES",
+    "POSITION_DIAGNOSTIC_VERSION",
     "REPAIR_PROTOCOL_VERSION",
     "TOMOGRAPHY_VERSION",
     "causal_swap_report",
     "freeze_repair_confirmation_design",
+    "freeze_position_selected_confirmation_design",
     "multimodal_capability_report",
+    "position_diagnostic_report",
     "select_loading_tomography",
 ]
