@@ -138,6 +138,11 @@ RUN_STAGE3_FREEZE_DESIGN = False
 RUN_STAGE4_FRESH_CONFIRMATION = False
 RUN_STAGE5_WRITE_REPORT = False
 
+# Prospective follow-up to the completed multimodal loading NO_GO.  This reuses
+# the confirmed text result and the outcome-blind development ranking, freezes
+# its top pair/instrument, and opens only the untouched confirmation media.
+RUN_L21_MULTIMODAL_PROSPECTIVE_FOLLOWUP = False
+
 # Tokenizer only: no weights, no GPU, ~a few MB. Run this before any paid
 # session -- TEXT_CONCEPT_TOKENS is otherwise built after the model is
 # resident, so one multi-token concept wastes the whole session.
@@ -204,7 +209,11 @@ elif STUDY_LAYER_WINDOW == "frozen_r_l21_confirmation":
     # that pass tokenization and clean capability form the primary causal
     # cohort.  Positive L21 loading is reported only as a secondary subgroup.
     LAYERS = (21,)
-    SCIENTIFIC_IMPLEMENTATION_ID = "frozen-r-l21-probe-swap-clean-cohort.v2"
+    SCIENTIFIC_IMPLEMENTATION_ID = (
+        "frozen-r-l21-multimodal-prospective-followup.v3"
+        if RUN_L21_MULTIMODAL_PROSPECTIVE_FOLLOWUP
+        else "frozen-r-l21-probe-swap-clean-cohort.v2"
+    )
 else:
     raise ValueError(
         "STUDY_LAYER_WINDOW must be 'late_jr_l33_l40', 'early_r_l27_l32', "
@@ -262,6 +271,16 @@ R_LENS_DIM_BATCH = 4 if STUDY_LAYER_WINDOW == "all_r_l01_l40" else 8
 R_LENS_ARMS = ("text",) if STUDY_LAYER_WINDOW == "all_r_l01_l40" else ("text", "pooled")
 L21_CONFIRMATION_MODE = STUDY_LAYER_WINDOW == "frozen_r_l21_confirmation"
 L21_PRIMARY_COHORT_RULE = "token_eligible_and_clean_capable.v2"
+L21_TEXT_PARENT_RUN_BASENAME = "mmworkspace_real_9cd9ce8e00c5"
+L21_TEXT_PARENT_FINGERPRINT = (
+    "sha256:54cbfdbc891d8bb492ecd649679b0f5fa80c9aab696bcbbeb329bae9cb0d9c88"
+)
+L21_TEXT_PARENT_REPORT_CHECKSUM = (
+    "sha256:1c36b2dce247482bb515f787a855619c61df8c05a92413e182593ce3df1c82c9"
+)
+L21_PARENT_LOADING_SELECTION_DIGEST = (
+    "sha256:714e350ba65ed0aca631cbb7a7ad62b348ab40d598b47a1ef885298e95b84a66"
+)
 if L21_CONFIRMATION_MODE:
     if RUN_STAGE0_FIT_MATCHED_R_LENSES:
         raise RuntimeError(
@@ -271,6 +290,22 @@ if L21_CONFIRMATION_MODE:
     if TEXT_TASK_SET != "probe_swap_v1":
         raise RuntimeError(
             "frozen_r_l21_confirmation requires TEXT_TASK_SET='probe_swap_v1'"
+        )
+if RUN_L21_MULTIMODAL_PROSPECTIVE_FOLLOWUP:
+    if not L21_CONFIRMATION_MODE:
+        raise RuntimeError(
+            "the prospective multimodal follow-up requires "
+            "STUDY_LAYER_WINDOW='frozen_r_l21_confirmation'"
+        )
+    if any((
+        RUN_STAGE0_FIT_MATCHED_R_LENSES,
+        RUN_STAGE1_TEXT_REPLICATION,
+        RUN_STAGE1B_TEXT_DIAGNOSTIC,
+        RUN_STAGE2_MULTIMODAL_LOADING_DEVELOPMENT,
+    )):
+        raise RuntimeError(
+            "the prospective multimodal follow-up reuses completed text and "
+            "development evidence; Stages 0, 1, 1B, and 2 must remain False"
         )
 EVIDENCE_POSITION_MARGIN = 0.0
 MIN_CONFIRMATION_SUCCESS_RATE = 0.50
@@ -355,6 +390,73 @@ if REAL_MODE and L21_CONFIRMATION_MODE:
     print("source fingerprint", L21_DISCOVERY["fingerprint_digest"])
 elif L21_CONFIRMATION_MODE:
     L21_DISCOVERY_RUN_DIR = None
+
+L21_MULTIMODAL_PARENT = None
+if REAL_MODE and RUN_L21_MULTIMODAL_PROSPECTIVE_FOLLOWUP:
+    from jlens.mmpilot.store import payload_checksum
+
+    _parent_dir = RUNS_ROOT / "mmworkspace" / L21_TEXT_PARENT_RUN_BASENAME
+    _text_report_path = _parent_dir / "l21_text_confirmation_report.json"
+    _selection_unit_path = (
+        _parent_dir / "units" / "metric" /
+        "multimodal_instrument_selection.json"
+    )
+    if not _text_report_path.is_file() or not _selection_unit_path.is_file():
+        raise FileNotFoundError(
+            "the pinned completed L21 text/loading parent is missing"
+        )
+    _text_report = json.loads(_text_report_path.read_text())
+    _selection_unit = json.loads(_selection_unit_path.read_text())
+    _selection = dict(_selection_unit.get("payload") or {})
+    _parent_plan = json.loads((_parent_dir / "population_plan.json").read_text())
+    _problems = []
+    if _selection_unit.get("fingerprint_digest") != L21_TEXT_PARENT_FINGERPRINT:
+        _problems.append("parent fingerprint changed")
+    if _text_report.get("report_checksum") != L21_TEXT_PARENT_REPORT_CHECKSUM:
+        _problems.append("text report checksum pin changed")
+    _recomputed_text_checksum = payload_checksum({
+        key: value for key, value in _text_report.items()
+        if key != "report_checksum"
+    })
+    if _recomputed_text_checksum != L21_TEXT_PARENT_REPORT_CHECKSUM:
+        _problems.append("text report body no longer matches its checksum")
+    if _text_report.get("verdict") != "L21_TEXT_CONFIRMATION_GO":
+        _problems.append("parent text confirmation is not GO")
+    if _selection.get("selection_digest") != L21_PARENT_LOADING_SELECTION_DIGEST:
+        _problems.append("development loading selection changed")
+    if _selection.get("verdict") != "MULTIMODAL_INSTRUMENT_NO_GO":
+        _problems.append("the parent loading NO_GO was overwritten")
+    if (_parent_dir / "fresh_multimodal_confirmation_report.json").exists():
+        _problems.append("parent unexpectedly contains multimodal causal outcomes")
+    _ranking = list(_selection.get("ranking") or ())
+    if not _ranking:
+        _problems.append("parent loading ranking is empty")
+    if _problems:
+        raise RuntimeError(
+            "prospective multimodal parent verification failed: "
+            + "; ".join(_problems)
+        )
+    _top = dict(_ranking[0])
+    _top_pair = list((_top.get("pair_selection") or {}).get("selected_pair") or ())
+    if _top.get("instrument") != "matched_pooled_r" or _top_pair != ["bird", "giraffe"]:
+        raise RuntimeError(
+            "the pinned outcome-blind top development choice is no longer "
+            "matched_pooled_r with bird->giraffe"
+        )
+    L21_MULTIMODAL_PARENT = {
+        "version": "mmpilot.l21_multimodal_prospective_parent.v1",
+        "run_dir": str(_parent_dir),
+        "fingerprint_digest": L21_TEXT_PARENT_FINGERPRINT,
+        "text_report_checksum": L21_TEXT_PARENT_REPORT_CHECKSUM,
+        "loading_selection_digest": L21_PARENT_LOADING_SELECTION_DIGEST,
+        "population_plan_digest": _parent_plan.get("plan_digest"),
+        "text_report": _text_report,
+        "loading_selection": _selection,
+        "multimodal_causal_outcomes_opened": False,
+    }
+    print("verified prospective parent", _parent_dir)
+    print("text verdict", _text_report["verdict"])
+    print("frozen development choice matched_pooled_r bird->giraffe at L21")
 
 if TEXT_TASK_SET not in (
     "frozen_v1", "expanded_v1", "expanded_v2", "probe_swap_v1",
@@ -788,6 +890,12 @@ SCIENTIFIC_CONFIG = {
     "combined_r_source_provenance": COMBINED_R_SOURCE_PROVENANCE,
     "l21_discovery_source": L21_DISCOVERY,
     "l21_primary_cohort_rule": L21_PRIMARY_COHORT_RULE,
+    "l21_multimodal_prospective_followup": (
+        None if L21_MULTIMODAL_PARENT is None else {
+            key: value for key, value in L21_MULTIMODAL_PARENT.items()
+            if key not in {"text_report", "loading_selection"}
+        }
+    ),
     "l21_text_confirmation_thresholds": {
         "min_eligible_tasks": L21_TEXT_MIN_ELIGIBLE_TASKS,
         "min_exact_successes": L21_TEXT_MIN_EXACT_SUCCESSES,
@@ -1150,6 +1258,8 @@ markdown("## 6. Stage 1 — paper-task text replication and source-loading audit
 code(
     r'''
 TEXT_VERDICT = STORE.load("metric", "text_replication_verdict")
+if RUN_L21_MULTIMODAL_PROSPECTIVE_FOLLOWUP:
+    TEXT_VERDICT = dict(L21_MULTIMODAL_PARENT["text_report"])
 LOADING_FIRST_SELECTION = STORE.load("metric", "loading_first_selection")
 ACTIVE_TEXT_LAYERS = tuple(LAYERS)
 SELECTED_INSTRUMENT = None
@@ -1820,6 +1930,49 @@ PAIR_SELECTION = STORE.load("metric", "loading_pair_selection")
 MULTIMODAL_INSTRUMENT_SELECTION = STORE.load(
     "metric", "multimodal_instrument_selection"
 )
+if RUN_L21_MULTIMODAL_PROSPECTIVE_FOLLOWUP:
+    if (
+        L21_MULTIMODAL_PARENT["text_report"].get("verdict")
+        != "L21_TEXT_CONFIRMATION_GO"
+    ):
+        raise RuntimeError("the pinned parent text confirmation is not GO")
+    _parent_selection = L21_MULTIMODAL_PARENT["loading_selection"]
+    _prospective_choice = dict(_parent_selection["ranking"][0])
+    PAIR_SELECTION = dict(_prospective_choice["pair_selection"])
+    LOCALIZATION = dict(_prospective_choice["localization"])
+    MULTIMODAL_INSTRUMENT_SELECTION = {
+        "version": "mmpilot.l21_multimodal_prospective_selection.v1",
+        "verdict": "MULTIMODAL_PROSPECTIVE_FOLLOWUP_GO",
+        "selected_instrument": _prospective_choice["instrument"],
+        "selected_pair": list(PAIR_SELECTION["selected_pair"]),
+        "selected_band": [21],
+        "original_loading_verdict": _parent_selection["verdict"],
+        "original_localization_verdict": LOCALIZATION["verdict"],
+        "original_selection_digest": _parent_selection["selection_digest"],
+        "selection_rule": (
+            "freeze the top outcome-blind development choice despite the "
+            "loading-sign NO_GO; open only untouched confirmation outcomes"
+        ),
+        "loading_gate_overridden": True,
+        "causal_result_consulted": False,
+        "multimodal_causal_outcomes_opened_when_frozen": False,
+    }
+    MULTIMODAL_INSTRUMENT_SELECTION["selection_digest"] = payload_checksum(
+        MULTIMODAL_INSTRUMENT_SELECTION
+    )
+    if (
+        POPULATION_PLAN["plan_digest"]
+        != L21_MULTIMODAL_PARENT["population_plan_digest"]
+    ):
+        raise RuntimeError("the development population changed")
+    STORE.save("metric", "loading_pair_selection", PAIR_SELECTION)
+    STORE.save("metric", "loading_localization", LOCALIZATION)
+    STORE.save(
+        "metric", "multimodal_instrument_selection",
+        MULTIMODAL_INSTRUMENT_SELECTION,
+    )
+    print("PROSPECTIVE MULTIMODAL FOLLOW-UP")
+    print(json.dumps(MULTIMODAL_INSTRUMENT_SELECTION, indent=2))
 TEXT_CAUSAL_GATE_MET = bool(
     TEXT_VERDICT is not None
     and TEXT_VERDICT.get("verdict") in {
@@ -2009,6 +2162,25 @@ if RUN_STAGE3_FREEZE_DESIGN:
             "prompt_protocol": PROMPT_PROTOCOL,
             "development_population_digest": POPULATION_PLAN["plan_digest"],
         }
+        if RUN_L21_MULTIMODAL_PROSPECTIVE_FOLLOWUP:
+            _design_kwargs["prospective_loading_followup"] = {
+                "version": "mmpilot.l21_multimodal_prospective_followup.v1",
+                "selected_band": [21],
+                "selected_instrument": (
+                    MULTIMODAL_INSTRUMENT_SELECTION["selected_instrument"]
+                ),
+                "selected_pair": list(PAIR_SELECTION["selected_pair"]),
+                "original_loading_verdict": (
+                    MULTIMODAL_INSTRUMENT_SELECTION["original_loading_verdict"]
+                ),
+                "original_localization_verdict": LOCALIZATION["verdict"],
+                "original_selection_digest": (
+                    MULTIMODAL_INSTRUMENT_SELECTION["original_selection_digest"]
+                ),
+                "causal_result_consulted": False,
+                "multimodal_causal_outcomes_opened": False,
+                "previous_loading_no_go_remains_unchanged": True,
+            }
         if (
             TEXT_DIAGNOSTIC_REPORT is not None
             and TEXT_DIAGNOSTIC_REPORT.get("verdict")

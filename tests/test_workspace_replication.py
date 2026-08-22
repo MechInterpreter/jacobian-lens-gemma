@@ -633,6 +633,50 @@ def test_confirmation_design_records_paper_double_strength_primary() -> None:
     assert design["sensitivity_alpha_role"] == "exact_coordinate_exchange_sensitivity"
 
 
+def test_prospective_loading_followup_preserves_no_go_but_freezes_band() -> None:
+    localization = {
+        "verdict": "LOADING_LOCALIZATION_NO_GO",
+        "selected_band": [],
+        "eligible_layers": [],
+        "position_rule": "all_prompt_positions",
+        "position_rule_by_modality": {
+            "text": "all_prompt_positions",
+            "image": "all_prompt_positions",
+            "spoken_audio": "all_prompt_positions",
+        },
+    }
+    followup = {
+        "selected_band": [21],
+        "causal_result_consulted": False,
+        "multimodal_causal_outcomes_opened": False,
+        "previous_loading_no_go_remains_unchanged": True,
+    }
+    design = freeze_confirmation_design(
+        text_verdict={"verdict": "L21_TEXT_CONFIRMATION_GO"},
+        localization=localization,
+        pair=("bird", "giraffe"),
+        prompt_protocol="implicit_animal_property.v1",
+        development_population_digest="sha256:dev",
+        prospective_loading_followup=followup,
+    )
+    assert design["layer_band"] == [21]
+    assert design["loading_gate_overridden"] is True
+    assert design["prospective_loading_followup"][
+        "previous_loading_no_go_remains_unchanged"
+    ] is True
+
+    followup["multimodal_causal_outcomes_opened"] = True
+    with pytest.raises(WorkspaceReplicationRefused, match="outcomes were opened"):
+        freeze_confirmation_design(
+            text_verdict={"verdict": "L21_TEXT_CONFIRMATION_GO"},
+            localization=localization,
+            pair=("bird", "giraffe"),
+            prompt_protocol="implicit_animal_property.v1",
+            development_population_digest="sha256:dev",
+            prospective_loading_followup=followup,
+        )
+
+
 def test_confirmation_uses_the_audited_text_band_and_multimodal_loading() -> None:
     diagnostic = {
         "version": "diagnostic.v2",

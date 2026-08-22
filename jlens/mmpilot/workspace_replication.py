@@ -2045,6 +2045,7 @@ def freeze_confirmation_design(
     sensitivity_alpha: float | None = 0.75,
     prompt_protocol: str,
     development_population_digest: str,
+    prospective_loading_followup: Mapping | None = None,
 ) -> dict:
     """Freeze the confirmatory design before any fresh media are opened."""
 
@@ -2077,16 +2078,42 @@ def freeze_confirmation_design(
                 "confirmation is blocked"
             )
         text_band = tuple(map(int, localization.get("selected_band") or ()))
+        if prospective_loading_followup is not None:
+            text_band = tuple(
+                map(
+                    int,
+                    prospective_loading_followup.get("selected_band") or (),
+                )
+            )
+            if not text_band:
+                raise WorkspaceReplicationRefused(
+                    "the prospective loading follow-up names no layer band"
+                )
         text_evidence = {
             "version": text_verdict.get("version"),
             "verdict": text_verdict.get("verdict"),
             "report_checksum": text_verdict.get("report_checksum"),
             "selected_band": list(text_band),
         }
-    if localization.get("verdict") != "LOADING_LOCALIZATION_GO":
-        raise WorkspaceReplicationRefused(
-            "clean source loading did not license a layer band"
-        )
+    if prospective_loading_followup is None:
+        if localization.get("verdict") != "LOADING_LOCALIZATION_GO":
+            raise WorkspaceReplicationRefused(
+                "clean source loading did not license a layer band"
+            )
+    else:
+        if localization.get("verdict") != "LOADING_LOCALIZATION_NO_GO":
+            raise WorkspaceReplicationRefused(
+                "the prospective follow-up must preserve the completed "
+                "loading-localization NO_GO"
+            )
+        if prospective_loading_followup.get("causal_result_consulted") is not False:
+            raise WorkspaceReplicationRefused(
+                "the prospective follow-up was not frozen outcome-blind"
+            )
+        if prospective_loading_followup.get("multimodal_causal_outcomes_opened") is not False:
+            raise WorkspaceReplicationRefused(
+                "multimodal outcomes were opened before the follow-up froze"
+            )
     eligible_layers = set(
         map(
             int,
@@ -2095,7 +2122,10 @@ def freeze_confirmation_design(
             or (),
         )
     )
-    if not set(text_band).issubset(eligible_layers):
+    if (
+        prospective_loading_followup is None
+        and not set(text_band).issubset(eligible_layers)
+    ):
         raise WorkspaceReplicationRefused(
             "the text-selected band is not cleanly source-loaded in every "
             f"required modality: band={list(text_band)}, eligible="
@@ -2134,6 +2164,12 @@ def freeze_confirmation_design(
             localization.get("position_rule_by_modality")
             or {"text": str(localization["position_rule"])}
         ),
+        "prospective_loading_followup": (
+            None
+            if prospective_loading_followup is None
+            else dict(prospective_loading_followup)
+        ),
+        "loading_gate_overridden": prospective_loading_followup is not None,
         "prompt_protocol": str(prompt_protocol),
         "development_population_digest": str(development_population_digest),
         "fresh_population_required": True,

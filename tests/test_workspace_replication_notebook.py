@@ -113,6 +113,10 @@ def test_notebook_enforces_the_paper_first_order() -> None:
     assert '"positive_loading_secondary_task_ids"' in source
     assert '"superseded_loading_screen_result": {' in source
     assert '"cannot_be_overwritten_by_this_followup": True' in source
+    assert "RUN_L21_MULTIMODAL_PROSPECTIVE_FOLLOWUP" in source
+    assert "frozen-r-l21-multimodal-prospective-followup.v3" in source
+    assert '"previous_loading_no_go_remains_unchanged": True' in source
+    assert '"multimodal_causal_outcomes_opened": False' in source
 
 
 def test_all_result_switches_default_false() -> None:
