@@ -137,3 +137,115 @@ def test_mock_notebook_executes_end_to_end(tmp_path: Path, monkeypatch) -> None:
         "spoken_audio",
         "pooled",
     }
+
+
+def test_notebook_contains_the_followup_stage_contract() -> None:
+    source = _source()
+    for required in (
+        "RUN_STAGE5A_BAND_LOCALIZATION",
+        "RUN_STAGE5B0_PROPERTY_AUDIT",
+        "RUN_STAGE5B1_NEW_PROPERTY_DEVELOPMENT",
+        "RUN_STAGE5B2_FREEZE_NEW_PROPERTY_DESIGN",
+        "RUN_STAGE5B3_NEW_PROPERTY_CONFIRMATION",
+        "RUN_STAGE5C_ASYMMETRY_REPLICATION",
+        "RUN_ARTIFACT_EXCLUSION_AUDIT",
+        "load_spent_confirmation_population",
+        "sha256:2bb6dcc1346229573566125bc8d91c782247d55af5091f4215d98bb621472ff7",
+        "FRESH_CONFIRMATION_CANDIDATES_OPENED = 64",
+        "FRESH_CONFIRMATION_IMAGES_RECRUITED = 16",
+        "localization_grid",
+        "summarize_localization",
+        "assert_lens_reused_not_refitted",
+        "assert_property_pair_changes_answer",
+        "audit_property_family",
+        "freeze_new_property_design",
+        "assert_design_frozen",
+        "confirmation_verdict",
+        "asymmetry_replication_design",
+        "asymmetry_replication_verdict",
+        "artifact_exclusion_audit",
+        "generation_trial_row",
+        "unrestricted_greedy_swap_trial",
+        "NEW_PROPERTY_FAMILY = \"body_covering\"",
+        "NEW_PROPERTY_FALLBACK_FAMILY = \"animal_sound\"",
+        "NEW_PROPERTY_DIRECTION_PRIORITY",
+        "stage_map",
+        "followup_budget",
+        "localization_budget",
+    ):
+        assert required in source, required
+
+
+def test_notebook_never_refits_or_restricts_in_a_followup_stage() -> None:
+    source = _source()
+    # every follow-up stage pins the completed pooled lens and loads it
+    assert source.count("assert_lens_reused_not_refitted") >= 3
+    assert "fit_arm" not in source.split("## 12. Read-only artifact")[1]
+    followups = source.split("## 12. Read-only artifact")[1]
+    assert "teacher_forcing" not in followups.replace('"teacher_forcing_used": False', "")
+    assert "candidate list" not in followups.lower().replace(
+        "no candidate list", ""
+    ).replace("candidate list or teacher forcing", "")
+
+
+def test_notebook_labels_localization_exploratory_and_claims_no_onset() -> None:
+    source = _source()
+    assert "**Exploratory and descriptive. Not confirmation, and not promotable.**" in source
+    assert "cannot be read as an onset" in source
+    assert '"label": "exploratory"' in source or '"exploratory"' in source
+    assert "onset_layer_claimed" in source
+    assert "already spent" in source
+
+
+def test_notebook_states_the_corrected_cat_to_bird_record() -> None:
+    source = _source()
+    assert "Cat to bird **was** tested in development" in source
+    assert "0 successes in 24 trials" in source
+    assert "development_direction_record" in source
+    assert "cat->bird was untested" not in source
+
+
+def test_notebook_excludes_all_sixty_four_confirmation_candidates() -> None:
+    source = _source()
+    assert "all 64" in source
+    assert "not just" in source or "not only" in source
+    assert "confirmation_candidate_image_ids=SPENT_CONFIRMATION[\"candidate_image_ids\"]" in source
+
+
+def test_notebook_only_claims_the_pooled_lens_spans_the_band() -> None:
+    source = _source()
+    assert "the text-only, image-only" in source
+    assert "cover L33-L40" in source
+
+
+def test_mock_notebook_exercises_every_followup_outcome(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("TMP", str(tmp_path))
+    monkeypatch.setenv("TEMP", str(tmp_path))
+    namespace: dict = {"__name__": "__main__"}
+    for index, cell in enumerate(_notebook()["cells"]):
+        if cell["cell_type"] == "code":
+            exec(
+                compile("".join(cell["source"]), f"cell-{index}", "exec"),
+                namespace,
+            )
+    followup = namespace["MOCK_FOLLOWUP"]
+    assert followup["favorable"]["development"] == "NEW_PROPERTY_DEVELOPMENT_GO"
+    assert followup["favorable"]["confirmation"] == "NEW_PROPERTY_CONFIRMATION_GO"
+    assert followup["null"]["development"] == "NEW_PROPERTY_DEVELOPMENT_NO_GO"
+    assert (
+        followup["control_failure"]["development"]
+        == "NEW_PROPERTY_DEVELOPMENT_CONTROL_FAILURE"
+    )
+    assert (
+        followup["capability_no_go"]["development"]
+        == "NEW_PROPERTY_DEVELOPMENT_CAPABILITY_NO_GO"
+    )
+    assert len({row["development"] for row in followup.values()}) == 4
+    for scenario in ("null", "control_failure", "capability_no_go"):
+        assert followup[scenario]["confirmation"] is None
+    assert namespace["MOCK_LOCALIZATION"]["label"] == "exploratory"
+    assert namespace["MOCK_LOCALIZATION"]["is_confirmation"] is False
+    assert (
+        namespace["MOCK_LOCALIZATION"]["claim_boundary"]["onset_layer_claimed"] is False
+    )
+    assert namespace["MOCK_ASYMMETRY"]["cause_of_asymmetry_identified"] is False

@@ -207,6 +207,95 @@ CONFIRMATION_MIN_SUCCESS_RATE = 0.75
 CONFIRMATION_MIN_CONTROL_MARGIN = 0.25
 CONFIRMATION_FAMILYWISE_ALPHA = 0.05
 CONFIRMATION_SEED = "broad-pooled-j-fresh-confirmation-20260822-v1"
+
+# ---------------------------------------------------------------------------
+# Follow-up studies. Experiment A localizes inside the validated band on the
+# already spent development population (exploratory only). Experiment B tests a
+# non-leg-count property on genuinely fresh media. Experiment C is a
+# prospective replication test of the cat->bird development failure.
+#
+# None of these fits or refits anything. Each reuses the checksum-pinned pooled
+# L16-L40 lens. Only the pooled arm spans that band: the text-only, image-only
+# and spoken-audio-only lenses cover L33-L40, so no four-arm L16-L40 comparison
+# exists here and none is claimed.
+RUN_STAGE5A_BAND_LOCALIZATION = False
+RUN_STAGE5B0_PROPERTY_AUDIT = False
+RUN_STAGE5B1_NEW_PROPERTY_DEVELOPMENT = False
+RUN_STAGE5B2_FREEZE_NEW_PROPERTY_DESIGN = False
+RUN_STAGE5B3_NEW_PROPERTY_CONFIRMATION = False
+RUN_STAGE5C_ASYMMETRY_REPLICATION = False
+RUN_ARTIFACT_EXCLUSION_AUDIT = False
+
+CONFIRM_LOCALIZATION_BUDGET = False
+CONFIRM_NEW_PROPERTY_DEVELOPMENT_BUDGET = False
+CONFIRM_NEW_PROPERTY_CONFIRMATION_BUDGET = False
+CONFIRM_ASYMMETRY_BUDGET = False
+
+# The completed Stage 3D confirmation, read only to spend its media. All 64
+# candidate photographs were opened during capability screening, so all 64 are
+# excluded from every later population — not only the 16 that were recruited.
+FRESH_CONFIRMATION_RUN_DIR = None
+EXPECTED_FRESH_CONFIRMATION_REPORT_CHECKSUM = (
+    "sha256:2bb6dcc1346229573566125bc8d91c782247d55af5091f4215d98bb621472ff7"
+)
+FRESH_CONFIRMATION_CANDIDATES_OPENED = 64
+FRESH_CONFIRMATION_IMAGES_RECRUITED = 16
+
+# Experiment A. The band grid and its analysis rule live in
+# jlens.mmpilot.multimodal_followup.localization_grid() and are frozen there
+# before any sub-band outcome exists. The population is the spent broad
+# development one, so every output of this stage is exploratory.
+LOCALIZATION_DIRECTION = ("bird", "cat")
+LOCALIZATION_ALPHA = 1.0
+
+# Experiment B. 'body_covering' is the audited first choice: it is not
+# derivable from leg count, it keeps 'bird' available, and its answers are
+# ordinary one-word nouns. 'animal_sound' is the declared fallback; it refuses
+# 'bird' outright because COCO birds have no single conventional sound.
+# Concepts whose covering is contested (horse, cow, zebra, giraffe, elephant)
+# are refused by the audit and cannot be selected here.
+NEW_PROPERTY_FAMILY = "body_covering"
+NEW_PROPERTY_FALLBACK_FAMILY = "animal_sound"
+NEW_PROPERTY_CONCEPTS = ("bird", "cat", "sheep")
+NEW_PROPERTY_DEV_DIRECTIONS = (
+    ("bird", "cat"), ("cat", "bird"),
+    ("bird", "sheep"), ("sheep", "bird"),
+    ("cat", "sheep"), ("sheep", "cat"),
+)
+# Predeclared tie-break, fixed before any outcome: if development licenses
+# several directions, confirmation takes the first of these that passed.
+NEW_PROPERTY_DIRECTION_PRIORITY = (
+    "bird->cat", "bird->sheep", "cat->sheep",
+    "sheep->cat", "sheep->bird", "cat->bird",
+)
+NEW_PROPERTY_MAX_NEW_TOKENS = 6
+NEW_PROPERTY_DEV_CANDIDATES_PER_CONCEPT = 48
+NEW_PROPERTY_DEV_IMAGES_PER_DIRECTION = 8
+NEW_PROPERTY_DEV_MIN_SUCCESS_RATE = 0.50
+NEW_PROPERTY_DEV_MIN_CONTROL_MARGIN = 0.25
+NEW_PROPERTY_MIN_CLEAN_CAPABILITY_RATE = 0.75
+NEW_PROPERTY_DEV_SEED = "multimodal-new-property-development-20260823-v1"
+NEW_PROPERTY_CONFIRM_CANDIDATES = 64
+NEW_PROPERTY_CONFIRM_IMAGES = 16
+NEW_PROPERTY_CONFIRM_MIN_SUCCESS_RATE = 0.75
+NEW_PROPERTY_CONFIRM_MIN_CONTROL_MARGIN = 0.25
+NEW_PROPERTY_CONFIRM_FAMILYWISE_ALPHA = 0.05
+NEW_PROPERTY_CONFIRM_SEED = "multimodal-new-property-confirmation-20260823-v1"
+# Written by Stage 5B2 and read by Stage 5B3. Stage 5B3 refuses to open a
+# fresh photograph until this file exists and verifies.
+NEW_PROPERTY_FROZEN_DESIGN_PATH = None
+NEW_PROPERTY_DEVELOPMENT_RUN_DIR = None
+EXPECTED_NEW_PROPERTY_DEVELOPMENT_CHECKSUM = None
+
+# Experiment C. Same leg-count protocol and endpoint as the confirmed
+# bird->cat study, run backwards on fresh cat media.
+ASYMMETRY_DIRECTION = ("cat", "bird")
+ASYMMETRY_CANDIDATES = 64
+ASYMMETRY_IMAGES = 16
+ASYMMETRY_MIN_SUCCESS_RATE = 0.75
+ASYMMETRY_MIN_CONTROL_MARGIN = 0.25
+ASYMMETRY_FAMILYWISE_ALPHA = 0.05
+ASYMMETRY_SEED = "multimodal-asymmetry-replication-20260823-v1"
 # Alpha=1 is the exact exchange. The refinement grid brackets the strongest
 # stable signal in the coarse 0.5/1/2/4 sweep and never enters the alpha>=2
 # regime that already produced large activation-norm inflation. The grid was
@@ -262,11 +351,38 @@ if RUN_STAGE3_CAUSAL_COMPARE and RUN_STAGE3B_ALPHA_SWEEP:
     raise RuntimeError("Run Stage 3 or Stage 3B, never both in one session")
 if RUN_STAGE3C_BROAD_POOLED_WORKSPACE and RUN_STAGE3D_FRESH_MULTIMODAL_CONFIRMATION:
     raise RuntimeError("Run Stage 3C development or Stage 3D confirmation, never both")
+FOLLOWUP_STAGES = {
+    "5A_band_localization": RUN_STAGE5A_BAND_LOCALIZATION,
+    "5B0_property_audit": RUN_STAGE5B0_PROPERTY_AUDIT,
+    "5B1_new_property_development": RUN_STAGE5B1_NEW_PROPERTY_DEVELOPMENT,
+    "5B2_freeze": RUN_STAGE5B2_FREEZE_NEW_PROPERTY_DESIGN,
+    "5B3_new_property_confirmation": RUN_STAGE5B3_NEW_PROPERTY_CONFIRMATION,
+    "5C_asymmetry_replication": RUN_STAGE5C_ASYMMETRY_REPLICATION,
+}
+if sum(1 for value in FOLLOWUP_STAGES.values() if value) > 1:
+    raise RuntimeError(
+        "run exactly one follow-up stage per session; artifacts of different "
+        f"stages are never mixed (requested {[k for k, v in FOLLOWUP_STAGES.items() if v]})"
+    )
+if any(FOLLOWUP_STAGES.values()) and any((
+    RUN_STAGE1_FIT_LENSES, RUN_STAGE2_CROSS_EVALUATE, RUN_STAGE3_CAUSAL_COMPARE,
+    RUN_STAGE3B_ALPHA_SWEEP, RUN_STAGE3C_BROAD_POOLED_WORKSPACE,
+    RUN_STAGE3D_FRESH_MULTIMODAL_CONFIRMATION,
+)):
+    raise RuntimeError(
+        "a follow-up stage never shares a session with the completed study "
+        "stages; their reports are immutable evidence"
+    )
 MODEL_STAGE = any((
     RUN_STAGE1_FIT_LENSES, RUN_STAGE2_CROSS_EVALUATE,
     RUN_STAGE3_CAUSAL_COMPARE, RUN_STAGE3B_ALPHA_SWEEP,
     RUN_STAGE3C_BROAD_POOLED_WORKSPACE,
     RUN_STAGE3D_FRESH_MULTIMODAL_CONFIRMATION,
+    RUN_STAGE5A_BAND_LOCALIZATION,
+    RUN_STAGE5B0_PROPERTY_AUDIT,
+    RUN_STAGE5B1_NEW_PROPERTY_DEVELOPMENT,
+    RUN_STAGE5B3_NEW_PROPERTY_CONFIRMATION,
+    RUN_STAGE5C_ASYMMETRY_REPLICATION,
 ))
 MODEL_ENABLED = bool(MODEL_STAGE and CONFIRM_MODEL_LOAD)
 FIT_ENABLED = bool(RUN_STAGE1_FIT_LENSES and MODEL_ENABLED and CONFIRM_FIT_BUDGET)
@@ -298,6 +414,31 @@ if REAL_MODE and RUN_STAGE3C_BROAD_POOLED_WORKSPACE and not BROAD_POOLED_ENABLED
     )
 if REAL_MODE and RUN_STAGE3D_FRESH_MULTIMODAL_CONFIRMATION and not FRESH_CONFIRMATION_ENABLED:
     print("FRESH CONFIRMATION BLOCKED: confirm its printed budget")
+
+LOCALIZATION_ENABLED = bool(
+    RUN_STAGE5A_BAND_LOCALIZATION and MODEL_ENABLED and CONFIRM_LOCALIZATION_BUDGET
+)
+PROPERTY_AUDIT_ENABLED = bool(RUN_STAGE5B0_PROPERTY_AUDIT and MODEL_ENABLED)
+NEW_PROPERTY_DEV_ENABLED = bool(
+    RUN_STAGE5B1_NEW_PROPERTY_DEVELOPMENT and MODEL_ENABLED
+    and CONFIRM_NEW_PROPERTY_DEVELOPMENT_BUDGET
+)
+NEW_PROPERTY_FREEZE_ENABLED = bool(RUN_STAGE5B2_FREEZE_NEW_PROPERTY_DESIGN)
+NEW_PROPERTY_CONFIRM_ENABLED = bool(
+    RUN_STAGE5B3_NEW_PROPERTY_CONFIRMATION and MODEL_ENABLED
+    and CONFIRM_NEW_PROPERTY_CONFIRMATION_BUDGET
+)
+ASYMMETRY_ENABLED = bool(
+    RUN_STAGE5C_ASYMMETRY_REPLICATION and MODEL_ENABLED and CONFIRM_ASYMMETRY_BUDGET
+)
+for _name, _requested, _enabled in (
+    ("STAGE 5A LOCALIZATION", RUN_STAGE5A_BAND_LOCALIZATION, LOCALIZATION_ENABLED),
+    ("STAGE 5B1 NEW-PROPERTY DEVELOPMENT", RUN_STAGE5B1_NEW_PROPERTY_DEVELOPMENT, NEW_PROPERTY_DEV_ENABLED),
+    ("STAGE 5B3 NEW-PROPERTY CONFIRMATION", RUN_STAGE5B3_NEW_PROPERTY_CONFIRMATION, NEW_PROPERTY_CONFIRM_ENABLED),
+    ("STAGE 5C ASYMMETRY REPLICATION", RUN_STAGE5C_ASYMMETRY_REPLICATION, ASYMMETRY_ENABLED),
+):
+    if REAL_MODE and _requested and not _enabled:
+        print(f"{_name} BLOCKED: confirm its printed budget above")
 '''
 )
 
@@ -387,6 +528,89 @@ print("  conditions                exact, zero, random, unrelated")
 print("  primary endpoint          unrestricted next-token top1 = 4")
 print("  inference                 paired exact sign tests; Holm FWER", CONFIRMATION_FAMILYWISE_ALPHA)
 print("  resume                    one checksum-valid JSON per completed forward")
+print()
+
+from jlens.mmpilot.multimodal_followup import (
+    followup_budget, localization_budget, localization_grid, stage_map,
+)
+
+LOCALIZATION_GRID = localization_grid()
+STAGE_MAP = stage_map()
+print("=" * 78)
+print("FOLLOW-UP STAGE MAP — nothing below fits or refits a lens")
+print("=" * 78)
+for _row in STAGE_MAP["stages"]:
+    print(
+        f"  {_row['stage']:<3} {_row['name']:<38} {_row['label']:<24}"
+        f" confirms={_row['confirms']}"
+    )
+for _rule in STAGE_MAP["never"]:
+    print("  never:", _rule)
+print()
+LOCALIZATION_BUDGET = localization_budget(
+    grid=LOCALIZATION_GRID,
+    n_photographs=BROAD_POOLED_IMAGES_PER_DIRECTION if REAL_MODE else 2,
+)
+print("STAGE 5A EXPLORATORY LOCALIZATION BUDGET")
+print("  population                spent broad development photographs")
+print("  new media opened          ", LOCALIZATION_BUDGET["new_media_opened"])
+print("  lens fits / backward      ", LOCALIZATION_BUDGET["lens_fits"], "/",
+      LOCALIZATION_BUDGET["backward_passes"])
+print("  bands in the frozen grid  ", LOCALIZATION_BUDGET["n_bands"])
+print("  band families             ", {k: len(v) for k, v in LOCALIZATION_GRID["families"].items()})
+print("  clean forwards            ", LOCALIZATION_BUDGET["clean_forwards"])
+print("  patched forwards          ", LOCALIZATION_BUDGET["patched_forwards"])
+print("  TOTAL NEW MODEL FORWARDS  ", LOCALIZATION_BUDGET["total_forwards"])
+print("  label                     exploratory/descriptive, never confirmation")
+print()
+NEW_PROPERTY_DEV_BUDGET = followup_budget(
+    stage="5B0+5B1",
+    n_candidates=(
+        NEW_PROPERTY_DEV_CANDIDATES_PER_CONCEPT * len(NEW_PROPERTY_CONCEPTS)
+        if REAL_MODE else 4
+    ),
+    n_recruited=NEW_PROPERTY_DEV_IMAGES_PER_DIRECTION if REAL_MODE else 2,
+    max_new_tokens=NEW_PROPERTY_MAX_NEW_TOKENS,
+    n_directions=len(NEW_PROPERTY_DEV_DIRECTIONS),
+)
+print("STAGE 5B0/5B1 NEW-PROPERTY AUDIT + DEVELOPMENT BUDGET")
+print("  property family           ", NEW_PROPERTY_FAMILY, "(fallback",
+      NEW_PROPERTY_FALLBACK_FAMILY + ")")
+print("  endpoint                  unrestricted complete generation,",
+      NEW_PROPERTY_MAX_NEW_TOKENS, "tokens")
+print("  directions                ", [f"{a}->{b}" for a, b in NEW_PROPERTY_DEV_DIRECTIONS])
+print("  capability forwards       ", NEW_PROPERTY_DEV_BUDGET["capability_forwards"])
+print("  clean forwards            ", NEW_PROPERTY_DEV_BUDGET["clean_forwards"])
+print("  patched forwards          ", NEW_PROPERTY_DEV_BUDGET["patched_forwards"])
+print("  TOTAL NEW MODEL FORWARDS  ", NEW_PROPERTY_DEV_BUDGET["total_forwards"])
+print("  lens fits / backward      ", NEW_PROPERTY_DEV_BUDGET["lens_fits"], "/",
+      NEW_PROPERTY_DEV_BUDGET["backward_passes"])
+print()
+NEW_PROPERTY_CONFIRM_BUDGET = followup_budget(
+    stage="5B3",
+    n_candidates=NEW_PROPERTY_CONFIRM_CANDIDATES if REAL_MODE else 4,
+    n_recruited=NEW_PROPERTY_CONFIRM_IMAGES if REAL_MODE else 2,
+    max_new_tokens=NEW_PROPERTY_MAX_NEW_TOKENS,
+)
+ASYMMETRY_BUDGET = followup_budget(
+    stage="5C",
+    n_candidates=ASYMMETRY_CANDIDATES if REAL_MODE else 4,
+    n_recruited=ASYMMETRY_IMAGES if REAL_MODE else 2,
+    max_new_tokens=1,
+)
+for _label, _budget in (
+    ("STAGE 5B3 NEW-PROPERTY FRESH CONFIRMATION BUDGET", NEW_PROPERTY_CONFIRM_BUDGET),
+    ("STAGE 5C ASYMMETRY REPLICATION BUDGET", ASYMMETRY_BUDGET),
+):
+    print(_label)
+    print("  capability forwards       ", _budget["capability_forwards"])
+    print("  clean forwards            ", _budget["clean_forwards"])
+    print("  patched forwards          ", _budget["patched_forwards"])
+    print("  TOTAL NEW MODEL FORWARDS  ", _budget["total_forwards"])
+    print("  lens fits / backward      ", _budget["lens_fits"], "/",
+          _budget["backward_passes"])
+    print("  resume                    ", _budget["resume_unit"])
+    print()
 '''
 )
 
@@ -2466,6 +2690,1403 @@ if RUN_STAGE4_WRITE_REPORT or not REAL_MODE:
     print("No verdict is promoted beyond the endpoint actually measured.")
 else:
     print("Stage 4 not requested. Completed units remain resumable.")
+'''
+)
+
+markdown(
+    r"""
+## 12. Read-only artifact and exclusion audit
+
+Which photograph identities are already spent, and where that is recorded.
+
+A photograph is spent the moment the model was run on it in **any** stage,
+capability screening included: its clean answer has been seen, and reusing it
+would let a known answer leak into a later recruitment. That is why all 64
+candidates opened by the completed confirmation are excluded here and not just
+the 16 that were recruited from them.
+
+This cell loads nothing but JSON and never touches the model.
+"""
+)
+code(
+    r'''
+EXCLUSION_UNIVERSE = None
+SPENT_CONFIRMATION = None
+if REAL_MODE and (RUN_ARTIFACT_EXCLUSION_AUDIT or any(FOLLOWUP_STAGES.values())):
+    from jlens.mmpilot.multimodal_followup import (
+        exclusion_universe, load_spent_confirmation_population,
+    )
+    from jlens.mmpilot.multimodal_lens import (
+        load_broad_pooled_development_source, load_completed_causal_source,
+    )
+
+    if FRESH_CONFIRMATION_RUN_DIR is None:
+        raise RuntimeError(
+            "set FRESH_CONFIRMATION_RUN_DIR to the Drive folder holding "
+            "fresh_multimodal_confirmation_report.json; every follow-up "
+            "population must exclude all 64 photographs it opened"
+        )
+    SPENT_CONFIRMATION = load_spent_confirmation_population(
+        FRESH_CONFIRMATION_RUN_DIR,
+        expected_report_checksum=EXPECTED_FRESH_CONFIRMATION_REPORT_CHECKSUM,
+        expected_candidates=FRESH_CONFIRMATION_CANDIDATES_OPENED,
+        expected_recruited=FRESH_CONFIRMATION_IMAGES_RECRUITED,
+    )
+    _development_source = load_broad_pooled_development_source(
+        BROAD_DEVELOPMENT_RUN_DIR,
+        expected_report_checksum=EXPECTED_BROAD_DEVELOPMENT_REPORT_CHECKSUM,
+        expected_population_digest=EXPECTED_BROAD_DEVELOPMENT_POPULATION_DIGEST,
+        expected_lens_checksum=EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+        expected_direction=CONFIRMATION_DIRECTION,
+    )
+    _prior_causal = load_completed_causal_source(
+        CAUSAL_LENS_SOURCE_RUN_DIR,
+        expected_final_report_checksum=EXPECTED_SOURCE_FINAL_REPORT_CHECKSUM,
+        expected_cross_report_checksum=EXPECTED_SOURCE_CROSS_REPORT_CHECKSUM,
+        expected_causal_report_checksum=EXPECTED_SOURCE_CAUSAL_REPORT_CHECKSUM,
+        expected_lens_checksums=EXPECTED_SOURCE_LENS_CHECKSUMS,
+    )
+    EXCLUSION_UNIVERSE = exclusion_universe(
+        fit_image_ids=[str(value) for value in PLAN["fit_image_ids"]],
+        eval_image_ids=[str(value) for value in PLAN["eval_image_ids"]],
+        prior_causal_image_ids=_prior_causal["excluded_image_ids"],
+        broad_development_image_ids=_development_source["excluded_image_ids"],
+        confirmation_candidate_image_ids=SPENT_CONFIRMATION["candidate_image_ids"],
+    )
+    print("=" * 78)
+    print("ARTIFACT AND EXCLUSION AUDIT (read-only)")
+    print("=" * 78)
+    print("completed confirmation verdict ", SPENT_CONFIRMATION["verdict"])
+    print("  candidates opened            ", SPENT_CONFIRMATION["n_candidates"])
+    print("  capability rows              ", SPENT_CONFIRMATION["n_capability_rows"])
+    print("  recruited photographs        ", SPENT_CONFIRMATION["n_recruited"])
+    print("  all candidates treated spent ", SPENT_CONFIRMATION["all_candidates_spent"])
+    for _source, _count in EXCLUSION_UNIVERSE["counts_by_source"].items():
+        print(f"  excluded from {_source:<34} {_count}")
+    print("TOTAL EXCLUDED IDENTITIES      ", EXCLUSION_UNIVERSE["n_excluded"])
+    print("exclusion digest               ", EXCLUSION_UNIVERSE["exclusion_digest"])
+    print("existing reports are immutable evidence and are never rewritten here")
+elif RUN_ARTIFACT_EXCLUSION_AUDIT:
+    print("Artifact audit runs in REAL_MODE against the Drive artifacts.")
+'''
+)
+
+markdown(
+    r"""
+## 13. Stage 5A — exploratory band localization
+
+**Exploratory and descriptive. Not confirmation, and not promotable.**
+
+The confirmed study patched the whole validated band, so nothing in it says
+where inside L16-L40 the effect lives. This stage varies the band and nothing
+else: same pooled lens, same bird->cat direction, same alpha=1 exact exchange,
+same prompt, same unrestricted next-token endpoint, same zero/random/unrelated
+controls, same every-original-prompt-position rule.
+
+Its population is the broad development population, which is already spent.
+That is why the whole analysis is labelled exploratory and why no verdict from
+it may be reported as evidence for a localization claim.
+
+The grid has three families. The suffix and prefix families are nested chains,
+in which start layer and band length move together — a boundary in either
+family cannot be read as an onset, and the report says so in its own claim
+boundary. The five-way partition is the only family whose members do not
+contain one another; a passing window there is individually sufficient on this
+population, and a failing window is not evidence of non-involvement.
+"""
+)
+code(
+    r'''
+LOCALIZATION_REPORT = None
+if REAL_MODE and LOCALIZATION_ENABLED:
+    from jlens.lens import JacobianLens
+    from jlens.mmpilot.coordinate_swap import (
+        random_two_direction_basis, resolve_concept_token,
+    )
+    from jlens.mmpilot.digit_reasoning_confirmation import resolve_digit_endpoints
+    from jlens.mmpilot.multimodal_followup import (
+        assert_lens_reused_not_refitted, load_localization_population,
+        summarize_localization,
+    )
+    from jlens.mmpilot.multimodal_lens import (
+        build_swap_bases_for_lens, load_broad_pooled_development_source,
+        open_answer_matches, unrestricted_swap_trial,
+    )
+    from jlens.mmpilot.store import RunFingerprint, UnitStore, safe_key
+
+    _source_pin = load_broad_pooled_development_source(
+        BROAD_DEVELOPMENT_RUN_DIR,
+        expected_report_checksum=EXPECTED_BROAD_DEVELOPMENT_REPORT_CHECKSUM,
+        expected_population_digest=EXPECTED_BROAD_DEVELOPMENT_POPULATION_DIGEST,
+        expected_lens_checksum=EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+        expected_direction=LOCALIZATION_DIRECTION,
+    )
+    LOCALIZATION_POPULATION = load_localization_population(
+        BROAD_DEVELOPMENT_RUN_DIR,
+        expected_report_checksum=EXPECTED_BROAD_DEVELOPMENT_REPORT_CHECKSUM,
+        direction=LOCALIZATION_DIRECTION,
+    )
+    print("localization population is", LOCALIZATION_POPULATION["population_status"])
+    print("  licence:", LOCALIZATION_POPULATION["reuse_licence"])
+    print("  groups :", LOCALIZATION_POPULATION["n_groups"])
+
+    _localization_config = {
+        "study": "exploratory_multimodal_band_localization.v1",
+        "label": "exploratory",
+        "is_confirmation": False,
+        "model_repo_id": MODEL_REPO_ID,
+        "model_revision": MODEL_REVISION,
+        "audio_protocol_fingerprint": AUDIO_PROTOCOL_FINGERPRINT,
+        "manifest_checksum": MANIFEST_CHECKSUM,
+        "lens_checksum": EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+        "lens_refitted": False,
+        "backward_passes": 0,
+        "direction": list(LOCALIZATION_DIRECTION),
+        "alpha": LOCALIZATION_ALPHA,
+        "grid_digest": LOCALIZATION_GRID["grid_digest"],
+        "population_digest": LOCALIZATION_POPULATION["population_digest"],
+        "development_report_checksum": EXPECTED_BROAD_DEVELOPMENT_REPORT_CHECKSUM,
+        "teacher_forcing_used": False,
+        "candidate_list_supplied": False,
+        "commit": COMMIT,
+    }
+    assert_lens_reused_not_refitted(_localization_config)
+    _localization_digest = payload_checksum(_localization_config)
+    LOCALIZATION_RUN_DIR = (
+        RUNS_ROOT / "mmlocalizeband" /
+        f"mmlocalizeband_real_{_localization_digest.split(':')[1][:12]}"
+    )
+    LOCALIZATION_RUN_DIR.mkdir(parents=True, exist_ok=True)
+    (LOCALIZATION_RUN_DIR / "scientific_config.json").write_text(
+        json.dumps(_localization_config, indent=2)
+    )
+    (LOCALIZATION_RUN_DIR / "frozen_localization_grid.json").write_text(
+        json.dumps(LOCALIZATION_GRID, indent=2)
+    )
+
+    _lens = JacobianLens.load(_source_pin["lens_path"])
+    if _lens.source_layers != list(BROAD_POOLED_BAND):
+        raise RuntimeError("the pinned pooled lens no longer covers L16-L40")
+
+    _by_group = {str(row["group_id"]): row for row in GROUPS}
+    _localization_groups = []
+    for _row in LOCALIZATION_POPULATION["groups"]:
+        _group = _by_group.get(str(_row["group_id"]))
+        if _group is None:
+            raise RuntimeError(
+                f"development group {_row['group_id']} is missing from the "
+                "synchronization cache; the population cannot be reproduced"
+            )
+        _localization_groups.append(_group)
+
+    _tokens = {
+        name: resolve_concept_token(BACKEND.encode_candidate, name)
+        for name in (*LOCALIZATION_DIRECTION, *BROAD_POOLED_CONTROLS)
+    }
+    _digits = resolve_digit_endpoints(BACKEND)
+    _legs = {"bird": "2", "cat": "4", "zebra": "4", "giraffe": "4"}
+    _source_name, _target_name = LOCALIZATION_DIRECTION
+    _source_answer_id = int(_digits["token_ids"][_legs[_source_name]])
+    _target_answer_id = int(_digits["token_ids"][_legs[_target_name]])
+
+    def _localization_prompt(modality, caption):
+        question = (
+            "How many legs does the animal in the evidence typically have? "
+            "Answer with one digit.\nAnswer:"
+        )
+        return f"Caption: {caption}\n{question}" if modality == "text" else question
+
+    _localization_fingerprint = RunFingerprint(
+        mode="real", model_repo_id=MODEL_REPO_ID, model_revision=MODEL_REVISION,
+        processor_revision=MODEL_REVISION, layers=tuple(BROAD_POOLED_BAND),
+        lens_checksum=EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+        manifest_checksum=MANIFEST_CHECKSUM,
+        split_id=LOCALIZATION_POPULATION["population_digest"],
+        intervention_config={
+            "grid_digest": LOCALIZATION_GRID["grid_digest"],
+            "alpha": LOCALIZATION_ALPHA,
+            "conditions": list(LOCALIZATION_GRID["analysis_rule"]["conditions"]),
+            "positions": "all_original_prompt_positions",
+        },
+        extra={"study_digest": _localization_digest},
+    )
+    _localization_store = UnitStore(LOCALIZATION_RUN_DIR, _localization_fingerprint)
+    print("localization run state", _localization_store.open())
+
+    _localization_rows = []
+    for _band in LOCALIZATION_GRID["bands"]:
+        _band_layers = tuple(int(layer) for layer in _band["layers"])
+        _exact_bases = build_swap_bases_for_lens(
+            _lens, BACKEND.unembedding_weight(), layers=_band_layers,
+            source=_tokens[_source_name], target=_tokens[_target_name],
+        )
+        _random_bases = {
+            layer: random_two_direction_basis(basis, seed=20260823 + layer)
+            for layer, basis in _exact_bases.items()
+        }
+        _unrelated_bases = build_swap_bases_for_lens(
+            _lens, BACKEND.unembedding_weight(), layers=_band_layers,
+            source=_tokens[BROAD_POOLED_CONTROLS[0]],
+            target=_tokens[BROAD_POOLED_CONTROLS[1]],
+        )
+        _conditions = (
+            ("exact", LOCALIZATION_ALPHA, _exact_bases),
+            ("zero", 0.0, _exact_bases),
+            ("random", LOCALIZATION_ALPHA, _random_bases),
+            ("unrelated", LOCALIZATION_ALPHA, _unrelated_bases),
+        )
+        for _group in _localization_groups:
+            for _modality in ("text", "image", "spoken_audio"):
+                _inputs = None
+                _clean_logits = None
+                for _condition, _alpha, _bases in _conditions:
+                    _key = safe_key(
+                        "loc", _band["name"], _group["group_id"], _modality, _condition
+                    )
+                    _stored = _localization_store.load("intervention", _key)
+                    if _stored is None:
+                        if _inputs is None:
+                            _inputs = build_group_inputs(
+                                _group, _modality,
+                                _localization_prompt(_modality, _group["caption"]),
+                            )
+                            _clean_logits = BACKEND.forward_logits(_inputs.tensors)[
+                                0, _inputs.final_prompt_position
+                            ].float()
+                        _trial = unrestricted_swap_trial(
+                            BACKEND, _inputs, bases=_bases, alpha=_alpha,
+                            target_token_id=_target_answer_id,
+                            source_token_id=_source_answer_id,
+                            clean_logits=_clean_logits, compact_positions=True,
+                        )
+                        _surface = BACKEND.decode_token(
+                            _trial["patched_top_token_id"]
+                        ).strip()
+                        _stored = {
+                            **_trial, "band": _band["name"],
+                            "group_id": _group["group_id"],
+                            "image_id": _group["image_id"],
+                            "modality": _modality, "condition": _condition,
+                            "expected": _legs[_target_name],
+                            "patched_surface": _surface,
+                            "success": open_answer_matches(
+                                _surface, _legs[_target_name]
+                            ),
+                        }
+                        _localization_store.save("intervention", _key, _stored)
+                        _work = "computed"
+                    else:
+                        _work = "reused"
+                    _localization_rows.append(_stored)
+                    if len(_localization_rows) % 96 == 0:
+                        print("localization trials", len(_localization_rows), _work)
+
+    LOCALIZATION_REPORT = summarize_localization(
+        _localization_rows, grid=LOCALIZATION_GRID
+    )
+    LOCALIZATION_REPORT = {
+        **LOCALIZATION_REPORT,
+        "scientific_config": _localization_config,
+        "population": LOCALIZATION_POPULATION,
+        "rows": _localization_rows,
+    }
+    LOCALIZATION_REPORT["report_checksum"] = payload_checksum(
+        {k: v for k, v in LOCALIZATION_REPORT.items() if k != "report_checksum"}
+    )
+    _localization_store.save("metric", "exploratory_band_localization", LOCALIZATION_REPORT)
+    _localization_path = (
+        LOCALIZATION_RUN_DIR / "exploratory_band_localization_report.json"
+    )
+    _localization_path.write_text(
+        json.dumps(LOCALIZATION_REPORT, indent=2, default=str)
+    )
+    print("=" * 96)
+    print("EXPLORATORY BAND LOCALIZATION —", LOCALIZATION_REPORT["verdict"])
+    print("=" * 96)
+    for _cell in LOCALIZATION_REPORT["cells"]:
+        print(
+            f"  {_cell['band']:<10} {_cell['modality']:<13}"
+            f" exact {_cell['exact_successes']}/{_cell['n']}",
+            {name: value["successes"] for name, value in _cell["controls"].items()},
+        )
+    print("bands carrying the effect  ", LOCALIZATION_REPORT["bands_carrying_effect"])
+    print("by family                  ", LOCALIZATION_REPORT["bands_by_family"])
+    print("onset layer claimed        ",
+          LOCALIZATION_REPORT["claim_boundary"]["onset_layer_claimed"])
+    print("onset claim                ",
+          LOCALIZATION_REPORT["claim_boundary"]["onset_claim"])
+    print("necessity claimed          ",
+          LOCALIZATION_REPORT["claim_boundary"]["necessity_claimed"])
+    print("report", _localization_path)
+    print("checksum", LOCALIZATION_REPORT["report_checksum"])
+elif RUN_STAGE5A_BAND_LOCALIZATION:
+    print("Stage 5A requested but blocked by the model or localization budget.")
+'''
+)
+
+markdown(
+    r"""
+## 14. Stage 5B0 + 5B1 — new-property audit and development
+
+Leg count cannot carry a generalization claim: `bird=2`, `cat=4`, `zebra=4`,
+`giraffe=4`, so bird->cat, bird->zebra and bird->giraffe all test the same
+2 -> 4 answer change, and cat->zebra changes no observable answer at all.
+
+Stage 5B0 audits a candidate property before any causal spending:
+
+* semantic admissibility, declared per concept with a written reason. A concept
+  whose correct surface answer is contested is refused — horse, cow, zebra,
+  giraffe and elephant are all refused for body covering, and *bird* is refused
+  for animal sound because COCO birds have no single conventional sound;
+* media availability on genuinely fresh photographs;
+* clean capability in text, image and spoken audio at the declared rate.
+
+A direction survives only if both endpoints survive all three **and** their two
+answers differ. The endpoint is unrestricted complete generation scored after
+the fact against predeclared aliases — answers are not required to be single
+tokens, and no candidate list or teacher forcing is ever supplied.
+
+Stage 5B1 then runs the exact alpha=1 exchange over L16-L40 with the same three
+controls on that fresh development population.
+"""
+)
+code(
+    r'''
+PROPERTY_AUDIT_REPORT = None
+NEW_PROPERTY_DEVELOPMENT_REPORT = None
+if REAL_MODE and (PROPERTY_AUDIT_ENABLED or NEW_PROPERTY_DEV_ENABLED):
+    from jlens.lens import JacobianLens
+    from jlens.mmpilot.coordinate_swap import (
+        random_two_direction_basis, resolve_concept_token,
+    )
+    from jlens.mmpilot.multimodal_followup import (
+        PROPERTY_FAMILIES, artifact_exclusion_audit, assert_lens_reused_not_refitted,
+        assert_property_pair_changes_answer, audit_property_family,
+        generation_trial_row, new_property_development_verdict,
+        property_answer_matches,
+    )
+    from jlens.mmpilot.multimodal_lens import (
+        build_swap_bases_for_lens, load_broad_pooled_development_source,
+        select_causal_groups,
+    )
+    from jlens.mmpilot.store import RunFingerprint, UnitStore, safe_key
+    from jlens.mmpilot.workspace_replication import (
+        unrestricted_greedy_completion, unrestricted_greedy_swap_trial,
+    )
+
+    _property = PROPERTY_FAMILIES[NEW_PROPERTY_FAMILY]
+    _source_pin = load_broad_pooled_development_source(
+        BROAD_DEVELOPMENT_RUN_DIR,
+        expected_report_checksum=EXPECTED_BROAD_DEVELOPMENT_REPORT_CHECKSUM,
+        expected_population_digest=EXPECTED_BROAD_DEVELOPMENT_POPULATION_DIGEST,
+        expected_lens_checksum=EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+        expected_direction=CONFIRMATION_DIRECTION,
+    )
+    # Every direction is checked against the property table before any media
+    # are opened; a pair that does not change the answer cannot be requested.
+    for _pair in NEW_PROPERTY_DEV_DIRECTIONS:
+        assert_property_pair_changes_answer(NEW_PROPERTY_FAMILY, _pair[0], _pair[1])
+
+    _dev_config = {
+        "study": "multimodal_new_property_development.v1",
+        "property_family": NEW_PROPERTY_FAMILY,
+        "prompt": _property.question,
+        "max_new_tokens": NEW_PROPERTY_MAX_NEW_TOKENS,
+        "model_repo_id": MODEL_REPO_ID,
+        "model_revision": MODEL_REVISION,
+        "audio_protocol_fingerprint": AUDIO_PROTOCOL_FINGERPRINT,
+        "manifest_checksum": MANIFEST_CHECKSUM,
+        "lens_checksum": EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+        "lens_refitted": False,
+        "backward_passes": 0,
+        "layers": list(BROAD_POOLED_BAND),
+        "alpha": 1.0,
+        "positions": "every original prompt position",
+        "concepts": list(NEW_PROPERTY_CONCEPTS),
+        "directions": [list(pair) for pair in NEW_PROPERTY_DEV_DIRECTIONS],
+        "controls": ["zero", "random", "unrelated"],
+        "candidates_per_concept": NEW_PROPERTY_DEV_CANDIDATES_PER_CONCEPT,
+        "images_per_direction": NEW_PROPERTY_DEV_IMAGES_PER_DIRECTION,
+        "min_success_rate": NEW_PROPERTY_DEV_MIN_SUCCESS_RATE,
+        "min_control_margin": NEW_PROPERTY_DEV_MIN_CONTROL_MARGIN,
+        "min_clean_capability_rate": NEW_PROPERTY_MIN_CLEAN_CAPABILITY_RATE,
+        "exclusion_digest": EXCLUSION_UNIVERSE["exclusion_digest"],
+        "seed": NEW_PROPERTY_DEV_SEED,
+        "teacher_forcing_used": False,
+        "candidate_list_supplied": False,
+        "commit": COMMIT,
+    }
+    assert_lens_reused_not_refitted(_dev_config)
+    _dev_digest = payload_checksum(_dev_config)
+    NEW_PROPERTY_DEV_RUN_DIR = (
+        RUNS_ROOT / "mmnewproperty" /
+        f"mmnewpropertydev_real_{_dev_digest.split(':')[1][:12]}"
+    )
+    NEW_PROPERTY_DEV_RUN_DIR.mkdir(parents=True, exist_ok=True)
+    (NEW_PROPERTY_DEV_RUN_DIR / "scientific_config.json").write_text(
+        json.dumps(_dev_config, indent=2)
+    )
+
+    # Fresh development media: selected before any answer is opened, and
+    # disjoint from every spent identity including all 64 confirmation
+    # candidates.
+    _forbidden = {
+        concept: tuple(
+            other for other in NEW_PROPERTY_CONCEPTS if other != concept
+        )
+        for concept in NEW_PROPERTY_CONCEPTS
+    }
+    _dev_population = select_causal_groups(
+        GROUPS, concepts=NEW_PROPERTY_CONCEPTS,
+        n_per_concept=NEW_PROPERTY_DEV_CANDIDATES_PER_CONCEPT,
+        excluded_image_ids=EXCLUSION_UNIVERSE["excluded_image_ids"],
+        seed=NEW_PROPERTY_DEV_SEED, forbidden_concepts=_forbidden,
+    )
+    _dev_flat = [row for rows in _dev_population.values() for row in rows]
+    NEW_PROPERTY_DEV_EXCLUSION_AUDIT = artifact_exclusion_audit(
+        _dev_flat, universe=EXCLUSION_UNIVERSE, label="new_property_development"
+    )
+    (NEW_PROPERTY_DEV_RUN_DIR / "development_population.json").write_text(
+        json.dumps({
+            "population": {
+                concept: [
+                    {"group_id": row["group_id"], "image_id": row["image_id"]}
+                    for row in rows
+                ]
+                for concept, rows in _dev_population.items()
+            },
+            "exclusion_audit": NEW_PROPERTY_DEV_EXCLUSION_AUDIT,
+            "selected_before_any_answer_opened": True,
+        }, indent=2)
+    )
+    print("fresh development media selected; exclusion audit disjoint =",
+          NEW_PROPERTY_DEV_EXCLUSION_AUDIT["disjoint"])
+
+    _dev_fingerprint = RunFingerprint(
+        mode="real", model_repo_id=MODEL_REPO_ID, model_revision=MODEL_REVISION,
+        processor_revision=MODEL_REVISION, layers=tuple(BROAD_POOLED_BAND),
+        lens_checksum=EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+        manifest_checksum=MANIFEST_CHECKSUM,
+        split_id=NEW_PROPERTY_DEV_EXCLUSION_AUDIT["audit_digest"],
+        intervention_config={
+            "property_family": NEW_PROPERTY_FAMILY,
+            "alpha": 1.0,
+            "conditions": ["exact", "zero", "random", "unrelated"],
+            "positions": "all_original_prompt_positions",
+            "max_new_tokens": NEW_PROPERTY_MAX_NEW_TOKENS,
+        },
+        extra={"study_digest": _dev_digest},
+    )
+    _dev_store = UnitStore(NEW_PROPERTY_DEV_RUN_DIR, _dev_fingerprint)
+    print("new-property development run state", _dev_store.open())
+
+    # ---- Stage 5B0: clean capability on the untouched model only -----------
+    _capability_rows = []
+    for _concept in NEW_PROPERTY_CONCEPTS:
+        _answer = _property.answer_for(_concept)
+        for _group in _dev_population[_concept]:
+            for _modality in ("text", "image", "spoken_audio"):
+                _key = safe_key("propcap", _concept, _group["group_id"], _modality)
+                _row = _dev_store.load("capability", _key)
+                if _row is None:
+                    _inputs = build_group_inputs(
+                        _group, _modality,
+                        _property.prompt(_modality, _group["caption"]),
+                    )
+                    _clean = unrestricted_greedy_completion(
+                        BACKEND, _inputs, answer=_answer.answer,
+                        max_new_tokens=NEW_PROPERTY_MAX_NEW_TOKENS,
+                    )
+                    _row = {
+                        "concept": _concept, "group_id": _group["group_id"],
+                        "image_id": _group["image_id"], "modality": _modality,
+                        "expected_aliases": list(_answer.aliases),
+                        "generated": _clean["generated_text"],
+                        "pass": property_answer_matches(
+                            _clean["generated_text"], _answer
+                        ),
+                    }
+                    _dev_store.save("capability", _key, _row)
+                _capability_rows.append(_row)
+                if len(_capability_rows) % 72 == 0:
+                    print("property capability", len(_capability_rows))
+
+    _capability_by_concept = {
+        concept: {
+            modality: (
+                sum(
+                    bool(row["pass"]) for row in _capability_rows
+                    if row["concept"] == concept and row["modality"] == modality
+                ) / max(1, sum(
+                    1 for row in _capability_rows
+                    if row["concept"] == concept and row["modality"] == modality
+                ))
+            )
+            for modality in ("text", "image", "spoken_audio")
+        }
+        for concept in NEW_PROPERTY_CONCEPTS
+    }
+    PROPERTY_AUDIT_REPORT = audit_property_family(
+        NEW_PROPERTY_FAMILY,
+        available_media={
+            concept: len(rows) for concept, rows in _dev_population.items()
+        },
+        min_media_per_concept=NEW_PROPERTY_DEV_CANDIDATES_PER_CONCEPT,
+        clean_capability=_capability_by_concept,
+        min_clean_capability_rate=NEW_PROPERTY_MIN_CLEAN_CAPABILITY_RATE,
+    )
+    PROPERTY_AUDIT_REPORT = {
+        **PROPERTY_AUDIT_REPORT,
+        "clean_capability_by_concept": _capability_by_concept,
+        "capability_rows": _capability_rows,
+        "fallback_family_if_no_go": NEW_PROPERTY_FALLBACK_FAMILY,
+    }
+    _audit_path = NEW_PROPERTY_DEV_RUN_DIR / "new_property_audit_report.json"
+    _audit_path.write_text(
+        json.dumps(PROPERTY_AUDIT_REPORT, indent=2, default=str)
+    )
+    print("=" * 96)
+    print("PROPERTY AUDIT —", PROPERTY_AUDIT_REPORT["verdict"])
+    print("=" * 96)
+    print("family              ", PROPERTY_AUDIT_REPORT["family"])
+    print("admissible concepts ", PROPERTY_AUDIT_REPORT["admissible_concepts"])
+    print("refused concepts    ",
+          [row["concept"] for row in PROPERTY_AUDIT_REPORT["refused_concepts"]])
+    print("usable after data   ", PROPERTY_AUDIT_REPORT["usable_concepts"])
+    print("clean capability    ", _capability_by_concept)
+    print("candidate directions",
+          [row["direction"] for row in PROPERTY_AUDIT_REPORT["candidate_directions"]])
+    print("audit report", _audit_path)
+
+    # ---- Stage 5B1: the exact exchange on the fresh development media ------
+    if NEW_PROPERTY_DEV_ENABLED and PROPERTY_AUDIT_REPORT["verdict"] == "PROPERTY_AUDIT_GO":
+        _lens = JacobianLens.load(_source_pin["lens_path"])
+        _tokens = {
+            name: resolve_concept_token(BACKEND.encode_candidate, name)
+            for name in (*NEW_PROPERTY_CONCEPTS, *BROAD_POOLED_CONTROLS)
+        }
+        _unrelated_bases = build_swap_bases_for_lens(
+            _lens, BACKEND.unembedding_weight(), layers=BROAD_POOLED_BAND,
+            source=_tokens[BROAD_POOLED_CONTROLS[0]],
+            target=_tokens[BROAD_POOLED_CONTROLS[1]],
+        )
+        _usable = set(PROPERTY_AUDIT_REPORT["usable_concepts"])
+        _recruited = {}
+        for _concept in NEW_PROPERTY_CONCEPTS:
+            _eligible = []
+            for _group in _dev_population[_concept]:
+                _rows = [
+                    row for row in _capability_rows
+                    if row["concept"] == _concept
+                    and row["group_id"] == _group["group_id"]
+                ]
+                if len(_rows) == 3 and all(row["pass"] for row in _rows):
+                    _eligible.append(_group)
+            _recruited[_concept] = _eligible[:NEW_PROPERTY_DEV_IMAGES_PER_DIRECTION]
+        _capability_go = all(
+            len(_recruited[concept]) == NEW_PROPERTY_DEV_IMAGES_PER_DIRECTION
+            for concept in NEW_PROPERTY_CONCEPTS if concept in _usable
+        ) and bool(_usable)
+        print("recruited", {k: len(v) for k, v in _recruited.items()},
+              "capability_go", _capability_go)
+
+        _dev_rows = []
+        if _capability_go:
+            for _pair in NEW_PROPERTY_DEV_DIRECTIONS:
+                _src, _tgt = _pair
+                if not {_src, _tgt} <= _usable:
+                    print("skipping", f"{_src}->{_tgt}", "— a concept is unusable")
+                    continue
+                _target_answer = _property.answer_for(_tgt)
+                _exact_bases = build_swap_bases_for_lens(
+                    _lens, BACKEND.unembedding_weight(), layers=BROAD_POOLED_BAND,
+                    source=_tokens[_src], target=_tokens[_tgt],
+                )
+                _random_bases = {
+                    layer: random_two_direction_basis(basis, seed=20260823 + layer)
+                    for layer, basis in _exact_bases.items()
+                }
+                _conditions = (
+                    ("exact", 1.0, _exact_bases),
+                    ("zero", 0.0, _exact_bases),
+                    ("random", 1.0, _random_bases),
+                    ("unrelated", 1.0, _unrelated_bases),
+                )
+                for _group in _recruited[_src]:
+                    for _modality in ("text", "image", "spoken_audio"):
+                        for _condition, _alpha, _bases in _conditions:
+                            _key = safe_key(
+                                "proptrial", _src, _tgt, _group["group_id"],
+                                _modality, _condition,
+                            )
+                            _stored = _dev_store.load("intervention", _key)
+                            if _stored is None:
+                                _inputs = build_group_inputs(
+                                    _group, _modality,
+                                    _property.prompt(_modality, _group["caption"]),
+                                )
+                                _trial = unrestricted_greedy_swap_trial(
+                                    BACKEND, _inputs, bases=_bases, alpha=_alpha,
+                                    answer=_target_answer.answer,
+                                    max_new_tokens=NEW_PROPERTY_MAX_NEW_TOKENS,
+                                )
+                                _stored = generation_trial_row(
+                                    _trial, group=_group, modality=_modality,
+                                    condition=_condition, direction=(_src, _tgt),
+                                    answer=_target_answer,
+                                    layers=BROAD_POOLED_BAND,
+                                )
+                                _dev_store.save("intervention", _key, _stored)
+                            _dev_rows.append(_stored)
+                            if len(_dev_rows) % 96 == 0:
+                                print("new-property trials", len(_dev_rows))
+
+        NEW_PROPERTY_DEVELOPMENT_REPORT = new_property_development_verdict(
+            _dev_rows, audit=PROPERTY_AUDIT_REPORT, layers=BROAD_POOLED_BAND,
+            capability_go=_capability_go,
+            min_success_rate=NEW_PROPERTY_DEV_MIN_SUCCESS_RATE,
+            min_control_margin=NEW_PROPERTY_DEV_MIN_CONTROL_MARGIN,
+        )
+        NEW_PROPERTY_DEVELOPMENT_REPORT = {
+            **NEW_PROPERTY_DEVELOPMENT_REPORT,
+            "scientific_config": _dev_config,
+            "exclusion_audit": NEW_PROPERTY_DEV_EXCLUSION_AUDIT,
+            "recruited_counts": {k: len(v) for k, v in _recruited.items()},
+            "rows": _dev_rows,
+        }
+        NEW_PROPERTY_DEVELOPMENT_REPORT["report_checksum"] = payload_checksum({
+            k: v for k, v in NEW_PROPERTY_DEVELOPMENT_REPORT.items()
+            if k != "report_checksum"
+        })
+        _dev_store.save(
+            "metric", "new_property_development", NEW_PROPERTY_DEVELOPMENT_REPORT
+        )
+        _dev_path = (
+            NEW_PROPERTY_DEV_RUN_DIR / "new_property_development_report.json"
+        )
+        _dev_path.write_text(
+            json.dumps(NEW_PROPERTY_DEVELOPMENT_REPORT, indent=2, default=str)
+        )
+        print("=" * 96)
+        print("NEW-PROPERTY DEVELOPMENT —",
+              NEW_PROPERTY_DEVELOPMENT_REPORT["verdict"])
+        print("=" * 96)
+        print("passing directions ",
+              NEW_PROPERTY_DEVELOPMENT_REPORT["passing_directions"])
+        print("failure modes      ",
+              NEW_PROPERTY_DEVELOPMENT_REPORT["failure_modes"])
+        print("run dir            ", NEW_PROPERTY_DEV_RUN_DIR)
+        print("report             ", _dev_path)
+        print("checksum           ",
+              NEW_PROPERTY_DEVELOPMENT_REPORT["report_checksum"])
+        if NEW_PROPERTY_DEVELOPMENT_REPORT["verdict"] != "NEW_PROPERTY_DEVELOPMENT_GO":
+            print("NO_GO: confirmation stays closed. Nothing is re-thresholded.")
+elif RUN_STAGE5B0_PROPERTY_AUDIT or RUN_STAGE5B1_NEW_PROPERTY_DEVELOPMENT:
+    print("Stage 5B0/5B1 requested but blocked by the model or development budget.")
+'''
+)
+
+markdown(
+    r"""
+## 15. Stage 5B2 — freeze the confirmation design
+
+CPU-only. Reads the development report by checksum, applies the predeclared
+tie-break if several directions passed, and writes the frozen design artifact.
+
+Stage 5B3 refuses to open a fresh photograph until this file exists and its own
+digest verifies, so the freeze genuinely precedes the confirmation population.
+"""
+)
+code(
+    r'''
+FROZEN_NEW_PROPERTY_DESIGN = None
+if REAL_MODE and NEW_PROPERTY_FREEZE_ENABLED:
+    from jlens.mmpilot.multimodal_followup import (
+        exclusion_universe, freeze_new_property_design, load_verified_report,
+    )
+
+    if NEW_PROPERTY_DEVELOPMENT_RUN_DIR is None or EXPECTED_NEW_PROPERTY_DEVELOPMENT_CHECKSUM is None:
+        raise RuntimeError(
+            "set NEW_PROPERTY_DEVELOPMENT_RUN_DIR and "
+            "EXPECTED_NEW_PROPERTY_DEVELOPMENT_CHECKSUM from the Stage 5B1 run"
+        )
+    _development = load_verified_report(
+        Path(NEW_PROPERTY_DEVELOPMENT_RUN_DIR) / "new_property_development_report.json",
+        expected_checksum=EXPECTED_NEW_PROPERTY_DEVELOPMENT_CHECKSUM,
+        label="new-property development report",
+    )
+    _development["report_checksum"] = EXPECTED_NEW_PROPERTY_DEVELOPMENT_CHECKSUM
+    _audit = json.loads(
+        (Path(NEW_PROPERTY_DEVELOPMENT_RUN_DIR) / "new_property_audit_report.json").read_text()
+    )
+    _passing = list(_development.get("passing_directions") or [])
+    _chosen = next(
+        (name for name in NEW_PROPERTY_DIRECTION_PRIORITY if name in _passing), None
+    )
+    if _chosen is None:
+        raise RuntimeError(
+            f"development licensed no direction ({_development['verdict']}); "
+            "confirmation stays closed"
+        )
+    print("predeclared tie-break selected", _chosen, "from", _passing)
+
+    # Every identity Stage 5B0/5B1 opened — interventions and the clean
+    # capability screen alike. Stage 5B3 recomputes this same set and refuses
+    # to run if the two disagree.
+    _dev_images = sorted({
+        str(row["image_id"]) for row in _development.get("rows") or []
+    } | {
+        str(row["image_id"]) for row in _audit.get("capability_rows") or []
+    })
+    _confirm_exclusions = exclusion_universe(
+        fit_image_ids=EXCLUSION_UNIVERSE["sources"]["fit"],
+        eval_image_ids=EXCLUSION_UNIVERSE["sources"]["cross_evaluation"],
+        prior_causal_image_ids=EXCLUSION_UNIVERSE["sources"]["prior_causal_screens"],
+        broad_development_image_ids=EXCLUSION_UNIVERSE["sources"]["broad_development"],
+        confirmation_candidate_image_ids=EXCLUSION_UNIVERSE["sources"][
+            "confirmation_candidates_all_opened"
+        ],
+        extra_image_ids={"new_property_development_opened": _dev_images},
+    )
+    FROZEN_NEW_PROPERTY_DESIGN = freeze_new_property_design(
+        development=_development, audit=_audit,
+        direction=tuple(_chosen.split("->")),
+        lens_checksum=EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+        layers=BROAD_POOLED_BAND, alpha=1.0,
+        exclusions=_confirm_exclusions,
+        n_candidates=NEW_PROPERTY_CONFIRM_CANDIDATES,
+        n_recruited=NEW_PROPERTY_CONFIRM_IMAGES,
+        min_success_rate=NEW_PROPERTY_CONFIRM_MIN_SUCCESS_RATE,
+        min_control_margin=NEW_PROPERTY_CONFIRM_MIN_CONTROL_MARGIN,
+        min_clean_capability_rate=NEW_PROPERTY_MIN_CLEAN_CAPABILITY_RATE,
+        familywise_alpha=NEW_PROPERTY_CONFIRM_FAMILYWISE_ALPHA,
+        recruitment_rule=(
+            "clean property capability in all three modalities, in the frozen "
+            "candidate order, before any intervention runs"
+        ),
+        seed=NEW_PROPERTY_CONFIRM_SEED,
+    )
+    _design_path = (
+        Path(NEW_PROPERTY_DEVELOPMENT_RUN_DIR) / "frozen_new_property_design.json"
+    )
+    _temporary = _design_path.with_suffix(".tmp.json")
+    _temporary.write_text(
+        json.dumps(FROZEN_NEW_PROPERTY_DESIGN, indent=2, default=str)
+    )
+    os.replace(_temporary, _design_path)
+    print("=" * 96)
+    print("NEW-PROPERTY CONFIRMATION DESIGN FROZEN")
+    print("=" * 96)
+    print("direction        ", FROZEN_NEW_PROPERTY_DESIGN["direction"])
+    print("property family  ", FROZEN_NEW_PROPERTY_DESIGN["property_family"])
+    print("answer aliases   ", FROZEN_NEW_PROPERTY_DESIGN["answer_aliases"])
+    print("layers / alpha   ", FROZEN_NEW_PROPERTY_DESIGN["layers"][0], "-",
+          FROZEN_NEW_PROPERTY_DESIGN["layers"][-1], "/",
+          FROZEN_NEW_PROPERTY_DESIGN["alpha"])
+    print("excluded ids     ", FROZEN_NEW_PROPERTY_DESIGN["n_excluded_identities"])
+    print("design digest    ", FROZEN_NEW_PROPERTY_DESIGN["design_digest"])
+    print("path             ", _design_path)
+    print("Set NEW_PROPERTY_FROZEN_DESIGN_PATH to this path before Stage 5B3.")
+elif RUN_STAGE5B2_FREEZE_NEW_PROPERTY_DESIGN:
+    print("Stage 5B2 runs on CPU in REAL_MODE against the Drive artifacts.")
+'''
+)
+
+markdown(
+    r"""
+## 16. Stage 5B3 — fresh new-property confirmation
+
+Runs the frozen design and nothing else. The population is selected before any
+answer is opened and excludes every spent identity, including all 64
+photographs the completed bird->cat confirmation opened. Thresholds, prompt,
+pair, aliases and recruitment rule come from the frozen file; none of them can
+be revised after outcomes are seen, and every failure and raw generation is
+preserved in the report.
+"""
+)
+code(
+    r'''
+NEW_PROPERTY_CONFIRMATION_REPORT = None
+if REAL_MODE and NEW_PROPERTY_CONFIRM_ENABLED:
+    from jlens.lens import JacobianLens
+    from jlens.mmpilot.coordinate_swap import (
+        random_two_direction_basis, resolve_concept_token,
+    )
+    from jlens.mmpilot.multimodal_followup import (
+        PROPERTY_FAMILIES, artifact_exclusion_audit, assert_design_frozen,
+        confirmation_verdict, exclusion_universe, generation_trial_row,
+        property_answer_matches,
+    )
+    from jlens.mmpilot.multimodal_lens import (
+        build_swap_bases_for_lens, load_broad_pooled_development_source,
+        select_causal_groups,
+    )
+    from jlens.mmpilot.store import RunFingerprint, UnitStore, safe_key
+    from jlens.mmpilot.workspace_replication import (
+        unrestricted_greedy_completion, unrestricted_greedy_swap_trial,
+    )
+
+    if NEW_PROPERTY_FROZEN_DESIGN_PATH is None:
+        raise RuntimeError(
+            "Stage 5B3 cannot open a fresh photograph before Stage 5B2 wrote "
+            "the frozen design; set NEW_PROPERTY_FROZEN_DESIGN_PATH"
+        )
+    DESIGN = assert_design_frozen(NEW_PROPERTY_FROZEN_DESIGN_PATH)
+    print("frozen design verified", DESIGN["design_digest"])
+    print("  direction", DESIGN["direction"], "property", DESIGN["property_family"])
+    print("  thresholds", DESIGN["thresholds"])
+
+    _property = PROPERTY_FAMILIES[DESIGN["property_family"]]
+    _src, _tgt = DESIGN["direction"]
+    _source_answer = _property.answer_for(_src)
+    _target_answer = _property.answer_for(_tgt)
+    _source_pin = load_broad_pooled_development_source(
+        BROAD_DEVELOPMENT_RUN_DIR,
+        expected_report_checksum=EXPECTED_BROAD_DEVELOPMENT_REPORT_CHECKSUM,
+        expected_population_digest=EXPECTED_BROAD_DEVELOPMENT_POPULATION_DIGEST,
+        expected_lens_checksum=EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+        expected_direction=CONFIRMATION_DIRECTION,
+    )
+    if DESIGN["lens_checksum"] != EXPECTED_BROAD_POOLED_LENS_CHECKSUM:
+        raise RuntimeError("the frozen design pins a different pooled lens")
+
+    _confirm_config = {
+        "study": "multimodal_new_property_confirmation.v1",
+        "design_digest": DESIGN["design_digest"],
+        "model_repo_id": MODEL_REPO_ID, "model_revision": MODEL_REVISION,
+        "manifest_checksum": MANIFEST_CHECKSUM,
+        "audio_protocol_fingerprint": AUDIO_PROTOCOL_FINGERPRINT,
+        "commit": COMMIT,
+    }
+    _confirm_digest = payload_checksum(_confirm_config)
+    NEW_PROPERTY_CONFIRM_RUN_DIR = (
+        RUNS_ROOT / "mmnewpropertyconfirm" /
+        f"mmnewpropertyconfirm_real_{_confirm_digest.split(':')[1][:12]}"
+    )
+    NEW_PROPERTY_CONFIRM_RUN_DIR.mkdir(parents=True, exist_ok=True)
+    (NEW_PROPERTY_CONFIRM_RUN_DIR / "scientific_config.json").write_text(
+        json.dumps(_confirm_config, indent=2)
+    )
+
+    def _development_opened_image_ids():
+        """Every identity Stage 5B0/5B1 opened, recomputed rather than retyped."""
+
+        if NEW_PROPERTY_DEVELOPMENT_RUN_DIR is None:
+            raise RuntimeError(
+                "set NEW_PROPERTY_DEVELOPMENT_RUN_DIR so the development media "
+                "can be excluded from the fresh confirmation population"
+            )
+        root = Path(NEW_PROPERTY_DEVELOPMENT_RUN_DIR)
+        development = json.loads(
+            (root / "new_property_development_report.json").read_text()
+        )
+        audit = json.loads((root / "new_property_audit_report.json").read_text())
+        return sorted(
+            {str(row["image_id"]) for row in development.get("rows") or []}
+            | {str(row["image_id"]) for row in audit.get("capability_rows") or []}
+        )
+
+    _confirm_exclusions = exclusion_universe(
+        fit_image_ids=EXCLUSION_UNIVERSE["sources"]["fit"],
+        eval_image_ids=EXCLUSION_UNIVERSE["sources"]["cross_evaluation"],
+        prior_causal_image_ids=EXCLUSION_UNIVERSE["sources"]["prior_causal_screens"],
+        broad_development_image_ids=EXCLUSION_UNIVERSE["sources"]["broad_development"],
+        confirmation_candidate_image_ids=EXCLUSION_UNIVERSE["sources"][
+            "confirmation_candidates_all_opened"
+        ],
+        extra_image_ids={
+            "new_property_development_opened": _development_opened_image_ids(),
+        },
+    )
+    if _confirm_exclusions["exclusion_digest"] != DESIGN["exclusion_digest"]:
+        raise RuntimeError(
+            "the exclusion universe differs from the one frozen in the design; "
+            "refusing to mix populations"
+        )
+    _confirm_population = select_causal_groups(
+        GROUPS, concepts=(_src,),
+        n_per_concept=int(DESIGN["n_candidates"]),
+        excluded_image_ids=_confirm_exclusions["excluded_image_ids"],
+        seed=DESIGN["seed"], forbidden_concepts={_src: (_tgt,)},
+    )[_src]
+    CONFIRM_EXCLUSION_AUDIT = artifact_exclusion_audit(
+        _confirm_population, universe=_confirm_exclusions,
+        label="new_property_confirmation",
+    )
+    (NEW_PROPERTY_CONFIRM_RUN_DIR / "fresh_population.json").write_text(
+        json.dumps({
+            "population": [
+                {"group_id": row["group_id"], "image_id": row["image_id"]}
+                for row in _confirm_population
+            ],
+            "exclusion_audit": CONFIRM_EXCLUSION_AUDIT,
+            "selected_before_capability": True,
+        }, indent=2)
+    )
+    print("fresh confirmation population disjoint =", CONFIRM_EXCLUSION_AUDIT["disjoint"])
+
+    _confirm_fingerprint = RunFingerprint(
+        mode="real", model_repo_id=MODEL_REPO_ID, model_revision=MODEL_REVISION,
+        processor_revision=MODEL_REVISION, layers=tuple(DESIGN["layers"]),
+        lens_checksum=DESIGN["lens_checksum"], manifest_checksum=MANIFEST_CHECKSUM,
+        split_id=CONFIRM_EXCLUSION_AUDIT["audit_digest"],
+        intervention_config={
+            "direction": list(DESIGN["direction"]),
+            "alpha": DESIGN["alpha"],
+            "conditions": list(DESIGN["conditions"]),
+            "positions": "all_original_prompt_positions",
+            "max_new_tokens": DESIGN["max_new_tokens"],
+        },
+        extra={"design_digest": DESIGN["design_digest"]},
+    )
+    _confirm_store = UnitStore(NEW_PROPERTY_CONFIRM_RUN_DIR, _confirm_fingerprint)
+    print("confirmation run state", _confirm_store.open())
+
+    _confirm_capability = []
+    for _group in _confirm_population:
+        for _modality in ("text", "image", "spoken_audio"):
+            _key = safe_key("npcap", _group["group_id"], _modality)
+            _row = _confirm_store.load("capability", _key)
+            if _row is None:
+                _inputs = build_group_inputs(
+                    _group, _modality,
+                    _property.prompt(_modality, _group["caption"]),
+                )
+                _clean = unrestricted_greedy_completion(
+                    BACKEND, _inputs, answer=_source_answer.answer,
+                    max_new_tokens=int(DESIGN["max_new_tokens"]),
+                )
+                _row = {
+                    "group_id": _group["group_id"], "image_id": _group["image_id"],
+                    "modality": _modality,
+                    "expected_aliases": list(_source_answer.aliases),
+                    "generated": _clean["generated_text"],
+                    "pass": property_answer_matches(
+                        _clean["generated_text"], _source_answer
+                    ),
+                }
+                _confirm_store.save("capability", _key, _row)
+            _confirm_capability.append(_row)
+            if len(_confirm_capability) % 48 == 0:
+                print("confirmation capability", len(_confirm_capability))
+
+    _recruited = []
+    for _group in _confirm_population:
+        _rows = [
+            row for row in _confirm_capability
+            if row["group_id"] == _group["group_id"]
+        ]
+        if len(_rows) == 3 and all(row["pass"] for row in _rows):
+            _recruited.append(_group)
+        if len(_recruited) == int(DESIGN["n_recruited"]):
+            break
+    _capability_go = len(_recruited) == int(DESIGN["n_recruited"])
+    print("confirmation recruited", len(_recruited), "/", DESIGN["n_recruited"])
+
+    _confirm_rows = []
+    if _capability_go:
+        _lens = JacobianLens.load(_source_pin["lens_path"])
+        _tokens = {
+            name: resolve_concept_token(BACKEND.encode_candidate, name)
+            for name in (_src, _tgt, *BROAD_POOLED_CONTROLS)
+        }
+        _exact_bases = build_swap_bases_for_lens(
+            _lens, BACKEND.unembedding_weight(), layers=tuple(DESIGN["layers"]),
+            source=_tokens[_src], target=_tokens[_tgt],
+        )
+        _random_bases = {
+            layer: random_two_direction_basis(basis, seed=20260823 + layer)
+            for layer, basis in _exact_bases.items()
+        }
+        _unrelated_bases = build_swap_bases_for_lens(
+            _lens, BACKEND.unembedding_weight(), layers=tuple(DESIGN["layers"]),
+            source=_tokens[BROAD_POOLED_CONTROLS[0]],
+            target=_tokens[BROAD_POOLED_CONTROLS[1]],
+        )
+        _conditions = (
+            ("exact", float(DESIGN["alpha"]), _exact_bases),
+            ("zero", 0.0, _exact_bases),
+            ("random", float(DESIGN["alpha"]), _random_bases),
+            ("unrelated", float(DESIGN["alpha"]), _unrelated_bases),
+        )
+        for _group in _recruited:
+            for _modality in ("text", "image", "spoken_audio"):
+                for _condition, _alpha, _bases in _conditions:
+                    _key = safe_key(
+                        "nptrial", _group["group_id"], _modality, _condition
+                    )
+                    _stored = _confirm_store.load("intervention", _key)
+                    if _stored is None:
+                        _inputs = build_group_inputs(
+                            _group, _modality,
+                            _property.prompt(_modality, _group["caption"]),
+                        )
+                        _trial = unrestricted_greedy_swap_trial(
+                            BACKEND, _inputs, bases=_bases, alpha=_alpha,
+                            answer=_target_answer.answer,
+                            max_new_tokens=int(DESIGN["max_new_tokens"]),
+                        )
+                        _stored = generation_trial_row(
+                            _trial, group=_group, modality=_modality,
+                            condition=_condition, direction=(_src, _tgt),
+                            answer=_target_answer, layers=DESIGN["layers"],
+                        )
+                        _confirm_store.save("intervention", _key, _stored)
+                    _confirm_rows.append(_stored)
+                    if len(_confirm_rows) % 48 == 0:
+                        print("confirmation trials", len(_confirm_rows))
+
+    NEW_PROPERTY_CONFIRMATION_REPORT = confirmation_verdict(
+        _confirm_rows, design=DESIGN, capability_go=_capability_go,
+        exclusion_audit=CONFIRM_EXCLUSION_AUDIT,
+    )
+    NEW_PROPERTY_CONFIRMATION_REPORT = {
+        **NEW_PROPERTY_CONFIRMATION_REPORT,
+        "scientific_config": _confirm_config,
+        "frozen_design": DESIGN,
+        "capability_rows": _confirm_capability,
+        "n_fresh_candidates": len(_confirm_population),
+        "n_recruited": len(_recruited),
+    }
+    NEW_PROPERTY_CONFIRMATION_REPORT["report_checksum"] = payload_checksum({
+        k: v for k, v in NEW_PROPERTY_CONFIRMATION_REPORT.items()
+        if k != "report_checksum"
+    })
+    _confirm_store.save(
+        "metric", "new_property_confirmation", NEW_PROPERTY_CONFIRMATION_REPORT
+    )
+    _confirm_path = (
+        NEW_PROPERTY_CONFIRM_RUN_DIR / "new_property_confirmation_report.json"
+    )
+    _confirm_path.write_text(
+        json.dumps(NEW_PROPERTY_CONFIRMATION_REPORT, indent=2, default=str)
+    )
+    print("=" * 96)
+    print("NEW-PROPERTY FRESH CONFIRMATION —",
+          NEW_PROPERTY_CONFIRMATION_REPORT["verdict"])
+    print("=" * 96)
+    for _cell in NEW_PROPERTY_CONFIRMATION_REPORT["cells"]:
+        print(
+            _cell["modality"],
+            f"exact {_cell['exact_successes']}/{_cell['n']}",
+            {name: value["successes"] for name, value in _cell["controls"].items()},
+        )
+    print("gate        ", NEW_PROPERTY_CONFIRMATION_REPORT["gate"])
+    print("failure mode", NEW_PROPERTY_CONFIRMATION_REPORT["failure_mode"])
+    print("report", _confirm_path)
+    print("checksum", NEW_PROPERTY_CONFIRMATION_REPORT["report_checksum"])
+elif RUN_STAGE5B3_NEW_PROPERTY_CONFIRMATION:
+    print("Stage 5B3 requested but blocked by the model or confirmation budget.")
+'''
+)
+
+markdown(
+    r"""
+## 17. Stage 5C — prospective asymmetry replication
+
+Cat to bird **was** tested in development: 0 successes in 24 trials at alpha=1,
+against 24/24 for bird to cat. That is a recorded development observation on a
+spent population, not an established property of the representation. It could
+reflect model capability, prompt behaviour, coordinate quality, or concept
+geometry as easily as a genuine asymmetry.
+
+This stage runs the identical leg-count protocol backwards on fresh cat media.
+A null replicates the observed difference and explains nothing about its cause.
+A clear effect would show the development failure did not replicate, and the
+asymmetry should then not be reported at all.
+"""
+)
+code(
+    r'''
+ASYMMETRY_REPORT = None
+if REAL_MODE and ASYMMETRY_ENABLED:
+    from jlens.lens import JacobianLens
+    from jlens.mmpilot.coordinate_swap import (
+        random_two_direction_basis, resolve_concept_token,
+    )
+    from jlens.mmpilot.digit_reasoning_confirmation import resolve_digit_endpoints
+    from jlens.mmpilot.multimodal_followup import (
+        artifact_exclusion_audit, asymmetry_replication_design,
+        asymmetry_replication_verdict, exclusion_universe,
+    )
+    from jlens.mmpilot.multimodal_lens import (
+        build_swap_bases_for_lens, load_broad_pooled_development_source,
+        open_answer_matches, select_causal_groups, unrestricted_swap_trial,
+    )
+    from jlens.mmpilot.store import RunFingerprint, UnitStore, safe_key
+
+    _source_pin = load_broad_pooled_development_source(
+        BROAD_DEVELOPMENT_RUN_DIR,
+        expected_report_checksum=EXPECTED_BROAD_DEVELOPMENT_REPORT_CHECKSUM,
+        expected_population_digest=EXPECTED_BROAD_DEVELOPMENT_POPULATION_DIGEST,
+        expected_lens_checksum=EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+        expected_direction=CONFIRMATION_DIRECTION,
+    )
+    ASYMMETRY_DESIGN = asymmetry_replication_design(
+        lens_checksum=EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+        exclusions=EXCLUSION_UNIVERSE, layers=BROAD_POOLED_BAND, alpha=1.0,
+        n_candidates=ASYMMETRY_CANDIDATES, n_recruited=ASYMMETRY_IMAGES,
+        min_success_rate=ASYMMETRY_MIN_SUCCESS_RATE,
+        min_control_margin=ASYMMETRY_MIN_CONTROL_MARGIN,
+        min_clean_capability_rate=CONFIRMATION_MIN_SUCCESS_RATE,
+        familywise_alpha=ASYMMETRY_FAMILYWISE_ALPHA, seed=ASYMMETRY_SEED,
+    )
+    print("=" * 96)
+    print("ASYMMETRY REPLICATION DESIGN FROZEN BEFORE ANY FRESH CAT IS OPENED")
+    print("=" * 96)
+    print("development record:",
+          ASYMMETRY_DESIGN["development_record"]["accurate_statement"])
+    print("direction", ASYMMETRY_DESIGN["direction"], "alpha",
+          ASYMMETRY_DESIGN["alpha"], "layers", ASYMMETRY_DESIGN["layers"][0],
+          "-", ASYMMETRY_DESIGN["layers"][-1])
+    print("excluded identities", ASYMMETRY_DESIGN["n_excluded_identities"])
+    print("design digest", ASYMMETRY_DESIGN["design_digest"])
+
+    ASYMMETRY_RUN_DIR = (
+        RUNS_ROOT / "mmasymmetry" /
+        f"mmasymmetry_real_{ASYMMETRY_DESIGN['design_digest'].split(':')[1][:12]}"
+    )
+    ASYMMETRY_RUN_DIR.mkdir(parents=True, exist_ok=True)
+    (ASYMMETRY_RUN_DIR / "frozen_asymmetry_design.json").write_text(
+        json.dumps(ASYMMETRY_DESIGN, indent=2, default=str)
+    )
+
+    _src, _tgt = ASYMMETRY_DESIGN["direction"]
+    _asym_population = select_causal_groups(
+        GROUPS, concepts=(_src,), n_per_concept=int(ASYMMETRY_DESIGN["n_candidates"]),
+        excluded_image_ids=EXCLUSION_UNIVERSE["excluded_image_ids"],
+        seed=ASYMMETRY_DESIGN["seed"], forbidden_concepts={_src: (_tgt,)},
+    )[_src]
+    ASYMMETRY_EXCLUSION_AUDIT = artifact_exclusion_audit(
+        _asym_population, universe=EXCLUSION_UNIVERSE, label="asymmetry_replication"
+    )
+    (ASYMMETRY_RUN_DIR / "fresh_population.json").write_text(
+        json.dumps({
+            "population": [
+                {"group_id": row["group_id"], "image_id": row["image_id"]}
+                for row in _asym_population
+            ],
+            "exclusion_audit": ASYMMETRY_EXCLUSION_AUDIT,
+            "selected_before_capability": True,
+        }, indent=2)
+    )
+    print("fresh cat population disjoint =", ASYMMETRY_EXCLUSION_AUDIT["disjoint"])
+
+    _asym_fingerprint = RunFingerprint(
+        mode="real", model_repo_id=MODEL_REPO_ID, model_revision=MODEL_REVISION,
+        processor_revision=MODEL_REVISION, layers=tuple(ASYMMETRY_DESIGN["layers"]),
+        lens_checksum=EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+        manifest_checksum=MANIFEST_CHECKSUM,
+        split_id=ASYMMETRY_EXCLUSION_AUDIT["audit_digest"],
+        intervention_config={
+            "direction": list(ASYMMETRY_DESIGN["direction"]),
+            "alpha": ASYMMETRY_DESIGN["alpha"],
+            "conditions": list(ASYMMETRY_DESIGN["conditions"]),
+            "positions": "all_original_prompt_positions",
+        },
+        extra={"design_digest": ASYMMETRY_DESIGN["design_digest"]},
+    )
+    _asym_store = UnitStore(ASYMMETRY_RUN_DIR, _asym_fingerprint)
+    print("asymmetry run state", _asym_store.open())
+
+    _legs = {"bird": "2", "cat": "4"}
+    _source_answer, _target_answer = _legs[_src], _legs[_tgt]
+
+    def _asym_prompt(modality, caption):
+        question = (
+            "How many legs does the animal in the evidence typically have? "
+            "Answer with one digit.\nAnswer:"
+        )
+        return f"Caption: {caption}\n{question}" if modality == "text" else question
+
+    _asym_capability = []
+    for _group in _asym_population:
+        for _modality in ("text", "image", "spoken_audio"):
+            _key = safe_key("asymcap", _group["group_id"], _modality)
+            _row = _asym_store.load("capability", _key)
+            if _row is None:
+                _inputs = build_group_inputs(
+                    _group, _modality, _asym_prompt(_modality, _group["caption"])
+                )
+                _logits = BACKEND.forward_logits(_inputs.tensors)[
+                    0, _inputs.final_prompt_position
+                ].float()
+                _surface = BACKEND.decode_token(int(_logits.argmax())).strip()
+                _row = {
+                    "group_id": _group["group_id"], "image_id": _group["image_id"],
+                    "modality": _modality, "expected": _source_answer,
+                    "generated": _surface,
+                    "pass": open_answer_matches(_surface, _source_answer),
+                }
+                _asym_store.save("capability", _key, _row)
+            _asym_capability.append(_row)
+            if len(_asym_capability) % 48 == 0:
+                print("asymmetry capability", len(_asym_capability))
+
+    _asym_recruited = []
+    for _group in _asym_population:
+        _rows = [
+            row for row in _asym_capability
+            if row["group_id"] == _group["group_id"]
+        ]
+        if len(_rows) == 3 and all(row["pass"] for row in _rows):
+            _asym_recruited.append(_group)
+        if len(_asym_recruited) == int(ASYMMETRY_DESIGN["n_recruited"]):
+            break
+    _asym_capability_go = (
+        len(_asym_recruited) == int(ASYMMETRY_DESIGN["n_recruited"])
+    )
+    print("asymmetry recruited", len(_asym_recruited), "/",
+          ASYMMETRY_DESIGN["n_recruited"])
+
+    _asym_rows = []
+    if _asym_capability_go:
+        _lens = JacobianLens.load(_source_pin["lens_path"])
+        _tokens = {
+            name: resolve_concept_token(BACKEND.encode_candidate, name)
+            for name in (_src, _tgt, *BROAD_POOLED_CONTROLS)
+        }
+        _digits = resolve_digit_endpoints(BACKEND)
+        _exact_bases = build_swap_bases_for_lens(
+            _lens, BACKEND.unembedding_weight(),
+            layers=tuple(ASYMMETRY_DESIGN["layers"]),
+            source=_tokens[_src], target=_tokens[_tgt],
+        )
+        _random_bases = {
+            layer: random_two_direction_basis(basis, seed=20260823 + layer)
+            for layer, basis in _exact_bases.items()
+        }
+        _unrelated_bases = build_swap_bases_for_lens(
+            _lens, BACKEND.unembedding_weight(),
+            layers=tuple(ASYMMETRY_DESIGN["layers"]),
+            source=_tokens[BROAD_POOLED_CONTROLS[0]],
+            target=_tokens[BROAD_POOLED_CONTROLS[1]],
+        )
+        _conditions = (
+            ("exact", float(ASYMMETRY_DESIGN["alpha"]), _exact_bases),
+            ("zero", 0.0, _exact_bases),
+            ("random", float(ASYMMETRY_DESIGN["alpha"]), _random_bases),
+            ("unrelated", float(ASYMMETRY_DESIGN["alpha"]), _unrelated_bases),
+        )
+        for _group in _asym_recruited:
+            for _modality in ("text", "image", "spoken_audio"):
+                _inputs = None
+                _clean_logits = None
+                for _condition, _alpha, _bases in _conditions:
+                    _key = safe_key(
+                        "asymtrial", _group["group_id"], _modality, _condition
+                    )
+                    _stored = _asym_store.load("intervention", _key)
+                    if _stored is None:
+                        if _inputs is None:
+                            _inputs = build_group_inputs(
+                                _group, _modality,
+                                _asym_prompt(_modality, _group["caption"]),
+                            )
+                            _clean_logits = BACKEND.forward_logits(_inputs.tensors)[
+                                0, _inputs.final_prompt_position
+                            ].float()
+                        _trial = unrestricted_swap_trial(
+                            BACKEND, _inputs, bases=_bases, alpha=_alpha,
+                            target_token_id=int(_digits["token_ids"][_target_answer]),
+                            source_token_id=int(_digits["token_ids"][_source_answer]),
+                            clean_logits=_clean_logits, compact_positions=True,
+                        )
+                        _surface = BACKEND.decode_token(
+                            _trial["patched_top_token_id"]
+                        ).strip()
+                        _stored = {
+                            **_trial, "direction": f"{_src}->{_tgt}",
+                            "group_id": _group["group_id"],
+                            "image_id": _group["image_id"],
+                            "modality": _modality, "condition": _condition,
+                            "expected": _target_answer,
+                            "patched_surface": _surface,
+                            "success": open_answer_matches(
+                                _surface, _target_answer
+                            ),
+                        }
+                        _asym_store.save("intervention", _key, _stored)
+                    _asym_rows.append(_stored)
+                    if len(_asym_rows) % 48 == 0:
+                        print("asymmetry trials", len(_asym_rows))
+
+    ASYMMETRY_REPORT = asymmetry_replication_verdict(
+        _asym_rows, design=ASYMMETRY_DESIGN, capability_go=_asym_capability_go,
+        exclusion_audit=ASYMMETRY_EXCLUSION_AUDIT,
+    )
+    ASYMMETRY_REPORT = {
+        **ASYMMETRY_REPORT,
+        "frozen_design": ASYMMETRY_DESIGN,
+        "capability_rows": _asym_capability,
+        "n_fresh_candidates": len(_asym_population),
+        "n_recruited": len(_asym_recruited),
+    }
+    ASYMMETRY_REPORT["report_checksum"] = payload_checksum({
+        k: v for k, v in ASYMMETRY_REPORT.items() if k != "report_checksum"
+    })
+    _asym_store.save("metric", "asymmetry_replication", ASYMMETRY_REPORT)
+    _asym_path = ASYMMETRY_RUN_DIR / "asymmetry_replication_report.json"
+    _asym_path.write_text(json.dumps(ASYMMETRY_REPORT, indent=2, default=str))
+    print("=" * 96)
+    print("ASYMMETRY REPLICATION —", ASYMMETRY_REPORT["verdict"])
+    print("=" * 96)
+    print("reverse successes", ASYMMETRY_REPORT["reverse_successes"], "/",
+          ASYMMETRY_REPORT["reverse_trials"])
+    print("cause identified ", ASYMMETRY_REPORT["cause_of_asymmetry_identified"])
+    print("boundary         ", ASYMMETRY_REPORT["claim_boundary"])
+    print("report", _asym_path)
+    print("checksum", ASYMMETRY_REPORT["report_checksum"])
+elif RUN_STAGE5C_ASYMMETRY_REPLICATION:
+    print("Stage 5C requested but blocked by the model or asymmetry budget.")
+'''
+)
+
+markdown(
+    r"""
+## 18. MOCK follow-up smoke run
+
+Runs in MOCK mode only. It exercises the follow-up grid, store, resume gate,
+freeze gate and every verdict branch without a model, a lens or a photograph.
+
+**A green MOCK run says nothing whatsoever about Gemma 4.** No number it prints
+may appear in a scientific report.
+"""
+)
+code(
+    r'''
+if not REAL_MODE:
+    from jlens.mmpilot.multimodal_followup import development_direction_record
+    from jlens.mmpilot.multimodal_followup_mock import (
+        SCENARIOS, run_mock_asymmetry_study, run_mock_localization,
+        run_mock_new_property_study,
+    )
+
+    MOCK_ROOT = RUNS_ROOT / "followup_mock"
+    MOCK_LOCALIZATION = run_mock_localization(MOCK_ROOT / "localization", n_photographs=2)
+    print("MOCK localization verdict     ", MOCK_LOCALIZATION["verdict"])
+    print("  label / confirmation        ", MOCK_LOCALIZATION["label"],
+          MOCK_LOCALIZATION["is_confirmation"])
+    print("  onset layer claimed         ",
+          MOCK_LOCALIZATION["claim_boundary"]["onset_layer_claimed"])
+
+    MOCK_FOLLOWUP = {}
+    for _scenario in SCENARIOS:
+        _result = run_mock_new_property_study(
+            MOCK_ROOT / _scenario, scenario=_scenario
+        )
+        MOCK_FOLLOWUP[_scenario] = {
+            "development": _result["development"]["verdict"],
+            "confirmation": (_result["confirmation"] or {}).get("verdict"),
+        }
+        print(f"MOCK {_scenario:<18}", MOCK_FOLLOWUP[_scenario])
+    assert len({row["development"] for row in MOCK_FOLLOWUP.values()}) == len(SCENARIOS)
+
+    MOCK_ASYMMETRY = run_mock_asymmetry_study(MOCK_ROOT / "asymmetry")["report"]
+    print("MOCK asymmetry verdict        ", MOCK_ASYMMETRY["verdict"])
+    print("MOCK development record       ",
+          development_direction_record()["accurate_statement"])
+    print("MOCK RESULTS ARE NOT SCIENTIFIC RESULTS.")
 '''
 )
 
