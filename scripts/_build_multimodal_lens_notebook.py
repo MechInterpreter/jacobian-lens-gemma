@@ -234,12 +234,26 @@ CONFIRM_ASYMMETRY_BUDGET = False
 # The completed Stage 3D confirmation, read only to spend its media. All 64
 # candidate photographs were opened during capability screening, so all 64 are
 # excluded from every later population — not only the 16 that were recruited.
-FRESH_CONFIRMATION_RUN_DIR = None
+FRESH_CONFIRMATION_RUN_DIR = (
+    "/content/drive/MyDrive/jacobian-lens-gemma/runs/"
+    "mmbroadconfirm/mmbroadconfirm_real_40e087ee1061"
+)
 EXPECTED_FRESH_CONFIRMATION_REPORT_CHECKSUM = (
     "sha256:2bb6dcc1346229573566125bc8d91c782247d55af5091f4215d98bb621472ff7"
 )
 FRESH_CONFIRMATION_CANDIDATES_OPENED = 64
 FRESH_CONFIRMATION_IMAGES_RECRUITED = 16
+
+# Extra prior-run reports to exclude from, beyond the ones this notebook knows
+# how to name and checksum-pin above. Fill this in with report JSON paths
+# before rerunning section 12 whenever a run outside the checksum-pinned set
+# opened media that must not be reused: an abandoned property family (e.g. a
+# failed body_covering run before trying the animal_sound fallback), or
+# Experiment B's opened photographs before running Experiment C in the same
+# session. Unlike the pinned loaders above, these paths are NOT
+# checksum-verified — they can only widen exclusion, never substitute for a
+# checksum-pinned population loader. See EXTRA_SPENT_REPORT_PATHS below.
+EXTRA_SPENT_REPORT_PATHS = ()
 
 # Experiment A. The band grid and its analysis rule live in
 # jlens.mmpilot.multimodal_followup.localization_grid() and are frozen there
@@ -2705,6 +2719,15 @@ would let a known answer leak into a later recruitment. That is why all 64
 candidates opened by the completed confirmation are excluded here and not just
 the 16 that were recruited from them.
 
+This cell knows how to name and checksum-pin three prior runs (the fit/eval
+split, the four-lens causal screen, and the broad development study) plus the
+completed confirmation. It does **not** automatically know about a run outside
+that set — an abandoned property family before a fallback, or Experiment B's
+opened media before Experiment C runs in the same session. For those, add the
+report path to `EXTRA_SPENT_REPORT_PATHS` and rerun this cell before opening
+the next population; that widening is unpinned (no checksum) and can only add
+exclusions, never remove ones already established.
+
 This cell loads nothing but JSON and never touches the model.
 """
 )
@@ -2712,9 +2735,11 @@ code(
     r'''
 EXCLUSION_UNIVERSE = None
 SPENT_CONFIRMATION = None
+EXTRA_SPENT = None
 if REAL_MODE and (RUN_ARTIFACT_EXCLUSION_AUDIT or any(FOLLOWUP_STAGES.values())):
     from jlens.mmpilot.multimodal_followup import (
-        exclusion_universe, load_spent_confirmation_population,
+        exclusion_universe, load_extra_spent_image_ids,
+        load_spent_confirmation_population,
     )
     from jlens.mmpilot.multimodal_lens import (
         load_broad_pooled_development_source, load_completed_causal_source,
@@ -2746,12 +2771,26 @@ if REAL_MODE and (RUN_ARTIFACT_EXCLUSION_AUDIT or any(FOLLOWUP_STAGES.values()))
         expected_causal_report_checksum=EXPECTED_SOURCE_CAUSAL_REPORT_CHECKSUM,
         expected_lens_checksums=EXPECTED_SOURCE_LENS_CHECKSUMS,
     )
+    # Unpinned, best-effort widening. Rerun this cell with a path added here
+    # any time a run outside the checksum-pinned set above opened media that
+    # must not be reused: an abandoned property family before trying its
+    # declared fallback, or Experiment B's opened media before Experiment C
+    # runs in the same session. This can only add exclusions, never remove
+    # ones the pinned loaders already established.
+    EXTRA_SPENT = (
+        load_extra_spent_image_ids(EXTRA_SPENT_REPORT_PATHS)
+        if EXTRA_SPENT_REPORT_PATHS else None
+    )
     EXCLUSION_UNIVERSE = exclusion_universe(
         fit_image_ids=[str(value) for value in PLAN["fit_image_ids"]],
         eval_image_ids=[str(value) for value in PLAN["eval_image_ids"]],
         prior_causal_image_ids=_prior_causal["excluded_image_ids"],
         broad_development_image_ids=_development_source["excluded_image_ids"],
         confirmation_candidate_image_ids=SPENT_CONFIRMATION["candidate_image_ids"],
+        extra_image_ids=(
+            {"manually_declared_extra_runs": EXTRA_SPENT["image_ids"]}
+            if EXTRA_SPENT else None
+        ),
     )
     print("=" * 78)
     print("ARTIFACT AND EXCLUSION AUDIT (read-only)")
@@ -2763,6 +2802,11 @@ if REAL_MODE and (RUN_ARTIFACT_EXCLUSION_AUDIT or any(FOLLOWUP_STAGES.values()))
     print("  all candidates treated spent ", SPENT_CONFIRMATION["all_candidates_spent"])
     for _source, _count in EXCLUSION_UNIVERSE["counts_by_source"].items():
         print(f"  excluded from {_source:<34} {_count}")
+    if EXTRA_SPENT is not None:
+        print("  extra unpinned reports        ", len(EXTRA_SPENT_REPORT_PATHS))
+        print("  extra image ids (unverified)  ", EXTRA_SPENT["n_image_ids"])
+    else:
+        print("  EXTRA_SPENT_REPORT_PATHS is empty — no manual widening applied")
     print("TOTAL EXCLUDED IDENTITIES      ", EXCLUSION_UNIVERSE["n_excluded"])
     print("exclusion digest               ", EXCLUSION_UNIVERSE["exclusion_digest"])
     print("existing reports are immutable evidence and are never rewritten here")

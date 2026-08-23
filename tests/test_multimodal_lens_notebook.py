@@ -150,6 +150,8 @@ def test_notebook_contains_the_followup_stage_contract() -> None:
         "RUN_STAGE5C_ASYMMETRY_REPLICATION",
         "RUN_ARTIFACT_EXCLUSION_AUDIT",
         "load_spent_confirmation_population",
+        "load_extra_spent_image_ids",
+        "EXTRA_SPENT_REPORT_PATHS",
         "sha256:2bb6dcc1346229573566125bc8d91c782247d55af5091f4215d98bb621472ff7",
         "FRESH_CONFIRMATION_CANDIDATES_OPENED = 64",
         "FRESH_CONFIRMATION_IMAGES_RECRUITED = 16",

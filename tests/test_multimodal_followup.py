@@ -28,6 +28,7 @@ from jlens.mmpilot.multimodal_followup import (
     followup_budget,
     freeze_new_property_design,
     leg_count_property_limit,
+    load_extra_spent_image_ids,
     localization_budget,
     localization_claim_boundary,
     localization_grid,
@@ -264,6 +265,48 @@ def test_all_64_confirmation_candidate_images_are_excluded() -> None:
     assert audit["disjoint"] is True
     assert audit["read_only"] is True
     assert audit["n_excluded_identities"] == 64
+
+
+def test_extra_spent_report_paths_widen_exclusion_across_runs(tmp_path: Path) -> None:
+    # a run this module has no dedicated loader for (e.g. an abandoned
+    # property family) still leaks its opened photographs into the universe
+    abandoned = tmp_path / "abandoned_animal_sound_report.json"
+    abandoned.write_text(
+        json.dumps(
+            {
+                "rows": [
+                    {"group_id": "g1", "image_id": "abandoned-i001"},
+                    {"group_id": "g2", "image_id": "abandoned-i002"},
+                ],
+                "capability_rows": [{"image_id": "abandoned-i003"}],
+                "unrelated_field": {"nested": {"image_id": "abandoned-i004"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    extra = load_extra_spent_image_ids([abandoned])
+    assert extra["checksum_verified"] is False
+    assert set(extra["image_ids"]) == {
+        "abandoned-i001",
+        "abandoned-i002",
+        "abandoned-i003",
+        "abandoned-i004",
+    }
+    assert extra["image_ids_by_report"][str(abandoned)] == sorted(extra["image_ids"])
+
+    universe = exclusion_universe(
+        extra_image_ids={"manually_declared_extra_runs": extra["image_ids"]}
+    )
+    assert "abandoned-i002" in universe["excluded_image_ids"]
+    with pytest.raises(MultimodalFollowupRefused, match="reuses spent photographs"):
+        artifact_exclusion_audit(
+            [{"group_id": "g", "image_id": "abandoned-i002"}],
+            universe=universe,
+            label="fallback_family",
+        )
+
+    with pytest.raises(MultimodalFollowupRefused, match="not found"):
+        load_extra_spent_image_ids([tmp_path / "does_not_exist.json"])
 
 
 def test_development_and_confirmation_populations_are_disjoint(tmp_path: Path) -> None:

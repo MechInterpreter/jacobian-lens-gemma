@@ -1073,6 +1073,71 @@ def assert_open_endpoint(config: Mapping) -> None:
         )
 
 
+def _collect_image_ids(node: object) -> set[str]:
+    """Recursively pull every ``image_id`` value out of an arbitrary report."""
+
+    found: set[str] = set()
+    if isinstance(node, Mapping):
+        value = node.get("image_id")
+        if isinstance(value, (str, int)) and str(value).strip():
+            found.add(str(value))
+        for child in node.values():
+            found |= _collect_image_ids(child)
+    elif isinstance(node, (list, tuple)):
+        for item in node:
+            found |= _collect_image_ids(item)
+    return found
+
+
+def load_extra_spent_image_ids(report_paths: Sequence[str | Path]) -> dict:
+    """Best-effort, unpinned union of every ``image_id`` in arbitrary reports.
+
+    The checksum-pinned loaders above (:func:`load_broad_pooled_development_source`,
+    :func:`load_spent_confirmation_population`) are the only trustworthy source
+    of *disjointness proof* for a population: an edited or truncated artifact
+    fails their checksum and is refused. This function has no such guarantee —
+    it exists only to let a run manually widen exclusion across artifacts this
+    module does not know how to name and checksum-pin: an abandoned property
+    family before trying the declared fallback, or Experiment B's opened media
+    before Experiment C runs in the same session.
+
+    Because it is unverified, this function can only ever be used to make a
+    population **more** exclusive. It must never be treated as sufficient
+    disjointness proof on its own, and a caller that wants a checksum-backed
+    guarantee should use the pinned loaders instead.
+    """
+
+    ids_by_report: dict[str, list[str]] = {}
+    union: set[str] = set()
+    for raw_path in report_paths:
+        path = Path(raw_path)
+        if not path.is_file():
+            raise MultimodalFollowupRefused(f"extra spent report not found: {path}")
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise MultimodalFollowupRefused(
+                f"could not read extra spent report: {path}"
+            ) from exc
+        found = _collect_image_ids(payload)
+        ids_by_report[str(path)] = sorted(found)
+        union |= found
+    payload = {
+        "version": EXCLUSION_AUDIT_VERSION,
+        "report_paths": [str(path) for path in report_paths],
+        "image_ids_by_report": ids_by_report,
+        "image_ids": sorted(union),
+        "n_image_ids": len(union),
+        "checksum_verified": False,
+        "boundary": (
+            "unpinned best-effort union of image_id fields found in the given "
+            "reports; widens exclusion only and never substitutes for a "
+            "checksum-pinned population loader"
+        ),
+    }
+    return {**payload, "digest": payload_checksum(payload)}
+
+
 def exclusion_universe(
     *,
     fit_image_ids: Sequence[str] = (),
@@ -1958,6 +2023,7 @@ __all__ = [
     "freeze_new_property_design",
     "generation_trial_row",
     "leg_count_property_limit",
+    "load_extra_spent_image_ids",
     "load_localization_population",
     "load_spent_confirmation_population",
     "load_verified_report",
