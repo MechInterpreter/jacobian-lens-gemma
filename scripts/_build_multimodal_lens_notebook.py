@@ -4581,7 +4581,8 @@ if REAL_MODE and (AUDIO_LINKAGE_AUDIT_ENABLED or CORRECTED_EXPLORATORY_ENABLED):
             )
         from jlens.lens import JacobianLens
         from jlens.mmpilot.coordinate_swap import (
-            random_two_direction_basis, resolve_concept_token,
+            ANSWER_READOUT_FIRST_TOKEN, random_two_direction_basis,
+            resolve_answer_readout_token, resolve_concept_token,
         )
         from jlens.mmpilot.multimodal_followup import (
             corrected_exploratory_verdict, direct_answer_trial_row,
@@ -4617,30 +4618,34 @@ if REAL_MODE and (AUDIO_LINKAGE_AUDIT_ENABLED or CORRECTED_EXPLORATORY_ENABLED):
             expected_direction=CONFIRMATION_DIRECTION,
         )
         _property = PROPERTY_FAMILIES["animal_sound"]
-        # Resolve the direct-answer tokens *before* anything is spent. A
-        # multi-token answer would leave the corrected rerun without its
-        # positive control, which is the one thing this rerun exists to add;
-        # failing here costs nothing, failing after 240 generations costs the
-        # whole session.
+        # Resolve the direct-answer tokens *before* anything is spent.
+        #
+        # This is the answer *surface* ("meow"), never a swap concept, so it is
+        # resolved through resolve_answer_readout_token rather than
+        # resolve_concept_token: the swap's single-token requirement exists
+        # because a multi-token concept has no well-defined two-coordinate
+        # subspace, which is not what the direct-answer control is building. A
+        # multi-token answer falls back to its first token -- the same
+        # FIRST-TOKEN-ONLY convention jlens.mmpilot.convergence already uses
+        # for readout scoring, labelled the same way -- and the fallback is
+        # recorded on every artifact rather than hidden. cat/cow themselves
+        # (the swap concepts) still go through resolve_concept_token below and
+        # still refuse outright if either is ever multi-token.
         _answer_tokens = {}
+        _answer_token_resolution = {}
         for _src, _tgt in RECRUITED_EXPLORATORY_DIRECTIONS:
             _answer = _property.answer_for(_tgt).answer
-            try:
-                _answer_tokens[_tgt] = resolve_concept_token(
-                    BACKEND.encode_candidate, _answer
+            _answer_tokens[_tgt] = resolve_answer_readout_token(
+                BACKEND.encode_candidate, _answer
+            )
+            _answer_token_resolution[_tgt] = _answer_tokens[_tgt].to_dict()
+            if _answer_tokens[_tgt].variant.startswith("first:"):
+                print(
+                    f"direct-answer control for {_tgt!r} ({_answer!r}) is not "
+                    "single-token under this tokenizer; using its first token "
+                    f"{_answer_tokens[_tgt].token_id} "
+                    f"({ANSWER_READOUT_FIRST_TOKEN})"
                 )
-            except Exception as _exc:
-                raise RuntimeError(
-                    "Stage 5B1RC declares a norm-matched direct-answer positive "
-                    f"control on the answer token {_answer!r}, and this "
-                    "tokenizer does not give it a single vocabulary row: "
-                    f"{_exc}\n"
-                    "Nothing has been spent. Do not run the exchange without "
-                    "the control -- a failed exchange would then be exactly as "
-                    "unreadable as the run this stage exists to replace. The "
-                    "control's construction has to be refrozen for multi-token "
-                    "answers before this stage runs."
-                ) from _exc
         _rescue_config = {
             "study": "multimodal_new_property_recruited_exploratory_corrected.v2",
             "supersedes_report_checksum": EXPECTED_RECRUITED_EXPLORATORY_REPORT_CHECKSUM,
@@ -4679,6 +4684,14 @@ if REAL_MODE and (AUDIO_LINKAGE_AUDIT_ENABLED or CORRECTED_EXPLORATORY_ENABLED):
                     concept: token.token_id
                     for concept, token in sorted(_answer_tokens.items())
                 },
+                # A multi-token answer surface falls back to its first token
+                # rather than refusing, unlike the swap concepts. Recorded per
+                # concept so every artifact states whether an exact answer
+                # token or a first-token diagnostic backs its control.
+                "answer_token_resolution": dict(sorted(
+                    _answer_token_resolution.items()
+                )),
+                "first_token_fallback_label": ANSWER_READOUT_FIRST_TOKEN,
                 "alpha": 1.0,
                 "can_produce_a_go": False,
                 "rule_frozen_before_outcomes": True,
@@ -4863,6 +4876,7 @@ if REAL_MODE and (AUDIO_LINKAGE_AUDIT_ENABLED or CORRECTED_EXPLORATORY_ENABLED):
               CORRECTED_EXPLORATORY_REPORT["verdict"])
         print("=" * 96)
         print("eligible clean-capable groups", _recruitment["eligible_counts"])
+        print("answer token resolution      ", _answer_token_resolution)
         print("instrument state             ",
               CORRECTED_EXPLORATORY_REPORT["instrument_state"])
         print("passing directions           ",

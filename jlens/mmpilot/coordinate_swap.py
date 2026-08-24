@@ -396,6 +396,67 @@ def resolve_concept_token(
     )
 
 
+#: Matches :data:`jlens.mmpilot.convergence.READOUT_FIRST_TOKEN`: the same
+#: honest label for the same situation, so a report reader who knows one
+#: recognizes the other.
+ANSWER_READOUT_FIRST_TOKEN = "first_token_only_diagnostic"
+
+
+def resolve_answer_readout_token(
+    encode: Callable[[str], Sequence[int]],
+    answer: str,
+    *,
+    variants: Sequence[str] = DEFAULT_TOKEN_VARIANTS,
+) -> ConceptToken:
+    """Resolve ``answer`` to the token a readout direction is built from.
+
+    This is **not** :func:`resolve_concept_token` and must never replace it for
+    a swap concept. That function's single-token requirement exists because a
+    multi-token concept has no well-defined two-coordinate subspace — using a
+    prefix would swap a *different* concept ("straw" for "strawberry").
+
+    A downstream **answer** surface (the direct-answer positive control's
+    target, e.g. ``"meow"``) is not a swap concept: no subspace is built from
+    it, and the greedy generation this control is scored against must itself
+    emit the answer's first token before any later token matters. Falling back
+    to that first token when the surface is not single-token is the same
+    honest choice :func:`jlens.mmpilot.convergence.candidate_tokenization`
+    already makes for readout scoring, labelled the same way, and it is
+    recorded on the returned token via ``variant`` starting with ``"first:"``
+    so every downstream artifact can tell an exact match from a first-token
+    fallback.
+
+    Args:
+        encode: Same contract as :func:`resolve_concept_token`.
+        answer: The answer surface, e.g. ``"meow"``.
+        variants: Tried in order; the first variant that encodes to at least
+            one token wins, taking only its leading token if there is more
+            than one.
+
+    Raises:
+        CoordinateSwapError: If no variant encodes to at least one token.
+    """
+    for variant in variants:
+        text = variant.format(answer)
+        ids = [int(i) for i in encode(text)]
+        if not ids:
+            continue
+        if len(ids) == 1:
+            return ConceptToken(
+                concept=answer, token_id=ids[0], token_text=text, variant=variant
+            )
+        return ConceptToken(
+            concept=answer,
+            token_id=ids[0],
+            token_text=text,
+            variant=f"first:{variant}",
+        )
+    raise CoordinateSwapError(
+        f"answer {answer!r} encodes to zero tokens under every variant "
+        f"{list(variants)}; no readout direction can be built from it"
+    )
+
+
 # ------------------------------------------------------------ stability policy
 
 

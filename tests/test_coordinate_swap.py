@@ -51,6 +51,7 @@ from jlens.mmpilot.coordinate_swap import (
     orthogonal_residual,
     random_two_direction_basis,
     read_coordinates,
+    resolve_answer_readout_token,
     resolve_concept_token,
     resolve_positions,
     reverse_basis,
@@ -379,6 +380,41 @@ def test_concept_resolution_prefers_the_leading_space_variant(backend):
     assert token.token_id == BIRD_ID
     assert token.token_text == " bird"
     assert token.variant == " {}"
+
+
+def test_answer_readout_falls_back_to_the_first_token_instead_of_refusing():
+    """The direct-answer control's answer surface, not a swap concept.
+
+    ``resolve_concept_token`` refuses ``"meow"`` outright when it is
+    multi-token, because a prefix would define the wrong swap subspace.
+    ``resolve_answer_readout_token`` is for the positive control's readout
+    direction, where no subspace is built and the greedy generation must
+    itself emit the answer's first token regardless. It falls back rather
+    than refusing, and it records the fallback on the returned token.
+    """
+
+    def encode(text: str) -> list[int]:
+        return {" meow": [786, 572], "meow": [1336, 572], " moo": [900]}[text]
+
+    with pytest.raises(MultiTokenConceptError):
+        resolve_concept_token(encode, "meow")
+
+    fallback = resolve_answer_readout_token(encode, "meow")
+    assert fallback.token_id == 786  # the leading-space variant's first token
+    assert fallback.variant == "first: {}"
+    assert fallback.concept == "meow"
+
+    exact = resolve_answer_readout_token(encode, "moo")
+    assert exact.token_id == 900
+    assert exact.variant == " {}"  # unchanged: no fallback marker on a match
+
+
+def test_answer_readout_refuses_only_when_every_variant_is_empty():
+    def encode(text: str) -> list[int]:
+        return []
+
+    with pytest.raises(CoordinateSwapError, match="zero tokens"):
+        resolve_answer_readout_token(encode, "silence")
 
 
 # ------------------------------------------------------ 3. source/target roles
