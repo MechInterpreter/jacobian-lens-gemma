@@ -65,6 +65,7 @@ from jlens.mmpilot.store import payload_checksum
 FOLLOWUP_VERSION = "mmpilot.multimodal_followup.v1"
 LOCALIZATION_VERSION = "mmpilot.multimodal_band_localization_exploratory.v1"
 PROPERTY_AUDIT_VERSION = "mmpilot.multimodal_property_audit.v1"
+PROPERTY_PROMPT_SCREEN_VERSION = "mmpilot.multimodal_property_prompt_screen.v1"
 NEW_PROPERTY_DEVELOPMENT_VERSION = "mmpilot.multimodal_new_property_development.v1"
 NEW_PROPERTY_FREEZE_VERSION = "mmpilot.multimodal_new_property_frozen_design.v1"
 NEW_PROPERTY_CONFIRMATION_VERSION = "mmpilot.multimodal_new_property_confirmation.v1"
@@ -85,6 +86,76 @@ POOLED_ONLY_BAND_NOTE = (
 #: The three controls. A study that drops one is refused, not downgraded.
 CONTROL_CONDITIONS: tuple[str, ...] = ("zero", "random", "unrelated")
 REQUIRED_CONDITIONS: tuple[str, ...] = ("exact", *CONTROL_CONDITIONS)
+
+# Prompt development is deliberately isolated from causal development.  These
+# alternatives were declared after the first animal-sound capability audit
+# failed, so the resulting screen is outcome-informed development evidence.
+# It may choose a prompt, but it may not support a causal claim.  A chosen
+# prompt must clear the unchanged clean-capability gate again on a fresh
+# population before any coordinate exchange runs.
+ANIMAL_SOUND_PROMPT_CANDIDATES: tuple[dict, ...] = (
+    {
+        "prompt_id": "baseline_v1",
+        "rationale": "the original capability-audit wording",
+        "templates": {
+            "text": (
+                "Caption: {caption}\nWhat sound does the animal in the evidence "
+                "make? Answer with one word.\nAnswer:"
+            ),
+            "image": (
+                "What sound does the animal in the evidence make? Answer with "
+                "one word.\nAnswer:"
+            ),
+            "spoken_audio": (
+                "What sound does the animal in the evidence make? Answer with "
+                "one word.\nAnswer:"
+            ),
+        },
+    },
+    {
+        "prompt_id": "identity_explicit_v1",
+        "rationale": (
+            "clarifies that the evidence identifies an animal and the requested "
+            "sound is typical of that kind of animal; it supplies neither the "
+            "identity nor the answer"
+        ),
+        "templates": {
+            "text": (
+                "Use this caption to identify the animal: {caption}\nWhat sound "
+                "does that kind of animal typically make? Reply with only the "
+                "sound word.\nAnswer:"
+            ),
+            "image": (
+                "Identify the animal in the image. What sound does that kind of "
+                "animal typically make? Reply with only the sound word.\nAnswer:"
+            ),
+            "spoken_audio": (
+                "Use the spoken caption to identify the animal. What sound does "
+                "that kind of animal typically make? Reply with only the sound "
+                "word.\nAnswer:"
+            ),
+        },
+    },
+    {
+        "prompt_id": "knowledge_cloze_v1",
+        "rationale": (
+            "states the same identity-conditioned recall task as a short cloze, "
+            "reducing meta-answers about whether a literal sound was supplied"
+        ),
+        "templates": {
+            "text": (
+                "Caption: {caption}\nThe typical sound made by this kind of "
+                "animal is"
+            ),
+            "image": "The typical sound made by the animal shown is",
+            "spoken_audio": (
+                "The typical sound made by the animal described in the spoken "
+                "caption is"
+            ),
+        },
+    },
+)
+PROPERTY_PROMPT_SCREEN_CONCEPTS: tuple[str, ...] = ("cat", "cow")
 
 
 class MultimodalFollowupRefused(RuntimeError):
@@ -1030,6 +1101,163 @@ PROPERTY_FAMILIES: dict[str, PropertyFamily] = {
 }
 
 
+def property_prompt_candidate(prompt_id: str) -> dict:
+    """Return one declared animal-sound prompt candidate by stable ID."""
+
+    for row in ANIMAL_SOUND_PROMPT_CANDIDATES:
+        if row["prompt_id"] == str(prompt_id):
+            return {
+                **row,
+                "templates": dict(row["templates"]),
+            }
+    raise MultimodalFollowupRefused(
+        f"unknown animal-sound prompt {prompt_id!r}; declared IDs are "
+        f"{[row['prompt_id'] for row in ANIMAL_SOUND_PROMPT_CANDIDATES]}"
+    )
+
+
+def property_prompt(prompt_id: str, modality: str, caption: str = "") -> str:
+    """Render one declared prompt without exposing another modality's data."""
+
+    if modality not in MODALITIES:
+        raise MultimodalFollowupRefused(f"unknown modality {modality!r}")
+    candidate = property_prompt_candidate(prompt_id)
+    template = str(candidate["templates"][modality])
+    if modality != "text" and "{caption}" in template:
+        raise MultimodalFollowupRefused(
+            f"prompt {prompt_id!r} leaks the caption into {modality}"
+        )
+    return template.format(caption=str(caption))
+
+
+def property_prompt_screen_verdict(
+    rows: Sequence[Mapping],
+    *,
+    expected_per_cell: int,
+    min_clean_capability_rate: float = 0.75,
+    concepts: Sequence[str] = PROPERTY_PROMPT_SCREEN_CONCEPTS,
+    modalities: Sequence[str] = MODALITIES,
+) -> dict:
+    """Select a capability prompt without consulting a causal outcome.
+
+    The screen is deliberately development-only.  It may choose the prompt
+    with the best worst-cell capability among candidates that clear the frozen
+    threshold everywhere.  Ties use mean capability and then declaration
+    order.  The chosen prompt must still pass a fresh capability gate before a
+    coordinate exchange is allowed to run.
+    """
+
+    if int(expected_per_cell) <= 0:
+        raise MultimodalFollowupRefused("expected_per_cell must be positive")
+    declared = [row["prompt_id"] for row in ANIMAL_SOUND_PROMPT_CANDIDATES]
+    expected_keys = {
+        (prompt_id, concept, modality)
+        for prompt_id in declared
+        for concept in concepts
+        for modality in modalities
+    }
+    grouped: dict[tuple[str, str, str], list[Mapping]] = {
+        key: [] for key in expected_keys
+    }
+    seen_units: set[tuple[str, str, str, str]] = set()
+    for row in rows:
+        key = (
+            str(row.get("prompt_id")),
+            str(row.get("concept")),
+            str(row.get("modality")),
+        )
+        if key not in grouped:
+            raise MultimodalFollowupRefused(
+                f"undeclared prompt-screen cell {key}; the screen cannot widen "
+                "after outputs are observed"
+            )
+        unit = (*key, str(row.get("group_id")))
+        if unit in seen_units:
+            raise MultimodalFollowupRefused(f"duplicate prompt-screen unit {unit}")
+        seen_units.add(unit)
+        grouped[key].append(row)
+
+    incomplete = {
+        "/".join(key): len(cell)
+        for key, cell in grouped.items()
+        if len(cell) != int(expected_per_cell)
+    }
+    if incomplete:
+        raise MultimodalFollowupRefused(
+            f"prompt screen is incomplete; expected {expected_per_cell} per "
+            f"cell, got {incomplete}"
+        )
+
+    candidates = []
+    for priority, prompt_id in enumerate(declared):
+        rates = {
+            concept: {
+                modality: sum(
+                    bool(row.get("pass"))
+                    for row in grouped[(prompt_id, concept, modality)]
+                ) / int(expected_per_cell)
+                for modality in modalities
+            }
+            for concept in concepts
+        }
+        flat = [rates[c][m] for c in concepts for m in modalities]
+        candidates.append(
+            {
+                **property_prompt_candidate(prompt_id),
+                "rates": rates,
+                "minimum_cell_rate": min(flat),
+                "mean_cell_rate": sum(flat) / len(flat),
+                "passes_every_cell": all(
+                    rate >= float(min_clean_capability_rate) for rate in flat
+                ),
+                "declaration_priority": priority,
+            }
+        )
+
+    passing = [row for row in candidates if row["passes_every_cell"]]
+    selected = (
+        sorted(
+            passing,
+            key=lambda row: (
+                -float(row["minimum_cell_rate"]),
+                -float(row["mean_cell_rate"]),
+                int(row["declaration_priority"]),
+            ),
+        )[0]
+        if passing
+        else None
+    )
+    payload = {
+        "version": PROPERTY_PROMPT_SCREEN_VERSION,
+        "property_family": "animal_sound",
+        "concepts": list(concepts),
+        "modalities": list(modalities),
+        "expected_per_cell": int(expected_per_cell),
+        "min_clean_capability_rate": float(min_clean_capability_rate),
+        "candidates": candidates,
+        "selection_rule": (
+            "among prompts passing the unchanged threshold in every declared "
+            "concept-by-modality cell, maximize the minimum cell rate, then "
+            "mean cell rate, then use declaration order"
+        ),
+        "selected_prompt_id": selected["prompt_id"] if selected else None,
+        "selected_prompt": selected,
+        "verdict": "PROPERTY_PROMPT_SCREEN_GO" if selected else "PROPERTY_PROMPT_SCREEN_NO_GO",
+        "outcome_informed_development": True,
+        "causal_outcomes_used_for_selection": False,
+        "lens_fitted": False,
+        "backward_passes": 0,
+        "fresh_capability_revalidation_required": True,
+        "causal_spending_licensed": False,
+        "claim_boundary": (
+            "this screen chooses wording on already-spent development media; "
+            "it is not a causal result and cannot open confirmation"
+        ),
+        "rows": [dict(row) for row in rows],
+    }
+    return {**payload, "report_checksum": payload_checksum(payload)}
+
+
 def property_answer_matches(generated: str, answer: PropertyAnswer | Mapping) -> bool:
     """Score an unrestricted complete generation against one predeclared answer.
 
@@ -1838,8 +2066,12 @@ def freeze_new_property_design(
         "version": NEW_PROPERTY_FREEZE_VERSION,
         "frozen_before_fresh_population_opened": True,
         "property_family": spec.name,
-        "prompt": spec.question,
+        "prompt_id": audit.get("prompt_id", "baseline_v1"),
+        "prompt": audit.get("question", spec.question),
         "prompt_by_modality": dict(audit["prompt_by_modality"]),
+        "prompt_screen_report_checksum": audit.get(
+            "prompt_screen_report_checksum"
+        ),
         "max_new_tokens": int(spec.max_new_tokens),
         "answer_normalization": audit["answer_normalization"],
         "answer_aliases": {
@@ -2226,6 +2458,14 @@ def stage_map() -> dict:
                 "confirms": False,
             },
             {
+                "stage": "B00",
+                "name": "animal-sound prompt screen",
+                "population": "already-spent B0 development media",
+                "label": "outcome-informed prompt development",
+                "fits": 0,
+                "confirms": False,
+            },
+            {
                 "stage": "B0",
                 "name": "property and prompt audit",
                 "population": "fresh candidates, clean model only",
@@ -2278,6 +2518,7 @@ def stage_map() -> dict:
 
 
 __all__ = [
+    "ANIMAL_SOUND_PROMPT_CANDIDATES",
     "ASYMMETRY_VERSION",
     "CONTROL_CONDITIONS",
     "EXCLUSION_AUDIT_VERSION",
@@ -2292,6 +2533,8 @@ __all__ = [
     "ORIGINAL_DEVELOPMENT_DIRECTIONS",
     "POOLED_ONLY_BAND_NOTE",
     "PROPERTY_AUDIT_VERSION",
+    "PROPERTY_PROMPT_SCREEN_CONCEPTS",
+    "PROPERTY_PROMPT_SCREEN_VERSION",
     "PROPERTY_FAMILIES",
     "PropertyAnswer",
     "PropertyFamily",
@@ -2325,6 +2568,9 @@ __all__ = [
     "localization_claim_boundary",
     "localization_grid",
     "new_property_development_verdict",
+    "property_prompt",
+    "property_prompt_candidate",
+    "property_prompt_screen_verdict",
     "resolve_dominant_answer",
     "stage_map",
     "summarize_localization",

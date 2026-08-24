@@ -132,6 +132,26 @@ complete generation, scored after the fact against the declared alias set;
 single-token answers are not required, and no candidate list or teacher forcing
 exists anywhere.
 
+### What the fixed-code animal-sound audit found
+
+The completed clean-capability audit returned `PROPERTY_AUDIT_NO_GO` before any
+coordinate exchange. Cat passed image and spoken audio but scored 29/48 in
+text. Cow passed text and image but scored 34/48 in spoken audio. The unchanged
+75% gate requires 36/48 in every cell, so no cat/cow direction was tested.
+Dog was weaker and bird did not have one stable answer across modalities.
+
+Many failures were meta-answers such as "the provided text is a caption" or
+"no sound is provided". The model sometimes read the question as asking
+whether the evidence literally contained a sound, rather than identifying the
+animal and recalling its typical sound. Stage **B00** therefore performs a
+bounded prompt-development screen on the already-spent cat/cow population. It
+imports the original completions by checksum and computes only two alternatives
+declared in code: an explicit identity-first question and a short knowledge
+cloze. A prompt must clear the same 75% threshold in all six cells. Selection
+uses clean capability only, never a causal outcome. A winner still has to pass
+capability again on fresh development media before B1 may spend a causal
+forward; B00 itself licenses no scientific claim or confirmation.
+
 **B1 development** runs the alpha=1 exchange over L16-L40 with zero, random and
 unrelated controls on fresh media disjoint from every prior population. A NO_GO
 closes confirmation. A control failure gets its own verdict

@@ -143,6 +143,7 @@ def test_notebook_contains_the_followup_stage_contract() -> None:
     source = _source()
     for required in (
         "RUN_STAGE5A_BAND_LOCALIZATION",
+        "RUN_STAGE5B00_PROPERTY_PROMPT_SCREEN",
         "RUN_STAGE5B0_PROPERTY_AUDIT",
         "RUN_STAGE5B1_NEW_PROPERTY_DEVELOPMENT",
         "RUN_STAGE5B2_FREEZE_NEW_PROPERTY_DESIGN",
@@ -169,6 +170,12 @@ def test_notebook_contains_the_followup_stage_contract() -> None:
         "generation_trial_row",
         "unrestricted_greedy_swap_trial",
         "NEW_PROPERTY_FAMILY = \"animal_sound\"",
+        "NEW_PROPERTY_PROMPT_ID = \"baseline_v1\"",
+        "property_prompt_screen_verdict",
+        "EXPECTED_PROPERTY_PROMPT_SCREEN_SOURCE_FILE_SHA256",
+        "EXPECTED_NEW_PROPERTY_PROMPT_SCREEN_CHECKSUM",
+        '"causal_outcomes_used_for_selection": False',
+        '"causal_spending_licensed"',
         "DOMINANT_ANSWER_RULE",
         "observed_completions=_completions_by_concept",
         "perceptually_available",

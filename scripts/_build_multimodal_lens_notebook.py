@@ -219,6 +219,7 @@ CONFIRMATION_SEED = "broad-pooled-j-fresh-confirmation-20260822-v1"
 # and spoken-audio-only lenses cover L33-L40, so no four-arm L16-L40 comparison
 # exists here and none is claimed.
 RUN_STAGE5A_BAND_LOCALIZATION = False
+RUN_STAGE5B00_PROPERTY_PROMPT_SCREEN = False
 RUN_STAGE5B0_PROPERTY_AUDIT = False
 RUN_STAGE5B1_NEW_PROPERTY_DEVELOPMENT = False
 RUN_STAGE5B2_FREEZE_NEW_PROPERTY_DESIGN = False
@@ -227,6 +228,7 @@ RUN_STAGE5C_ASYMMETRY_REPLICATION = False
 RUN_ARTIFACT_EXCLUSION_AUDIT = False
 
 CONFIRM_LOCALIZATION_BUDGET = False
+CONFIRM_PROPERTY_PROMPT_SCREEN_BUDGET = False
 CONFIRM_NEW_PROPERTY_DEVELOPMENT_BUDGET = False
 CONFIRM_NEW_PROPERTY_CONFIRMATION_BUDGET = False
 CONFIRM_ASYMMETRY_BUDGET = False
@@ -259,6 +261,11 @@ EXTRA_SPENT_REPORT_PATHS = (
     # in the animal_sound population.
     "/content/drive/MyDrive/jacobian-lens-gemma/runs/mmnewproperty/"
     "mmnewpropertydev_real_baad443fdc39/new_property_audit_report.json",
+    # The fixed-code animal_sound audit opened 48 photographs for each of
+    # bird/cat/cow/dog. Stage 5B00 may reuse cat/cow for prompt development,
+    # but every later capability or causal population must exclude all 192.
+    "/content/drive/MyDrive/jacobian-lens-gemma/runs/mmnewproperty/"
+    "mmnewpropertydev_real_bd1b87fe613b/new_property_audit_report.json",
 )
 
 # Experiment A. The band grid and its analysis rule live in
@@ -289,6 +296,23 @@ LOCALIZATION_ALPHA = 1.0
 # fixed before the data is opened, and bird is refused if it is not.
 NEW_PROPERTY_FAMILY = "animal_sound"
 NEW_PROPERTY_FALLBACK_FAMILY = None
+# Stage 5B00 may select a different declared prompt on already-spent media.
+# Keep baseline_v1 until that screen reports GO. A non-baseline value is
+# refused below unless its screen report and checksum are pinned.
+NEW_PROPERTY_PROMPT_ID = "baseline_v1"
+NEW_PROPERTY_PROMPT_SCREEN_RUN_DIR = None
+EXPECTED_NEW_PROPERTY_PROMPT_SCREEN_CHECKSUM = None
+PROPERTY_PROMPT_SCREEN_SOURCE_RUN_DIR = (
+    "/content/drive/MyDrive/jacobian-lens-gemma/runs/mmnewproperty/"
+    "mmnewpropertydev_real_bd1b87fe613b"
+)
+EXPECTED_PROPERTY_PROMPT_SCREEN_SOURCE_FILE_SHA256 = (
+    "sha256:46f32a7d99a226d4eb75638d2bea6c9f3273178dc1a7d82f89993525bfd4e2ac"
+)
+EXPECTED_PROPERTY_PROMPT_SCREEN_SOURCE_AUDIT_DIGEST = (
+    "sha256:f0341821643aec918525617d50659ad04b35aecd9ace3bc9dcc08dde9a0c565c"
+)
+PROPERTY_PROMPT_SCREEN_CONCEPTS = ("cat", "cow")
 NEW_PROPERTY_CONCEPTS = ("bird", "cat", "cow", "dog")
 NEW_PROPERTY_DEV_DIRECTIONS = (
     ("cat", "cow"), ("cow", "cat"),
@@ -388,6 +412,7 @@ if RUN_STAGE3C_BROAD_POOLED_WORKSPACE and RUN_STAGE3D_FRESH_MULTIMODAL_CONFIRMAT
     raise RuntimeError("Run Stage 3C development or Stage 3D confirmation, never both")
 FOLLOWUP_STAGES = {
     "5A_band_localization": RUN_STAGE5A_BAND_LOCALIZATION,
+    "5B00_property_prompt_screen": RUN_STAGE5B00_PROPERTY_PROMPT_SCREEN,
     "5B0_property_audit": RUN_STAGE5B0_PROPERTY_AUDIT,
     "5B1_new_property_development": RUN_STAGE5B1_NEW_PROPERTY_DEVELOPMENT,
     "5B2_freeze": RUN_STAGE5B2_FREEZE_NEW_PROPERTY_DESIGN,
@@ -414,6 +439,7 @@ MODEL_STAGE = any((
     RUN_STAGE3C_BROAD_POOLED_WORKSPACE,
     RUN_STAGE3D_FRESH_MULTIMODAL_CONFIRMATION,
     RUN_STAGE5A_BAND_LOCALIZATION,
+    RUN_STAGE5B00_PROPERTY_PROMPT_SCREEN,
     RUN_STAGE5B0_PROPERTY_AUDIT,
     RUN_STAGE5B1_NEW_PROPERTY_DEVELOPMENT,
     RUN_STAGE5B3_NEW_PROPERTY_CONFIRMATION,
@@ -454,6 +480,10 @@ LOCALIZATION_ENABLED = bool(
     RUN_STAGE5A_BAND_LOCALIZATION and MODEL_ENABLED and CONFIRM_LOCALIZATION_BUDGET
 )
 PROPERTY_AUDIT_ENABLED = bool(RUN_STAGE5B0_PROPERTY_AUDIT and MODEL_ENABLED)
+PROPERTY_PROMPT_SCREEN_ENABLED = bool(
+    RUN_STAGE5B00_PROPERTY_PROMPT_SCREEN and MODEL_ENABLED
+    and CONFIRM_PROPERTY_PROMPT_SCREEN_BUDGET
+)
 NEW_PROPERTY_DEV_ENABLED = bool(
     RUN_STAGE5B1_NEW_PROPERTY_DEVELOPMENT and MODEL_ENABLED
     and CONFIRM_NEW_PROPERTY_DEVELOPMENT_BUDGET
@@ -468,6 +498,7 @@ ASYMMETRY_ENABLED = bool(
 )
 for _name, _requested, _enabled in (
     ("STAGE 5A LOCALIZATION", RUN_STAGE5A_BAND_LOCALIZATION, LOCALIZATION_ENABLED),
+    ("STAGE 5B00 PROPERTY PROMPT SCREEN", RUN_STAGE5B00_PROPERTY_PROMPT_SCREEN, PROPERTY_PROMPT_SCREEN_ENABLED),
     ("STAGE 5B1 NEW-PROPERTY DEVELOPMENT", RUN_STAGE5B1_NEW_PROPERTY_DEVELOPMENT, NEW_PROPERTY_DEV_ENABLED),
     ("STAGE 5B3 NEW-PROPERTY CONFIRMATION", RUN_STAGE5B3_NEW_PROPERTY_CONFIRMATION, NEW_PROPERTY_CONFIRM_ENABLED),
     ("STAGE 5C ASYMMETRY REPLICATION", RUN_STAGE5C_ASYMMETRY_REPLICATION, ASYMMETRY_ENABLED),
@@ -566,7 +597,8 @@ print("  resume                    one checksum-valid JSON per completed forward
 print()
 
 from jlens.mmpilot.multimodal_followup import (
-    followup_budget, localization_budget, localization_grid, stage_map,
+    ANIMAL_SOUND_PROMPT_CANDIDATES, followup_budget, localization_budget,
+    localization_grid, stage_map,
 )
 
 LOCALIZATION_GRID = localization_grid()
@@ -597,6 +629,30 @@ print("  clean forwards            ", LOCALIZATION_BUDGET["clean_forwards"])
 print("  patched forwards          ", LOCALIZATION_BUDGET["patched_forwards"])
 print("  TOTAL NEW MODEL FORWARDS  ", LOCALIZATION_BUDGET["total_forwards"])
 print("  label                     exploratory/descriptive, never confirmation")
+print()
+_prompt_screen_new_candidates = [
+    row for row in ANIMAL_SOUND_PROMPT_CANDIDATES
+    if row["prompt_id"] != "baseline_v1"
+]
+_prompt_screen_completions = (
+    len(_prompt_screen_new_candidates)
+    * len(PROPERTY_PROMPT_SCREEN_CONCEPTS) * 3
+    * NEW_PROPERTY_DEV_CANDIDATES_PER_CONCEPT
+)
+print("STAGE 5B00 ANIMAL-SOUND PROMPT SCREEN BUDGET")
+print("  population                already spent Stage-5B0 media")
+print("  baseline completions      imported; no repeat model work")
+print("  new prompt variants       ",
+      [row["prompt_id"] for row in _prompt_screen_new_candidates])
+print("  concepts                  ", list(PROPERTY_PROMPT_SCREEN_CONCEPTS))
+print("  new unrestricted generations", _prompt_screen_completions)
+print("  maximum token forwards    ",
+      _prompt_screen_completions * NEW_PROPERTY_MAX_NEW_TOKENS)
+print("  causal interventions      0")
+print("  lens fits / backward      0 / 0")
+print("  resume                    one checksum-valid completion JSON")
+print("  boundary                  prompt development only; a winner must pass")
+print("                            capability again on fresh development media")
 print()
 NEW_PROPERTY_DEV_BUDGET = followup_budget(
     stage="5B0+5B1",
@@ -3091,6 +3147,254 @@ elif RUN_STAGE5A_BAND_LOCALIZATION:
 
 markdown(
     r"""
+## 13B. Stage 5B00 — clarify the animal-sound prompt on spent media
+
+The first animal-sound audit stopped before any intervention because the clean
+model sometimes treated the question as asking whether a literal sound was
+present. This development-only screen compares two predeclared clarifications
+against that original prompt on the **same already-spent cat and cow media**.
+
+The original completions are imported by checksum and never recomputed. No
+lens is loaded, no coordinate exchange runs, and no causal outcome enters the
+selection. A winner must clear the unchanged 75% clean-capability threshold in
+all six concept-by-modality cells. Even then it licenses only a new Stage 5B0
+capability audit on fresh development media; it does not license confirmation.
+"""
+)
+code(
+    r'''
+PROPERTY_PROMPT_SCREEN_REPORT = None
+if REAL_MODE and PROPERTY_PROMPT_SCREEN_ENABLED:
+    from jlens.mmpilot.multimodal_followup import (
+        ANIMAL_SOUND_PROMPT_CANDIDATES, PROPERTY_FAMILIES,
+        property_answer_matches, property_prompt, property_prompt_screen_verdict,
+    )
+    from jlens.mmpilot.store import RunFingerprint, UnitStore, safe_key
+    from jlens.mmpilot.workspace_replication import unrestricted_greedy_completion
+
+    _source_root = Path(PROPERTY_PROMPT_SCREEN_SOURCE_RUN_DIR)
+    _source_report_path = _source_root / "new_property_audit_report.json"
+    _source_population_path = _source_root / "development_population.json"
+    _source_config_path = _source_root / "scientific_config.json"
+    for _path in (_source_report_path, _source_population_path, _source_config_path):
+        if not _path.is_file():
+            raise FileNotFoundError(f"prompt-screen source artifact missing: {_path}")
+
+    _source_bytes = _source_report_path.read_bytes()
+    _source_file_sha = "sha256:" + hashlib.sha256(_source_bytes).hexdigest()
+    if _source_file_sha != EXPECTED_PROPERTY_PROMPT_SCREEN_SOURCE_FILE_SHA256:
+        raise RuntimeError(
+            "the completed animal-sound audit file changed; refusing to tune a "
+            f"prompt against it ({_source_file_sha})"
+        )
+    _source_report = json.loads(_source_bytes)
+    if _source_report.get("audit_digest") != EXPECTED_PROPERTY_PROMPT_SCREEN_SOURCE_AUDIT_DIGEST:
+        raise RuntimeError("the completed animal-sound audit digest does not match its pin")
+    if _source_report.get("verdict") != "PROPERTY_AUDIT_NO_GO":
+        raise RuntimeError("the prompt screen is pinned to the completed NO_GO audit")
+    if _source_report.get("family") != "animal_sound":
+        raise RuntimeError("the prompt screen source is not the animal-sound audit")
+    _source_config = json.loads(_source_config_path.read_text())
+    for _field, _expected in (
+        ("model_repo_id", MODEL_REPO_ID),
+        ("model_revision", MODEL_REVISION),
+        ("manifest_checksum", MANIFEST_CHECKSUM),
+    ):
+        if _source_config.get(_field) != _expected:
+            raise RuntimeError(
+                f"prompt-screen source {_field}={_source_config.get(_field)!r}, "
+                f"expected {_expected!r}"
+            )
+
+    _source_population_record = json.loads(_source_population_path.read_text())
+    _source_ids = _source_population_record.get("population") or {}
+    _groups_by_id = {str(row["group_id"]): row for row in GROUPS}
+    _screen_population = {}
+    for _concept in PROPERTY_PROMPT_SCREEN_CONCEPTS:
+        _ids = [str(row["group_id"]) for row in _source_ids.get(_concept, ())]
+        if len(_ids) != NEW_PROPERTY_DEV_CANDIDATES_PER_CONCEPT:
+            raise RuntimeError(
+                f"source population has {len(_ids)} {_concept} groups, expected "
+                f"{NEW_PROPERTY_DEV_CANDIDATES_PER_CONCEPT}"
+            )
+        _missing = [group_id for group_id in _ids if group_id not in _groups_by_id]
+        if _missing:
+            raise RuntimeError(f"source population groups missing from cache: {_missing[:3]}")
+        _screen_population[_concept] = [_groups_by_id[group_id] for group_id in _ids]
+
+    _candidate_digest = payload_checksum([
+        {
+            "prompt_id": row["prompt_id"],
+            "rationale": row["rationale"],
+            "templates": row["templates"],
+        }
+        for row in ANIMAL_SOUND_PROMPT_CANDIDATES
+    ])
+    _screen_config = {
+        "study": "multimodal_property_prompt_screen.v1",
+        "property_family": "animal_sound",
+        "prompt_candidates_digest": _candidate_digest,
+        "prompt_candidate_ids": [row["prompt_id"] for row in ANIMAL_SOUND_PROMPT_CANDIDATES],
+        "concepts": list(PROPERTY_PROMPT_SCREEN_CONCEPTS),
+        "modalities": ["text", "image", "spoken_audio"],
+        "expected_per_cell": NEW_PROPERTY_DEV_CANDIDATES_PER_CONCEPT,
+        "min_clean_capability_rate": NEW_PROPERTY_MIN_CLEAN_CAPABILITY_RATE,
+        "source_run_dir": str(_source_root),
+        "source_file_sha256": _source_file_sha,
+        "source_audit_digest": _source_report["audit_digest"],
+        "population_reused": True,
+        "population_already_spent": True,
+        "causal_outcomes_used_for_selection": False,
+        "lens_fitted": False,
+        "backward_passes": 0,
+        "teacher_forcing_used": False,
+        "candidate_list_supplied": False,
+        "commit": COMMIT,
+    }
+    _screen_digest = payload_checksum(_screen_config)
+    PROPERTY_PROMPT_SCREEN_RUN_DIR = (
+        RUNS_ROOT / "mmps" /
+        f"mmps_real_{_screen_digest.split(':')[1][:12]}"
+    )
+    PROPERTY_PROMPT_SCREEN_RUN_DIR.mkdir(parents=True, exist_ok=True)
+    (PROPERTY_PROMPT_SCREEN_RUN_DIR / "scientific_config.json").write_text(
+        json.dumps(_screen_config, indent=2)
+    )
+    _population_digest = payload_checksum({
+        concept: [row["group_id"] for row in groups]
+        for concept, groups in _screen_population.items()
+    })
+    _screen_fingerprint = RunFingerprint(
+        mode="real", model_repo_id=MODEL_REPO_ID, model_revision=MODEL_REVISION,
+        processor_revision=MODEL_REVISION, layers=(), lens_checksum="none",
+        manifest_checksum=MANIFEST_CHECKSUM, split_id=_population_digest,
+        intervention_config={
+            "kind": "clean_capability_prompt_screen",
+            "prompt_candidates_digest": _candidate_digest,
+            "max_new_tokens": NEW_PROPERTY_MAX_NEW_TOKENS,
+        },
+        extra={"study_digest": _screen_digest},
+    )
+    _screen_store = UnitStore(PROPERTY_PROMPT_SCREEN_RUN_DIR, _screen_fingerprint)
+    print("prompt-screen run state", _screen_store.open())
+
+    _screen_rows = []
+    _source_rows = list(_source_report.get("capability_rows") or [])
+    for _concept in PROPERTY_PROMPT_SCREEN_CONCEPTS:
+        _allowed_ids = {row["group_id"] for row in _screen_population[_concept]}
+        _baseline = [
+            row for row in _source_rows
+            if row.get("concept") == _concept
+            and row.get("group_id") in _allowed_ids
+            and row.get("modality") in ("text", "image", "spoken_audio")
+        ]
+        if len(_baseline) != NEW_PROPERTY_DEV_CANDIDATES_PER_CONCEPT * 3:
+            raise RuntimeError(
+                f"source report has {len(_baseline)} baseline rows for {_concept}, "
+                f"expected {NEW_PROPERTY_DEV_CANDIDATES_PER_CONCEPT * 3}"
+            )
+        _screen_rows.extend([
+            {**row, "prompt_id": "baseline_v1", "work": "imported"}
+            for row in _baseline
+        ])
+
+    _property = PROPERTY_FAMILIES["animal_sound"]
+    _answers = {
+        concept: _property.answer_for(concept)
+        for concept in PROPERTY_PROMPT_SCREEN_CONCEPTS
+    }
+    _computed = _reused = 0
+    for _candidate in ANIMAL_SOUND_PROMPT_CANDIDATES:
+        _prompt_id = _candidate["prompt_id"]
+        if _prompt_id == "baseline_v1":
+            continue
+        for _concept in PROPERTY_PROMPT_SCREEN_CONCEPTS:
+            for _group in _screen_population[_concept]:
+                for _modality in ("text", "image", "spoken_audio"):
+                    _key = safe_key(
+                        "promptscreen", _prompt_id, _concept,
+                        _group["group_id"], _modality,
+                    )
+                    _row = _screen_store.load("capability", _key)
+                    if _row is None:
+                        _prompt = property_prompt(
+                            _prompt_id, _modality, _group["caption"]
+                        )
+                        _inputs = build_group_inputs(_group, _modality, _prompt)
+                        _clean = unrestricted_greedy_completion(
+                            BACKEND, _inputs, answer="",
+                            max_new_tokens=NEW_PROPERTY_MAX_NEW_TOKENS,
+                        )
+                        _row = {
+                            "prompt_id": _prompt_id,
+                            "concept": _concept,
+                            "group_id": _group["group_id"],
+                            "image_id": _group["image_id"],
+                            "modality": _modality,
+                            "generated": _clean["generated_text"],
+                            "expected_aliases": list(_answers[_concept].aliases),
+                            "pass": property_answer_matches(
+                                _clean["generated_text"], _answers[_concept]
+                            ),
+                            "work": "computed",
+                        }
+                        _screen_store.save("capability", _key, _row)
+                        _computed += 1
+                    else:
+                        _reused += 1
+                    _screen_rows.append(_row)
+                    if (_computed + _reused) % 48 == 0:
+                        print(
+                            "prompt screen", _computed + _reused,
+                            "computed", _computed, "reused", _reused,
+                        )
+
+    _base_report = property_prompt_screen_verdict(
+        _screen_rows,
+        expected_per_cell=NEW_PROPERTY_DEV_CANDIDATES_PER_CONCEPT,
+        min_clean_capability_rate=NEW_PROPERTY_MIN_CLEAN_CAPABILITY_RATE,
+        concepts=PROPERTY_PROMPT_SCREEN_CONCEPTS,
+    )
+    _body = {
+        **{k: v for k, v in _base_report.items() if k != "report_checksum"},
+        "scientific_config": _screen_config,
+        "source_population_digest": _population_digest,
+        "units": {"computed": _computed, "reused": _reused,
+                  "imported_baseline": len(_source_rows) // 2},
+    }
+    PROPERTY_PROMPT_SCREEN_REPORT = {
+        **_body, "report_checksum": payload_checksum(_body)
+    }
+    _screen_store.save("metric", "property_prompt_screen", PROPERTY_PROMPT_SCREEN_REPORT)
+    _screen_path = PROPERTY_PROMPT_SCREEN_RUN_DIR / "property_prompt_screen_report.json"
+    _screen_path.write_text(
+        json.dumps(PROPERTY_PROMPT_SCREEN_REPORT, indent=2, default=str)
+    )
+    print("=" * 96)
+    print("PROPERTY PROMPT SCREEN —", PROPERTY_PROMPT_SCREEN_REPORT["verdict"])
+    print("=" * 96)
+    for _row in PROPERTY_PROMPT_SCREEN_REPORT["candidates"]:
+        print(_row["prompt_id"], "minimum", round(_row["minimum_cell_rate"], 3),
+              "mean", round(_row["mean_cell_rate"], 3),
+              "passes", _row["passes_every_cell"])
+        print("  rates", _row["rates"])
+    print("selected", PROPERTY_PROMPT_SCREEN_REPORT["selected_prompt_id"])
+    print("causal spending licensed", PROPERTY_PROMPT_SCREEN_REPORT["causal_spending_licensed"])
+    print("report", _screen_path)
+    print("checksum", PROPERTY_PROMPT_SCREEN_REPORT["report_checksum"])
+    print("resume", _screen_store.status_report())
+    if PROPERTY_PROMPT_SCREEN_REPORT["verdict"] == "PROPERTY_PROMPT_SCREEN_GO":
+        print("NEXT: rerun Stage 5B0 on fresh development media with the selected")
+        print("prompt ID and this run directory/checksum pinned in configuration.")
+    else:
+        print("NO_GO: do not run Stage 5B0/5B1 for animal sound.")
+elif RUN_STAGE5B00_PROPERTY_PROMPT_SCREEN:
+    print("Stage 5B00 requested but blocked by model or prompt-screen budget.")
+'''
+)
+
+markdown(
+    r"""
 ## 14. Stage 5B0 + 5B1 — new-property audit and development
 
 Leg count cannot carry a generalization claim: `bird=2`, `cat=4`, `zebra=4`,
@@ -3127,8 +3431,9 @@ if REAL_MODE and (PROPERTY_AUDIT_ENABLED or NEW_PROPERTY_DEV_ENABLED):
     from jlens.mmpilot.multimodal_followup import (
         PROPERTY_FAMILIES, PropertyAnswer, artifact_exclusion_audit,
         assert_lens_reused_not_refitted, assert_property_pair_changes_answer,
-        audit_property_family, generation_trial_row,
+        audit_property_family, generation_trial_row, load_verified_report,
         new_property_development_verdict, property_answer_matches,
+        property_prompt, property_prompt_candidate,
     )
     from jlens.mmpilot.multimodal_lens import (
         build_swap_bases_for_lens, load_broad_pooled_development_source,
@@ -3140,6 +3445,32 @@ if REAL_MODE and (PROPERTY_AUDIT_ENABLED or NEW_PROPERTY_DEV_ENABLED):
     )
 
     _property = PROPERTY_FAMILIES[NEW_PROPERTY_FAMILY]
+    _prompt_candidate = property_prompt_candidate(NEW_PROPERTY_PROMPT_ID)
+    _prompt_screen_pin = None
+    if NEW_PROPERTY_PROMPT_ID != "baseline_v1":
+        if (
+            NEW_PROPERTY_PROMPT_SCREEN_RUN_DIR is None
+            or EXPECTED_NEW_PROPERTY_PROMPT_SCREEN_CHECKSUM is None
+        ):
+            raise RuntimeError(
+                "a non-baseline NEW_PROPERTY_PROMPT_ID requires the completed "
+                "Stage 5B00 run directory and report checksum"
+            )
+        _prompt_screen_pin = load_verified_report(
+            Path(NEW_PROPERTY_PROMPT_SCREEN_RUN_DIR)
+            / "property_prompt_screen_report.json",
+            expected_checksum=EXPECTED_NEW_PROPERTY_PROMPT_SCREEN_CHECKSUM,
+            label="animal-sound prompt-screen report",
+        )
+        if _prompt_screen_pin.get("verdict") != "PROPERTY_PROMPT_SCREEN_GO":
+            raise RuntimeError("the pinned prompt screen did not pass")
+        if _prompt_screen_pin.get("selected_prompt_id") != NEW_PROPERTY_PROMPT_ID:
+            raise RuntimeError(
+                "NEW_PROPERTY_PROMPT_ID is not the winner recorded by the "
+                "pinned prompt screen"
+            )
+        if _prompt_screen_pin.get("causal_outcomes_used_for_selection") is not False:
+            raise RuntimeError("the prompt was not selected on clean capability alone")
     _source_pin = load_broad_pooled_development_source(
         BROAD_DEVELOPMENT_RUN_DIR,
         expected_report_checksum=EXPECTED_BROAD_DEVELOPMENT_REPORT_CHECKSUM,
@@ -3165,7 +3496,12 @@ if REAL_MODE and (PROPERTY_AUDIT_ENABLED or NEW_PROPERTY_DEV_ENABLED):
     _dev_config = {
         "study": "multimodal_new_property_development.v1",
         "property_family": NEW_PROPERTY_FAMILY,
-        "prompt": _property.question,
+        "prompt_id": NEW_PROPERTY_PROMPT_ID,
+        "prompt_by_modality": dict(_prompt_candidate["templates"]),
+        "prompt_screen_report_checksum": (
+            EXPECTED_NEW_PROPERTY_PROMPT_SCREEN_CHECKSUM
+            if _prompt_screen_pin is not None else None
+        ),
         "max_new_tokens": NEW_PROPERTY_MAX_NEW_TOKENS,
         "model_repo_id": MODEL_REPO_ID,
         "model_revision": MODEL_REVISION,
@@ -3245,6 +3581,7 @@ if REAL_MODE and (PROPERTY_AUDIT_ENABLED or NEW_PROPERTY_DEV_ENABLED):
         split_id=NEW_PROPERTY_DEV_EXCLUSION_AUDIT["audit_digest"],
         intervention_config={
             "property_family": NEW_PROPERTY_FAMILY,
+            "prompt_id": NEW_PROPERTY_PROMPT_ID,
             "alpha": 1.0,
             "conditions": ["exact", "zero", "random", "unrelated"],
             "positions": "all_original_prompt_positions",
@@ -3271,7 +3608,9 @@ if REAL_MODE and (PROPERTY_AUDIT_ENABLED or NEW_PROPERTY_DEV_ENABLED):
                 if _row is None:
                     _inputs = build_group_inputs(
                         _group, _modality,
-                        _property.prompt(_modality, _group["caption"]),
+                        property_prompt(
+                            NEW_PROPERTY_PROMPT_ID, _modality, _group["caption"]
+                        ),
                     )
                     _clean = unrestricted_greedy_completion(
                         BACKEND, _inputs, answer="",
@@ -3375,6 +3714,14 @@ if REAL_MODE and (PROPERTY_AUDIT_ENABLED or NEW_PROPERTY_DEV_ENABLED):
     )
     PROPERTY_AUDIT_REPORT = {
         **PROPERTY_AUDIT_REPORT,
+        "prompt_id": NEW_PROPERTY_PROMPT_ID,
+        "question": "modality-specific templates fixed by prompt_id",
+        "prompt_rationale": _prompt_candidate["rationale"],
+        "prompt_by_modality": dict(_prompt_candidate["templates"]),
+        "prompt_screen_report_checksum": (
+            EXPECTED_NEW_PROPERTY_PROMPT_SCREEN_CHECKSUM
+            if _prompt_screen_pin is not None else None
+        ),
         "clean_capability_by_concept": _capability_by_concept,
         "capability_rows": _capability_rows,
         "fallback_family_if_no_go": NEW_PROPERTY_FALLBACK_FAMILY,
@@ -3470,7 +3817,10 @@ if REAL_MODE and (PROPERTY_AUDIT_ENABLED or NEW_PROPERTY_DEV_ENABLED):
                             if _stored is None:
                                 _inputs = build_group_inputs(
                                     _group, _modality,
-                                    _property.prompt(_modality, _group["caption"]),
+                                    property_prompt(
+                                        NEW_PROPERTY_PROMPT_ID, _modality,
+                                        _group["caption"],
+                                    ),
                                 )
                                 _trial = unrestricted_greedy_swap_trial(
                                     BACKEND, _inputs, bases=_bases, alpha=_alpha,
@@ -3811,7 +4161,9 @@ if REAL_MODE and NEW_PROPERTY_CONFIRM_ENABLED:
             if _row is None:
                 _inputs = build_group_inputs(
                     _group, _modality,
-                    _property.prompt(_modality, _group["caption"]),
+                    str(DESIGN["prompt_by_modality"][_modality]).format(
+                        caption=_group["caption"]
+                    ),
                 )
                 _clean = unrestricted_greedy_completion(
                     BACKEND, _inputs, answer=_source_answer.answer,
@@ -3880,7 +4232,9 @@ if REAL_MODE and NEW_PROPERTY_CONFIRM_ENABLED:
                     if _stored is None:
                         _inputs = build_group_inputs(
                             _group, _modality,
-                            _property.prompt(_modality, _group["caption"]),
+                            str(DESIGN["prompt_by_modality"][_modality]).format(
+                                caption=_group["caption"]
+                            ),
                         )
                         _trial = unrestricted_greedy_swap_trial(
                             BACKEND, _inputs, bases=_bases, alpha=_alpha,

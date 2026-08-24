@@ -36,6 +36,7 @@ audit, the unit store and its resume fingerprint, and every verdict function.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sys
@@ -343,6 +344,62 @@ class _Harness:
         mp.setattr(wr, "unrestricted_greedy_completion", fake_completion)
         mp.setattr(wr, "unrestricted_greedy_swap_trial", fake_swap_trial)
 
+    def _prepare_prompt_screen_source(self, ns: dict) -> tuple[Path, str, str]:
+        """Materialise the checksum-pinned failed B0 source for Stage 5B00."""
+
+        root = self.tmp / "prompt-screen-source"
+        root.mkdir(parents=True, exist_ok=True)
+        n = int(ns["NEW_PROPERTY_DEV_CANDIDATES_PER_CONCEPT"])
+        population = {
+            concept: [
+                {"group_id": f"g_{concept}-{index:04d}",
+                 "image_id": f"img_{concept}-{index:04d}"}
+                for index in range(n)
+            ]
+            for concept in ("cat", "cow")
+        }
+        (root / "development_population.json").write_text(
+            json.dumps({"population": population}), encoding="utf-8"
+        )
+        (root / "scientific_config.json").write_text(
+            json.dumps({
+                "model_repo_id": ns["MODEL_REPO_ID"],
+                "model_revision": ns["MODEL_REVISION"],
+                "manifest_checksum": ns["MANIFEST_CHECKSUM"],
+            }),
+            encoding="utf-8",
+        )
+        rows = []
+        for concept in ("cat", "cow"):
+            for index in range(n):
+                for modality in ("text", "image", "spoken_audio"):
+                    # Keep one baseline cell below the gate so this faithfully
+                    # represents the completed NO_GO source audit.
+                    passed = not (
+                        concept == "cat" and modality == "text" and index >= n // 2
+                    )
+                    rows.append({
+                        "concept": concept,
+                        "group_id": f"g_{concept}-{index:04d}",
+                        "image_id": f"img_{concept}-{index:04d}",
+                        "modality": modality,
+                        "generated": concept,
+                        "pass": passed,
+                    })
+        audit_digest = payload_checksum({"synthetic": "failed-audit"})
+        path = root / "new_property_audit_report.json"
+        path.write_text(
+            json.dumps({
+                "family": "animal_sound",
+                "verdict": "PROPERTY_AUDIT_NO_GO",
+                "audit_digest": audit_digest,
+                "capability_rows": rows,
+            }),
+            encoding="utf-8",
+        )
+        file_sha = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+        return root, file_sha, audit_digest
+
     # ------------------------------------------------------------------ run
     def run(self, **switches: bool) -> dict:
         self._install()
@@ -381,6 +438,11 @@ class _Harness:
                 ns["BUNDLE"] = None
                 ns["AUDIO_RECORD"] = {"protocol_fingerprint": "fake"}
                 continue
+            if "PROPERTY_PROMPT_SCREEN_REPORT = None" in source:
+                root, file_sha, audit_digest = self._prepare_prompt_screen_source(ns)
+                ns["PROPERTY_PROMPT_SCREEN_SOURCE_RUN_DIR"] = str(root)
+                ns["EXPECTED_PROPERTY_PROMPT_SCREEN_SOURCE_FILE_SHA256"] = file_sha
+                ns["EXPECTED_PROPERTY_PROMPT_SCREEN_SOURCE_AUDIT_DIGEST"] = audit_digest
             exec(compile(source, "cell", "exec"), ns)
             if "EXPANDED_MANIFEST_CACHE" in source and ns.get("REAL_MODE"):
                 ns["RUNS_ROOT"] = self.runs
@@ -476,6 +538,9 @@ def test_every_followup_stage_is_reachable_under_real_mode(
         "5A": ({"RUN_STAGE5A_BAND_LOCALIZATION": True,
                 "CONFIRM_LOCALIZATION_BUDGET": True}, "LOCALIZATION_ENABLED"),
         "5B0": ({"RUN_STAGE5B0_PROPERTY_AUDIT": True}, "PROPERTY_AUDIT_ENABLED"),
+        "5B00": ({"RUN_STAGE5B00_PROPERTY_PROMPT_SCREEN": True,
+                   "CONFIRM_PROPERTY_PROMPT_SCREEN_BUDGET": True},
+                  "PROPERTY_PROMPT_SCREEN_ENABLED"),
         "5C": ({"RUN_STAGE5C_ASYMMETRY_REPLICATION": True,
                 "CONFIRM_ASYMMETRY_BUDGET": True}, "ASYMMETRY_ENABLED"),
     }
@@ -483,6 +548,55 @@ def test_every_followup_stage_is_reachable_under_real_mode(
         ns = _Harness(tmp_path / label, monkeypatch).run(**switches)
         assert ns[flag] is True, f"{label} did not enable under REAL_MODE"
         assert ns["REAL_MODE"] is True
+
+
+def test_stage_5b00_prompt_screen_runs_real_cell_without_causal_work(
+    tmp_path, monkeypatch
+) -> None:
+    harness = _Harness(tmp_path, monkeypatch)
+    harness.script_model()
+    ns = harness.run(
+        RUN_STAGE5B00_PROPERTY_PROMPT_SCREEN=True,
+        CONFIRM_PROPERTY_PROMPT_SCREEN_BUDGET=True,
+    )
+    report = ns["PROPERTY_PROMPT_SCREEN_REPORT"]
+    assert report is not None
+    assert report["verdict"] == "PROPERTY_PROMPT_SCREEN_GO"
+    assert report["selected_prompt_id"] in {
+        "identity_explicit_v1", "knowledge_cloze_v1"
+    }
+    assert report["causal_outcomes_used_for_selection"] is False
+    assert report["causal_spending_licensed"] is False
+    assert report["lens_fitted"] is False
+    assert report["backward_passes"] == 0
+
+
+def test_nonbaseline_prompt_requires_and_uses_the_pinned_screen_winner(
+    tmp_path, monkeypatch
+) -> None:
+    screen_harness = _Harness(tmp_path / "screen", monkeypatch)
+    screen_harness.script_model()
+    screen_ns = screen_harness.run(
+        RUN_STAGE5B00_PROPERTY_PROMPT_SCREEN=True,
+        CONFIRM_PROPERTY_PROMPT_SCREEN_BUDGET=True,
+    )
+    screen = screen_ns["PROPERTY_PROMPT_SCREEN_REPORT"]
+    prompt_id = screen["selected_prompt_id"]
+
+    audit_harness = _Harness(tmp_path / "audit", monkeypatch)
+    audit_harness.script_model()
+    audit_ns = audit_harness.run(
+        RUN_STAGE5B0_PROPERTY_AUDIT=True,
+        NEW_PROPERTY_PROMPT_ID=prompt_id,
+        NEW_PROPERTY_PROMPT_SCREEN_RUN_DIR=str(
+            screen_ns["PROPERTY_PROMPT_SCREEN_RUN_DIR"]
+        ),
+        EXPECTED_NEW_PROPERTY_PROMPT_SCREEN_CHECKSUM=screen["report_checksum"],
+    )
+    audit = audit_ns["PROPERTY_AUDIT_REPORT"]
+    assert audit["prompt_id"] == prompt_id
+    assert audit["prompt_screen_report_checksum"] == screen["report_checksum"]
+    assert audit_ns["_dev_config"]["prompt_id"] == prompt_id
 
 
 def test_stage_5b1_development_executes_when_the_audit_passes(
