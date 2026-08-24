@@ -731,6 +731,44 @@ def test_unresolved_empirical_pair_is_refused_not_silently_admitted() -> None:
     assert record["source_answer"]["aliases"] == ["chirp"]
 
 
+def test_declared_concept_missing_a_modality_stays_gated_when_capability_is_supplied() -> None:
+    # regression: a real animal_sound run scored cat=0.60/0.88/0.88,
+    # dog=0.29/0.65/0.79, cow=1.00/0.85/0.71 against a 0.75 threshold. Every
+    # one of the three fails in at least one modality. A caller that omits
+    # clean_capability (as the notebook's first, resolution-only pass does)
+    # must not be mistaken for the final, gated verdict: omitting it makes
+    # capability_by_modality_sufficient None, and None does not block
+    # usability the way False does, so a concept that never had its
+    # capability checked would wrongly appear usable.
+    rates = {
+        "cat": {"text": 0.604, "image": 0.875, "spoken_audio": 0.875},
+        "cow": {"text": 1.0, "image": 0.854, "spoken_audio": 0.708},
+        "dog": {"text": 0.292, "image": 0.646, "spoken_audio": 0.792},
+    }
+    ungated = audit_property_family(
+        "animal_sound",
+        available_media=dict.fromkeys(rates, 99),
+        min_media_per_concept=48,
+    )
+    ungated_rows = {row["concept"]: row for row in ungated["concepts"]}
+    for concept in rates:
+        assert ungated_rows[concept]["capability_by_modality_sufficient"] is None
+    # every one of the three is nonetheless reported "usable" when capability
+    # was never actually supplied -- this is the bug, not the fix
+    assert set(rates) <= set(ungated["usable_concepts"])
+
+    gated = audit_property_family(
+        "animal_sound",
+        available_media=dict.fromkeys(rates, 99),
+        min_media_per_concept=48,
+        clean_capability=rates,
+    )
+    for concept in rates:
+        assert concept not in gated["usable_concepts"]
+    assert gated["candidate_directions"] == []
+    assert gated["verdict"] == "PROPERTY_AUDIT_NO_GO"
+
+
 def test_freeze_uses_the_resolved_empirical_answer_not_the_declared_one() -> None:
     audit = audit_property_family(
         "animal_sound",

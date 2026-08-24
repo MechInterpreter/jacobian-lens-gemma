@@ -3300,12 +3300,14 @@ if REAL_MODE and (PROPERTY_AUDIT_ENABLED or NEW_PROPERTY_DEV_ENABLED):
         }
         for concept in NEW_PROPERTY_CONCEPTS
     }
-    # No clean_capability is passed on this call: for a declared concept it is
-    # not needed to resolve admissibility, and for an empirical concept the
-    # audit derives its own capability check from the resolution's rates
-    # (see multimodal_followup.audit_property_family). A second, separately
-    # computed capability dict would only risk disagreeing with it.
-    PROPERTY_AUDIT_REPORT = audit_property_family(
+    # Pass 1: resolve any empirical concept (bird) from the raw completions
+    # only. No clean_capability is supplied here — there is nothing to supply
+    # yet for a declared concept (nothing has been scored) and an empirical
+    # concept's own capability check is derived internally from its
+    # resolution, so this pass exists purely to obtain _resolved_answers.
+    # Its verdict and its "usable"/"candidate_directions" fields are NOT the
+    # final ones and must not be read past this point.
+    _resolution_pass = audit_property_family(
         NEW_PROPERTY_FAMILY,
         available_media={
             concept: len(rows) for concept, rows in _dev_population.items()
@@ -3316,10 +3318,10 @@ if REAL_MODE and (PROPERTY_AUDIT_ENABLED or NEW_PROPERTY_DEV_ENABLED):
     )
 
     # Resolved answers for every concept: declared ones unchanged, empirical
-    # ones (bird) filled in from what the audit just resolved. This table,
-    # not PROPERTY_FAMILIES directly, is the one source of truth for scoring
-    # from here on — including inside Stage 5B1's swap trials below, where
-    # the target answer for a direction like cat->bird must be this resolved
+    # ones (bird) filled in from what pass 1 just resolved. This table, not
+    # PROPERTY_FAMILIES directly, is the one source of truth for scoring from
+    # here on — including inside Stage 5B1's swap trials below, where the
+    # target answer for a direction like cat->bird must be this resolved
     # value and not the empty declared placeholder.
     _resolved_answers = {
         row["concept"]: PropertyAnswer(
@@ -3328,7 +3330,7 @@ if REAL_MODE and (PROPERTY_AUDIT_ENABLED or NEW_PROPERTY_DEV_ENABLED):
             reason=str(row["reason"]),
             empirical_answer_required=bool(row.get("empirical_answer_required")),
         )
-        for row in PROPERTY_AUDIT_REPORT["concepts"]
+        for row in _resolution_pass["concepts"]
     }
     for _row in _capability_rows:
         _resolved = _resolved_answers.get(_row["concept"])
@@ -3354,6 +3356,23 @@ if REAL_MODE and (PROPERTY_AUDIT_ENABLED or NEW_PROPERTY_DEV_ENABLED):
         }
         for concept in NEW_PROPERTY_CONCEPTS
     }
+    # Pass 2: the real, gated audit. clean_capability now carries the actual
+    # post-hoc scored rates, so a declared concept that misses the threshold
+    # in any modality is correctly marked unusable — pass 1 could not do this
+    # because those rates did not exist until the scoring above ran. An
+    # empirical concept's own capability check is unaffected: the module
+    # derives it from the resolution's rates_by_modality regardless of what
+    # clean_capability contains, so this pass agrees with pass 1 on bird.
+    PROPERTY_AUDIT_REPORT = audit_property_family(
+        NEW_PROPERTY_FAMILY,
+        available_media={
+            concept: len(rows) for concept, rows in _dev_population.items()
+        },
+        min_media_per_concept=NEW_PROPERTY_DEV_CANDIDATES_PER_CONCEPT,
+        clean_capability=_capability_by_concept,
+        min_clean_capability_rate=NEW_PROPERTY_MIN_CLEAN_CAPABILITY_RATE,
+        observed_completions=_completions_by_concept,
+    )
     PROPERTY_AUDIT_REPORT = {
         **PROPERTY_AUDIT_REPORT,
         "clean_capability_by_concept": _capability_by_concept,
