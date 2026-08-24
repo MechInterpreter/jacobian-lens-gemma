@@ -684,3 +684,89 @@ def test_bird_sound_answer_is_empirical_not_declared() -> None:
     )
     assert "bird" not in refused["usable_concepts"]
     assert "bird->cat" not in {d["direction"] for d in refused["candidate_directions"]}
+
+
+def test_empirical_capability_does_not_need_a_separate_capability_dict() -> None:
+    # audit_property_family must resolve and admit an empirical concept from
+    # observed_completions alone, with no clean_capability argument at all —
+    # scoring "pass" against bird's answer is impossible before this call
+    # resolves what that answer even is, so requiring a pre-scored capability
+    # dict for it would be circular.
+    completions = {
+        "bird": {m: ["Chirp<turn|>"] * 12 for m in MODALITIES},
+        "cat": {m: ["Meow<turn|>"] * 12 for m in MODALITIES},
+    }
+    resolved = audit_property_family(
+        "animal_sound",
+        available_media={"bird": 99, "cat": 99},
+        min_media_per_concept=48,
+        observed_completions=completions,
+    )
+    assert resolved["verdict"] == "PROPERTY_AUDIT_GO"
+    assert "bird" in resolved["usable_concepts"]
+    rows = {row["concept"]: row for row in resolved["concepts"]}
+    assert rows["bird"]["capability_by_modality_sufficient"] is True
+    assert rows["bird"]["clean_capability"] == rows["bird"]["empirical_resolution"][
+        "rates_by_modality"
+    ]
+
+
+def test_unresolved_empirical_pair_is_refused_not_silently_admitted() -> None:
+    # before any data exists, bird's declared aliases are empty; the pair
+    # check must not read that as "the two answers trivially differ" and let
+    # it through — it must refuse until an empirical answer is resolved.
+    with pytest.raises(MultimodalFollowupRefused, match="refused by the property audit"):
+        assert_property_pair_changes_answer("animal_sound", "bird", "cat")
+
+    resolved_rows = {
+        "bird": {
+            "answer": "chirp", "aliases": ["chirp"], "admissible": True,
+            "reason": "", "empirical_answer_required": True,
+        },
+    }
+    record = assert_property_pair_changes_answer(
+        "animal_sound", "bird", "cat", resolved=resolved_rows
+    )
+    assert record["changes_property"] is True
+    assert record["source_answer"]["aliases"] == ["chirp"]
+
+
+def test_freeze_uses_the_resolved_empirical_answer_not_the_declared_one() -> None:
+    audit = audit_property_family(
+        "animal_sound",
+        available_media={"bird": 99, "cat": 99},
+        min_media_per_concept=48,
+        observed_completions={
+            "bird": {m: ["Chirp<turn|>"] * 12 for m in MODALITIES},
+            "cat": {m: ["Meow<turn|>"] * 12 for m in MODALITIES},
+        },
+    )
+    development = new_property_development_verdict(
+        [
+            {
+                "direction": "bird->cat", "modality": modality, "condition": condition,
+                "success": condition == "exact", "n": 1,
+                "all_prompt_positions_patched": True,
+                "layers_patched": list(VALIDATED_BAND),
+                "max_activation_norm_ratio": 1.0,
+                "max_update_to_activation_norm_ratio": 0.1,
+            }
+            for modality in MODALITIES
+            for condition in REQUIRED_CONDITIONS
+        ],
+        audit=audit, capability_go=True,
+        min_success_rate=1.0, min_control_margin=0.5,
+    )
+    assert development["verdict"] == "NEW_PROPERTY_DEVELOPMENT_GO"
+    design = freeze_new_property_design(
+        development=development, audit=audit, direction=("bird", "cat"),
+        lens_checksum=MOCK_LENS_CHECKSUM, exclusions=exclusion_universe(),
+        n_candidates=64, n_recruited=16, min_success_rate=0.75,
+        min_control_margin=0.25, min_clean_capability_rate=0.75,
+        familywise_alpha=0.05, recruitment_rule="r", seed="s",
+    )
+    # this is the fix under test: without it, bird's frozen alias set would
+    # be empty (the static declared table), and Stage 5B3 would crash trying
+    # to score against it exactly as Stage 5B1 did before the fix
+    assert design["answer_aliases"]["bird"] == ["chirp"]
+    assert design["answer_aliases"]["cat"] == ["meow", "meows"]

@@ -3125,10 +3125,10 @@ if REAL_MODE and (PROPERTY_AUDIT_ENABLED or NEW_PROPERTY_DEV_ENABLED):
         random_two_direction_basis, resolve_concept_token,
     )
     from jlens.mmpilot.multimodal_followup import (
-        PROPERTY_FAMILIES, artifact_exclusion_audit, assert_lens_reused_not_refitted,
-        assert_property_pair_changes_answer, audit_property_family,
-        generation_trial_row, new_property_development_verdict,
-        property_answer_matches,
+        PROPERTY_FAMILIES, PropertyAnswer, artifact_exclusion_audit,
+        assert_lens_reused_not_refitted, assert_property_pair_changes_answer,
+        audit_property_family, generation_trial_row,
+        new_property_development_verdict, property_answer_matches,
     )
     from jlens.mmpilot.multimodal_lens import (
         build_swap_bases_for_lens, load_broad_pooled_development_source,
@@ -3147,9 +3147,19 @@ if REAL_MODE and (PROPERTY_AUDIT_ENABLED or NEW_PROPERTY_DEV_ENABLED):
         expected_lens_checksum=EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
         expected_direction=CONFIRMATION_DIRECTION,
     )
-    # Every direction is checked against the property table before any media
-    # are opened; a pair that does not change the answer cannot be requested.
+    # Every direction whose two concepts are both declared is checked against
+    # the property table before any media are opened; a pair that does not
+    # change the answer cannot be requested. A pair involving an empirical
+    # concept (bird) cannot be checked yet — there is no answer to compare
+    # until the capability screen runs — so it is deferred to
+    # audit_property_family's own candidate_directions computation below,
+    # which is where it is actually gated.
     for _pair in NEW_PROPERTY_DEV_DIRECTIONS:
+        if any(
+            _property.answer_for(_concept).empirical_answer_required
+            for _concept in _pair
+        ):
+            continue
         assert_property_pair_changes_answer(NEW_PROPERTY_FAMILY, _pair[0], _pair[1])
 
     _dev_config = {
@@ -3246,9 +3256,14 @@ if REAL_MODE and (PROPERTY_AUDIT_ENABLED or NEW_PROPERTY_DEV_ENABLED):
     print("new-property development run state", _dev_store.open())
 
     # ---- Stage 5B0: clean capability on the untouched model only -----------
+    # Collection stores the raw completion only. It cannot score "pass" here:
+    # a concept whose answer is empirical (bird) has no declared alias to
+    # score against until DOMINANT_ANSWER_RULE resolves one, and that rule
+    # needs exactly these completions as its input. Scoring is therefore
+    # deferred to a single post-hoc pass below, run uniformly for every
+    # concept, declared or empirical, against whatever the audit resolves.
     _capability_rows = []
     for _concept in NEW_PROPERTY_CONCEPTS:
-        _answer = _property.answer_for(_concept)
         for _group in _dev_population[_concept]:
             for _modality in ("text", "image", "spoken_audio"):
                 _key = safe_key("propcap", _concept, _group["group_id"], _modality)
@@ -3259,22 +3274,70 @@ if REAL_MODE and (PROPERTY_AUDIT_ENABLED or NEW_PROPERTY_DEV_ENABLED):
                         _property.prompt(_modality, _group["caption"]),
                     )
                     _clean = unrestricted_greedy_completion(
-                        BACKEND, _inputs, answer=_answer.answer,
+                        BACKEND, _inputs, answer="",
                         max_new_tokens=NEW_PROPERTY_MAX_NEW_TOKENS,
                     )
                     _row = {
                         "concept": _concept, "group_id": _group["group_id"],
                         "image_id": _group["image_id"], "modality": _modality,
-                        "expected_aliases": list(_answer.aliases),
                         "generated": _clean["generated_text"],
-                        "pass": property_answer_matches(
-                            _clean["generated_text"], _answer
-                        ),
                     }
                     _dev_store.save("capability", _key, _row)
                 _capability_rows.append(_row)
                 if len(_capability_rows) % 72 == 0:
                     print("property capability", len(_capability_rows))
+
+    # Raw completions per concept per modality, so DOMINANT_ANSWER_RULE can
+    # resolve any concept whose answer is empirical rather than declared.
+    # The rule was fixed in code before these were read.
+    _completions_by_concept = {
+        concept: {
+            modality: [
+                row["generated"] for row in _capability_rows
+                if row["concept"] == concept and row["modality"] == modality
+            ]
+            for modality in ("text", "image", "spoken_audio")
+        }
+        for concept in NEW_PROPERTY_CONCEPTS
+    }
+    # No clean_capability is passed on this call: for a declared concept it is
+    # not needed to resolve admissibility, and for an empirical concept the
+    # audit derives its own capability check from the resolution's rates
+    # (see multimodal_followup.audit_property_family). A second, separately
+    # computed capability dict would only risk disagreeing with it.
+    PROPERTY_AUDIT_REPORT = audit_property_family(
+        NEW_PROPERTY_FAMILY,
+        available_media={
+            concept: len(rows) for concept, rows in _dev_population.items()
+        },
+        min_media_per_concept=NEW_PROPERTY_DEV_CANDIDATES_PER_CONCEPT,
+        min_clean_capability_rate=NEW_PROPERTY_MIN_CLEAN_CAPABILITY_RATE,
+        observed_completions=_completions_by_concept,
+    )
+
+    # Resolved answers for every concept: declared ones unchanged, empirical
+    # ones (bird) filled in from what the audit just resolved. This table,
+    # not PROPERTY_FAMILIES directly, is the one source of truth for scoring
+    # from here on — including inside Stage 5B1's swap trials below, where
+    # the target answer for a direction like cat->bird must be this resolved
+    # value and not the empty declared placeholder.
+    _resolved_answers = {
+        row["concept"]: PropertyAnswer(
+            concept=row["concept"], answer=str(row["answer"]),
+            aliases=tuple(row["aliases"]), admissible=bool(row["admissible"]),
+            reason=str(row["reason"]),
+            empirical_answer_required=bool(row.get("empirical_answer_required")),
+        )
+        for row in PROPERTY_AUDIT_REPORT["concepts"]
+    }
+    for _row in _capability_rows:
+        _resolved = _resolved_answers.get(_row["concept"])
+        _row["expected_aliases"] = list(_resolved.aliases) if _resolved else []
+        _row["pass"] = bool(
+            _resolved
+            and _resolved.aliases
+            and property_answer_matches(_row["generated"], _resolved)
+        )
 
     _capability_by_concept = {
         concept: {
@@ -3291,29 +3354,6 @@ if REAL_MODE and (PROPERTY_AUDIT_ENABLED or NEW_PROPERTY_DEV_ENABLED):
         }
         for concept in NEW_PROPERTY_CONCEPTS
     }
-    # Raw completions per concept per modality, so DOMINANT_ANSWER_RULE can
-    # resolve any concept whose answer is empirical rather than declared.
-    # The rule was fixed in code before these were read.
-    _completions_by_concept = {
-        concept: {
-            modality: [
-                row["generated"] for row in _capability_rows
-                if row["concept"] == concept and row["modality"] == modality
-            ]
-            for modality in ("text", "image", "spoken_audio")
-        }
-        for concept in NEW_PROPERTY_CONCEPTS
-    }
-    PROPERTY_AUDIT_REPORT = audit_property_family(
-        NEW_PROPERTY_FAMILY,
-        available_media={
-            concept: len(rows) for concept, rows in _dev_population.items()
-        },
-        min_media_per_concept=NEW_PROPERTY_DEV_CANDIDATES_PER_CONCEPT,
-        clean_capability=_capability_by_concept,
-        min_clean_capability_rate=NEW_PROPERTY_MIN_CLEAN_CAPABILITY_RATE,
-        observed_completions=_completions_by_concept,
-    )
     PROPERTY_AUDIT_REPORT = {
         **PROPERTY_AUDIT_REPORT,
         "clean_capability_by_concept": _capability_by_concept,
@@ -3385,7 +3425,7 @@ if REAL_MODE and (PROPERTY_AUDIT_ENABLED or NEW_PROPERTY_DEV_ENABLED):
                 if not {_src, _tgt} <= _usable:
                     print("skipping", f"{_src}->{_tgt}", "— a concept is unusable")
                     continue
-                _target_answer = _property.answer_for(_tgt)
+                _target_answer = _resolved_answers[_tgt]
                 _exact_bases = build_swap_bases_for_lens(
                     _lens, BACKEND.unembedding_weight(), layers=BROAD_POOLED_BAND,
                     source=_tokens[_src], target=_tokens[_tgt],
@@ -3624,10 +3664,24 @@ if REAL_MODE and NEW_PROPERTY_CONFIRM_ENABLED:
     print("  direction", DESIGN["direction"], "property", DESIGN["property_family"])
     print("  thresholds", DESIGN["thresholds"])
 
+    from jlens.mmpilot.multimodal_followup import PropertyAnswer
+
     _property = PROPERTY_FAMILIES[DESIGN["property_family"]]
     _src, _tgt = DESIGN["direction"]
-    _source_answer = _property.answer_for(_src)
-    _target_answer = _property.answer_for(_tgt)
+    # The frozen design's own answer_aliases are authoritative here, not the
+    # static PROPERTY_FAMILIES table: for an empirical concept like bird, the
+    # declared table still has an empty alias set, and the resolved answer
+    # only exists in what Stage 5B2 froze.
+    _source_answer = PropertyAnswer(
+        concept=_src, answer=(DESIGN["answer_aliases"][_src] or [""])[0],
+        aliases=tuple(DESIGN["answer_aliases"][_src]), admissible=True,
+        reason="resolved and frozen by Stage 5B2",
+    )
+    _target_answer = PropertyAnswer(
+        concept=_tgt, answer=(DESIGN["answer_aliases"][_tgt] or [""])[0],
+        aliases=tuple(DESIGN["answer_aliases"][_tgt]), admissible=True,
+        reason="resolved and frozen by Stage 5B2",
+    )
     _source_pin = load_broad_pooled_development_source(
         BROAD_DEVELOPMENT_RUN_DIR,
         expected_report_checksum=EXPECTED_BROAD_DEVELOPMENT_REPORT_CHECKSUM,

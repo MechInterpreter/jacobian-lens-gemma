@@ -1114,20 +1114,38 @@ def audit_property_family(
                     f"answer ({resolution.get('reason')})"
                 )
         media = int((available_media or {}).get(answer.concept, 0))
-        capability = dict((clean_capability or {}).get(answer.concept, {}))
         record["available_media"] = media
         record["media_sufficient"] = (
             media >= int(min_media_per_concept) if available_media is not None else None
         )
-        record["clean_capability"] = capability
-        record["capability_by_modality_sufficient"] = (
-            all(
+        resolved_empirically = bool(
+            answer.empirical_answer_required
+            and record["empirical_resolution"]
+            and record["empirical_resolution"].get("resolved")
+        )
+        if resolved_empirically:
+            # The resolution's own per-modality rates ARE the capability
+            # check. Requiring a separately supplied clean_capability dict
+            # here would recreate the chicken-and-egg dependency this
+            # resolution exists to break: the declared answer needed to score
+            # capability does not exist until the resolution has run.
+            capability = dict(record["empirical_resolution"]["rates_by_modality"])
+            record["clean_capability"] = capability
+            record["capability_by_modality_sufficient"] = all(
                 float(capability.get(modality, 0.0)) >= float(min_clean_capability_rate)
                 for modality in MODALITIES
             )
-            if clean_capability is not None
-            else None
-        )
+        else:
+            capability = dict((clean_capability or {}).get(answer.concept, {}))
+            record["clean_capability"] = capability
+            record["capability_by_modality_sufficient"] = (
+                all(
+                    float(capability.get(modality, 0.0)) >= float(min_clean_capability_rate)
+                    for modality in MODALITIES
+                )
+                if clean_capability is not None
+                else None
+            )
         record["usable"] = bool(
             record["admissible"]
             and not disqualified
@@ -1205,22 +1223,57 @@ def audit_property_family(
 
 
 def assert_property_pair_changes_answer(
-    family: str | PropertyFamily, source: str, target: str
+    family: str | PropertyFamily,
+    source: str,
+    target: str,
+    *,
+    resolved: Mapping[str, Mapping] | None = None,
 ) -> dict:
-    """Refuse a direction whose two concepts share an answer or an alias."""
+    """Refuse a direction whose two concepts share an answer or an alias.
+
+    ``resolved`` supplies the current audit's per-concept rows (from
+    :func:`audit_property_family`'s ``"concepts"`` list) for any concept whose
+    answer is decided empirically rather than declared. Without it, a concept
+    marked ``empirical_answer_required`` that has not yet been resolved from
+    data is refused outright, rather than silently treated as an admissible
+    answer of ``""`` with no aliases — which would let an unresolved pair like
+    ``bird->cat`` pass this check by accident, since an empty alias set never
+    overlaps anything.
+    """
 
     spec = PROPERTY_FAMILIES[family] if isinstance(family, str) else family
-    source_answer = spec.answer_for(source)
-    target_answer = spec.answer_for(target)
     if spec.disqualified:
         raise MultimodalFollowupRefused(
             f"{spec.name}: {spec.disqualified_reason}"
         )
+
+    def _answer_for(concept: str) -> PropertyAnswer:
+        declared = spec.answer_for(concept)
+        row = (resolved or {}).get(concept)
+        if row is None:
+            return declared
+        return PropertyAnswer(
+            concept=concept,
+            answer=str(row.get("answer") or ""),
+            aliases=tuple(row.get("aliases") or ()),
+            admissible=bool(row.get("admissible")),
+            reason=str(row.get("reason") or ""),
+            empirical_answer_required=bool(
+                row.get("empirical_answer_required")
+                or declared.empirical_answer_required
+            ),
+        )
+
+    source_answer = _answer_for(source)
+    target_answer = _answer_for(target)
     for answer in (source_answer, target_answer):
-        if not answer.admissible:
+        if not answer.admissible or (
+            answer.empirical_answer_required and not answer.aliases
+        ):
             raise MultimodalFollowupRefused(
                 f"{spec.name}: concept {answer.concept!r} was refused by the "
-                f"property audit ({answer.reason})"
+                f"property audit "
+                f"({answer.reason or 'no resolved empirical answer'})"
             )
     overlap = sorted(set(source_answer.aliases) & set(target_answer.aliases))
     if overlap or source_answer.answer == target_answer.answer:
@@ -1777,7 +1830,8 @@ def freeze_new_property_design(
             f"{name} is not among the directions development licensed"
         )
     pair_record = assert_property_pair_changes_answer(
-        str(audit["family"]), str(direction[0]), str(direction[1])
+        str(audit["family"]), str(direction[0]), str(direction[1]),
+        resolved={row["concept"]: row for row in audit.get("concepts") or ()},
     )
     spec = PROPERTY_FAMILIES[str(audit["family"])]
     payload = {
