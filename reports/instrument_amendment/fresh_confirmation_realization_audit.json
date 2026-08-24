@@ -1,0 +1,30 @@
+{
+  "schema": "jlens.mmpilot.multimodal_legacy_confirmation_audit.v1",
+  "audit_version": "mmpilot.multimodal_legacy_confirmation_realization_audit.v1",
+  "written_utc": "2026-08-24T00:00:00+00:00",
+  "report_checksum": "sha256:2bb6dcc1346229573566125bc8d91c782247d55af5091f4215d98bb621472ff7",
+  "trial_function": "jlens.mmpilot.multimodal_lens.unrestricted_swap_trial",
+  "realization_policy_passed": false,
+  "post_cast_diagnostics_stored": [],
+  "post_cast_diagnostics_enforced": [],
+  "enforced_integrity_clauses": [
+    "expected_layers_patched",
+    "all_prompt_positions_patched"
+  ],
+  "enforced_tolerance": 1e-05,
+  "frozen_post_cast_tolerance": 0.02,
+  "artifacts_sufficient": false,
+  "verdict": "ARTIFACTS_INSUFFICIENT_REPLICATION_REQUIRED",
+  "required_replication": {
+    "why": "the enforced coordinate and residual gates read the float64 pre-cast solve error, which is exact by construction and says nothing about what the bf16 residual stream received. The post-cast quantities were computed but never persisted by the trial function, so no stored artifact can settle this",
+    "smallest_sufficient_design": "replay the identical recruited photographs, modalities, bases, band, positions and endpoint through the same trial path, twice: once with no realization policy to reproduce the stored top-1 token exactly and measure the post-cast error the confirmed run actually incurred, and once with the frozen policy to see whether a faithfully realized exchange preserves the recorded outcome",
+    "reproduces_stored_outcome_required": true,
+    "writes_to_original_run": false
+  },
+  "reaffirms_original_result": false,
+  "invalidates_original_result": false,
+  "scientific_recompute": 0,
+  "original_report_modified": false,
+  "boundary": "A code-path and artifact-content audit. It reports what the completed confirmation measured and stored, and whether that is enough to decide the realization question. It does not decide the scientific question in either direction.",
+  "audit_checksum": "sha256:ad91efd63725fac9d0a2627c61c3628cfa1d694c64d96aa15f6838c25d358390"
+}

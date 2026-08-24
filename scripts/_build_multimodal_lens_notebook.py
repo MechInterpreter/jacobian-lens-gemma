@@ -67,9 +67,41 @@ better in advance, and no arm is selected after seeing a causal result.
 | 3C | A100 recommended | extend pooled J to L16-L32 and run a broad paper-depth workspace development | one fit checkpoint / one trial |
 | 3D | A100 or L4 | checksum-pinned fresh confirmation of the frozen development winner | one capability/trial JSON |
 | 4 | CPU | write the report from stored units | no model |
+| 5B1A | CPU | read-only amendment of the flawed recruited run + audit of the confirmed leg-count code path | no model, zero forwards |
+| 5B1RC | L4 | corrected recruited exploratory rerun with the realization policy and the direct-answer positive control | one generated condition |
 
 Changing any model, processor, audio protocol, cache, population, order, layer,
-prompt, lens, or causal setting changes the fingerprint and refuses reuse.
+prompt, lens, causal setting, **or model-dtype realization policy** changes the
+fingerprint and refuses reuse.
+
+## The two configurations for the instrument repair
+
+Run exactly one of these per session. Everything they need is printed before
+the model is loaded.
+
+**A. CPU-only historical amendment and preflight** — no GPU, no model, no lens,
+zero forwards, `scientific_recompute = 0`:
+
+```python
+RUN_REAL_MATCHED_JLENS = True
+RUN_STAGE5B1A_INSTRUMENT_AMENDMENT = True
+```
+
+**B. L4 corrected causal rerun** — the corrected Stage 5B1RC:
+
+```python
+RUN_REAL_MATCHED_JLENS = True
+RUN_STAGE5B01_AUDIO_LINKAGE_AUDIT = True
+RUN_STAGE5B1RC_CORRECTED_EXPLORATORY = True
+CONFIRM_MODEL_LOAD = True
+CONFIRM_CORRECTED_EXPLORATORY_BUDGET = True
+```
+
+Configuration B is 240 generated conditions at 6 tokens each — at most 1440
+token forwards, zero lens fits, zero backward passes, one checksum-valid JSON
+per completed condition, and roughly 3 MB of Drive. Section 2 prints all of it,
+plus the realization tolerance, the positive control's role and the primary
+outcome rule, before section 4 loads anything.
 """
 )
 
@@ -127,6 +159,10 @@ RUN_STAGE3_CAUSAL_COMPARE = False
 RUN_STAGE3B_ALPHA_SWEEP = False
 RUN_STAGE3C_BROAD_POOLED_WORKSPACE = False
 RUN_STAGE3D_FRESH_MULTIMODAL_CONFIRMATION = False
+# Stage 3DA is the read-only realization replication of that completed
+# confirmation. It writes to its own run directory, never into the confirmed
+# run, and it cannot relabel the confirmed verdict.
+RUN_STAGE3DA_CONFIRMATION_REALIZATION_REPLICATION = False
 RUN_STAGE4_WRITE_REPORT = False
 
 CONFIRM_MODEL_LOAD = False
@@ -136,6 +172,7 @@ CONFIRM_ALPHA_SWEEP_BUDGET = False
 CONFIRM_BROAD_POOLED_FIT_BUDGET = False
 CONFIRM_BROAD_POOLED_CAUSAL_BUDGET = False
 CONFIRM_FRESH_MULTIMODAL_CONFIRMATION_BUDGET = False
+CONFIRM_CONFIRMATION_REPLICATION_BUDGET = False
 REPORT_RUN_DIR = None
 
 MODEL_REPO_ID = "google/gemma-4-E4B-it"
@@ -223,7 +260,11 @@ RUN_STAGE5B00_PROPERTY_PROMPT_SCREEN = False
 RUN_STAGE5B0_PROPERTY_AUDIT = False
 RUN_STAGE5B1_NEW_PROPERTY_DEVELOPMENT = False
 RUN_STAGE5B01_AUDIO_LINKAGE_AUDIT = False
-RUN_STAGE5B1R_RECRUITED_EXPLORATORY = False
+# Stage 5B1A is the CPU-only read-only amendment of the flawed recruited run,
+# plus the code-path audit of the confirmed leg-count result. No model, no lens,
+# zero forwards. Stage 5B1RC is the corrected causal rerun; it needs an L4.
+RUN_STAGE5B1A_INSTRUMENT_AMENDMENT = False
+RUN_STAGE5B1RC_CORRECTED_EXPLORATORY = False
 RUN_STAGE5B2_FREEZE_NEW_PROPERTY_DESIGN = False
 RUN_STAGE5B3_NEW_PROPERTY_CONFIRMATION = False
 RUN_STAGE5C_ASYMMETRY_REPLICATION = False
@@ -232,7 +273,7 @@ RUN_ARTIFACT_EXCLUSION_AUDIT = False
 CONFIRM_LOCALIZATION_BUDGET = False
 CONFIRM_PROPERTY_PROMPT_SCREEN_BUDGET = False
 CONFIRM_NEW_PROPERTY_DEVELOPMENT_BUDGET = False
-CONFIRM_RECRUITED_EXPLORATORY_BUDGET = False
+CONFIRM_CORRECTED_EXPLORATORY_BUDGET = False
 CONFIRM_NEW_PROPERTY_CONFIRMATION_BUDGET = False
 CONFIRM_ASYMMETRY_BUDGET = False
 
@@ -337,6 +378,65 @@ RECRUITED_EXPLORATORY_CONCEPTS = ("cat", "cow")
 RECRUITED_EXPLORATORY_DIRECTIONS = (("cat", "cow"), ("cow", "cat"))
 RECRUITED_EXPLORATORY_IMAGES_PER_DIRECTION = 8
 RECRUITED_EXPLORATORY_SEED = "post-audit-clean-capable-rescue-20260824-v1"
+
+# The completed recruited exploratory run. Its 0/8 outputs are retained as
+# historical evidence and its files are never rewritten, but its instrument was
+# broken: the model-dtype realization policy was not passed into the generated
+# conditions and the verdict's integrity check omitted the clauses below, so a
+# post-cast relative coordinate error an order of magnitude outside the frozen
+# 0.02 tolerance was reported as integrity_pass=true. Stage 5B1A amends it
+# read-only; Stage 5B1RC reruns it with the identical scientific design.
+RECRUITED_EXPLORATORY_FLAWED_RUN_DIR = (
+    "/content/drive/MyDrive/jacobian-lens-gemma/runs/mmnewpropertyrescue/"
+    "mmnewpropertyrescue_real_6af6affcb145"
+)
+EXPECTED_RECRUITED_EXPLORATORY_REPORT_CHECKSUM = (
+    "sha256:467a2862cef70f0b59a75678c6a73c68259f4b29f715a97fbb831914710f660a"
+)
+# Worst observed post-cast relative coordinate error per condition, read off
+# that run's own stored trial diagnostics. The zero arm is exact because its
+# update is multiplied by exactly zero.
+RECRUITED_EXPLORATORY_OBSERVED_POST_CAST_ERRORS = {
+    "exact": 0.21,
+    "random": 0.10,
+    "unrelated": 0.29,
+    "zero": 0.0,
+}
+# The clauses that existed in the diagnostics but were never enforced.
+RECRUITED_EXPLORATORY_OMITTED_CLAUSES = (
+    "all_hooks_fired",
+    "all_finite",
+    "alpha_one_exact_exchange_before_cast",
+    "model_dtype_realization_converged",
+    "post_cast_coordinate_error_within_tolerance",
+    "post_cast_residual_drift_within_tolerance",
+)
+# What the completed leg-count confirmation's verdict actually enforced. Both
+# gates are real and tight (1e-5), but both read the float64 *pre-cast* solve
+# error, which is exact by construction; neither is a post-cast clause.
+LEGACY_CONFIRMATION_ENFORCED_CLAUSES = (
+    "expected_layers_patched",
+    "all_prompt_positions_patched",
+)
+# What that run's stored rows actually carry, and whether it passed a
+# realization policy. Both are historical facts about the completed artifact,
+# pinned here because a later repair to unrestricted_swap_trial changes what
+# today's code would do and must not be mistaken for what that run did. Stage
+# 5B1A prefers the artifact's own rows whenever Drive is mounted.
+LEGACY_CONFIRMATION_STORED_ROW_FIELDS = (
+    "max_activation_norm_ratio",
+    "max_coordinate_update_error",
+    "max_orthogonal_residual_drift",
+    "max_update_to_activation_norm_ratio",
+    "min_activation_norm_ratio",
+)
+LEGACY_CONFIRMATION_REALIZATION_POLICY_PASSED = False
+# The corrected rerun adds one arm to the same four conditions: the
+# norm-matched direct-answer positive control. It is a diagnostic of causal
+# leverage on this path and can never produce a GO.
+CORRECTED_EXPLORATORY_CONDITIONS = (
+    "exact", "zero", "random", "unrelated", "direct_answer",
+)
 PROPERTY_PROMPT_SCREEN_CONCEPTS = ("cat", "cow")
 NEW_PROPERTY_CONCEPTS = ("bird", "cat", "cow", "dog")
 NEW_PROPERTY_DEV_DIRECTIONS = (
@@ -440,7 +540,7 @@ FOLLOWUP_STAGES = {
     "5B00_property_prompt_screen": RUN_STAGE5B00_PROPERTY_PROMPT_SCREEN,
     "5B0_property_audit": RUN_STAGE5B0_PROPERTY_AUDIT,
     "5B1_new_property_development": RUN_STAGE5B1_NEW_PROPERTY_DEVELOPMENT,
-    "5B1R_recruited_exploratory": RUN_STAGE5B1R_RECRUITED_EXPLORATORY,
+    "5B1RC_corrected_exploratory": RUN_STAGE5B1RC_CORRECTED_EXPLORATORY,
     "5B2_freeze": RUN_STAGE5B2_FREEZE_NEW_PROPERTY_DESIGN,
     "5B3_new_property_confirmation": RUN_STAGE5B3_NEW_PROPERTY_CONFIRMATION,
     "5C_asymmetry_replication": RUN_STAGE5C_ASYMMETRY_REPLICATION,
@@ -454,6 +554,7 @@ if any(FOLLOWUP_STAGES.values()) and any((
     RUN_STAGE1_FIT_LENSES, RUN_STAGE2_CROSS_EVALUATE, RUN_STAGE3_CAUSAL_COMPARE,
     RUN_STAGE3B_ALPHA_SWEEP, RUN_STAGE3C_BROAD_POOLED_WORKSPACE,
     RUN_STAGE3D_FRESH_MULTIMODAL_CONFIRMATION,
+    RUN_STAGE3DA_CONFIRMATION_REALIZATION_REPLICATION,
 )):
     raise RuntimeError(
         "a follow-up stage never shares a session with the completed study "
@@ -464,11 +565,12 @@ MODEL_STAGE = any((
     RUN_STAGE3_CAUSAL_COMPARE, RUN_STAGE3B_ALPHA_SWEEP,
     RUN_STAGE3C_BROAD_POOLED_WORKSPACE,
     RUN_STAGE3D_FRESH_MULTIMODAL_CONFIRMATION,
+    RUN_STAGE3DA_CONFIRMATION_REALIZATION_REPLICATION,
     RUN_STAGE5A_BAND_LOCALIZATION,
     RUN_STAGE5B00_PROPERTY_PROMPT_SCREEN,
     RUN_STAGE5B0_PROPERTY_AUDIT,
     RUN_STAGE5B1_NEW_PROPERTY_DEVELOPMENT,
-    RUN_STAGE5B1R_RECRUITED_EXPLORATORY,
+    RUN_STAGE5B1RC_CORRECTED_EXPLORATORY,
     RUN_STAGE5B3_NEW_PROPERTY_CONFIRMATION,
     RUN_STAGE5C_ASYMMETRY_REPLICATION,
 ))
@@ -488,6 +590,10 @@ FRESH_CONFIRMATION_ENABLED = bool(
     RUN_STAGE3D_FRESH_MULTIMODAL_CONFIRMATION and MODEL_ENABLED
     and CONFIRM_FRESH_MULTIMODAL_CONFIRMATION_BUDGET
 )
+CONFIRMATION_REPLICATION_ENABLED = bool(
+    RUN_STAGE3DA_CONFIRMATION_REALIZATION_REPLICATION and MODEL_ENABLED
+    and CONFIRM_CONFIRMATION_REPLICATION_BUDGET
+)
 if REAL_MODE and MODEL_STAGE and not MODEL_ENABLED:
     print("MODEL STAGES BLOCKED: set CONFIRM_MODEL_LOAD after reading the budget")
 if REAL_MODE and RUN_STAGE1_FIT_LENSES and not FIT_ENABLED:
@@ -502,6 +608,8 @@ if REAL_MODE and RUN_STAGE3C_BROAD_POOLED_WORKSPACE and not BROAD_POOLED_ENABLED
     )
 if REAL_MODE and RUN_STAGE3D_FRESH_MULTIMODAL_CONFIRMATION and not FRESH_CONFIRMATION_ENABLED:
     print("FRESH CONFIRMATION BLOCKED: confirm its printed budget")
+if REAL_MODE and RUN_STAGE3DA_CONFIRMATION_REALIZATION_REPLICATION and not CONFIRMATION_REPLICATION_ENABLED:
+    print("CONFIRMATION REALIZATION REPLICATION BLOCKED: confirm its printed budget")
 
 LOCALIZATION_ENABLED = bool(
     RUN_STAGE5A_BAND_LOCALIZATION and MODEL_ENABLED and CONFIRM_LOCALIZATION_BUDGET
@@ -516,9 +624,10 @@ NEW_PROPERTY_DEV_ENABLED = bool(
     and CONFIRM_NEW_PROPERTY_DEVELOPMENT_BUDGET
 )
 AUDIO_LINKAGE_AUDIT_ENABLED = bool(RUN_STAGE5B01_AUDIO_LINKAGE_AUDIT)
-RECRUITED_EXPLORATORY_ENABLED = bool(
-    RUN_STAGE5B1R_RECRUITED_EXPLORATORY and MODEL_ENABLED
-    and CONFIRM_RECRUITED_EXPLORATORY_BUDGET
+INSTRUMENT_AMENDMENT_ENABLED = bool(RUN_STAGE5B1A_INSTRUMENT_AMENDMENT)
+CORRECTED_EXPLORATORY_ENABLED = bool(
+    RUN_STAGE5B1RC_CORRECTED_EXPLORATORY and MODEL_ENABLED
+    and CONFIRM_CORRECTED_EXPLORATORY_BUDGET
 )
 NEW_PROPERTY_FREEZE_ENABLED = bool(RUN_STAGE5B2_FREEZE_NEW_PROPERTY_DESIGN)
 NEW_PROPERTY_CONFIRM_ENABLED = bool(
@@ -532,7 +641,7 @@ for _name, _requested, _enabled in (
     ("STAGE 5A LOCALIZATION", RUN_STAGE5A_BAND_LOCALIZATION, LOCALIZATION_ENABLED),
     ("STAGE 5B00 PROPERTY PROMPT SCREEN", RUN_STAGE5B00_PROPERTY_PROMPT_SCREEN, PROPERTY_PROMPT_SCREEN_ENABLED),
     ("STAGE 5B1 NEW-PROPERTY DEVELOPMENT", RUN_STAGE5B1_NEW_PROPERTY_DEVELOPMENT, NEW_PROPERTY_DEV_ENABLED),
-    ("STAGE 5B1R RECRUITED EXPLORATORY", RUN_STAGE5B1R_RECRUITED_EXPLORATORY, RECRUITED_EXPLORATORY_ENABLED),
+    ("STAGE 5B1RC CORRECTED EXPLORATORY", RUN_STAGE5B1RC_CORRECTED_EXPLORATORY, CORRECTED_EXPLORATORY_ENABLED),
     ("STAGE 5B3 NEW-PROPERTY CONFIRMATION", RUN_STAGE5B3_NEW_PROPERTY_CONFIRMATION, NEW_PROPERTY_CONFIRM_ENABLED),
     ("STAGE 5C ASYMMETRY REPLICATION", RUN_STAGE5C_ASYMMETRY_REPLICATION, ASYMMETRY_ENABLED),
 ):
@@ -628,6 +737,19 @@ print("  primary endpoint          unrestricted next-token top1 = 4")
 print("  inference                 paired exact sign tests; Holm FWER", CONFIRMATION_FAMILYWISE_ALPHA)
 print("  resume                    one checksum-valid JSON per completed forward")
 print()
+print("STAGE 3DA CONFIRMATION REALIZATION REPLICATION BUDGET")
+print("  what it measures          whether the completed confirmation's exchange")
+print("                            was realized in the model's bf16 dtype, and")
+print("                            whether repairing it preserves the outcome")
+print("  fitting / backward passes 0 / 0")
+print("  arms                      uncorrected (as run) and corrected (frozen policy)")
+print("  EXACT GENERATIONS         ",
+      CONFIRMATION_IMAGES * 3 * 4 * 2, "(single-token endpoint)")
+print("  MAXIMUM TOKEN FORWARDS    ", CONFIRMATION_IMAGES * 3 * 4 * 2)
+print("  writes into the confirmed run   no; its own run directory only")
+print("  can relabel the confirmed verdict  no")
+print("  resume unit               one checksum-valid JSON per arm x condition")
+print()
 
 from jlens.mmpilot.multimodal_followup import (
     ANIMAL_SOUND_PROMPT_CANDIDATES, followup_budget, localization_budget,
@@ -710,25 +832,62 @@ print("  TOTAL NEW MODEL FORWARDS  ", NEW_PROPERTY_DEV_BUDGET["total_forwards"])
 print("  lens fits / backward      ", NEW_PROPERTY_DEV_BUDGET["lens_fits"], "/",
       NEW_PROPERTY_DEV_BUDGET["backward_passes"])
 print()
-RECRUITED_EXPLORATORY_BUDGET = followup_budget(
-    stage="5B1R",
-    n_candidates=0,
-    n_recruited=RECRUITED_EXPLORATORY_IMAGES_PER_DIRECTION,
-    max_new_tokens=NEW_PROPERTY_MAX_NEW_TOKENS,
-    n_directions=len(RECRUITED_EXPLORATORY_DIRECTIONS),
+from jlens.mmpilot.multimodal_instrument import (
+    INTEGRITY_CLAUSES as _INTEGRITY_CLAUSES,
+    POST_CAST_TOLERANCE as _POST_CAST_TOLERANCE,
+    realization_policy_digest as _realization_policy_digest,
 )
-print("STAGE 5B01/5B1R METADATA AUDIT + RECRUITED EXPLORATORY BUDGET")
+
+_CORRECTED_N_CONDITIONS = (
+    RECRUITED_EXPLORATORY_IMAGES_PER_DIRECTION
+    * len(RECRUITED_EXPLORATORY_DIRECTIONS)
+    * 3
+    * len(CORRECTED_EXPLORATORY_CONDITIONS)
+)
+_CORRECTED_MAX_TOKEN_FORWARDS = (
+    _CORRECTED_N_CONDITIONS * NEW_PROPERTY_MAX_NEW_TOKENS
+)
+# One JSON unit per generated condition plus one report; the units are small
+# flat records, not activations.
+_CORRECTED_DRIVE_MB = round(
+    (_CORRECTED_N_CONDITIONS * 12 + 400) / 1024.0, 2
+)
+print("STAGE 5B01 METADATA AUDIT BUDGET")
 print("  metadata audit            CPU, 0 model forwards")
 print("  source capability rows    reused; no clean regeneration")
-print("  recruited photographs     ", RECRUITED_EXPLORATORY_IMAGES_PER_DIRECTION,
-      "per source concept")
-print("  generated conditions      ",
-      RECRUITED_EXPLORATORY_IMAGES_PER_DIRECTION
-      * len(RECRUITED_EXPLORATORY_DIRECTIONS) * 3 * 4)
-print("  maximum token forwards    ",
-      RECRUITED_EXPLORATORY_BUDGET["patched_forwards"])
+print()
+print("STAGE 5B1A INSTRUMENT AMENDMENT BUDGET (CPU-only)")
+print("  model loads               0")
+print("  model forwards            0")
 print("  lens fits / backward      0 / 0")
-print("  resume                    one checksum-valid condition JSON")
+print("  scientific_recompute      0")
+print("  writes                    new files beside the completed runs; no")
+print("                            completed report or unit is opened for writing")
+print()
+print("STAGE 5B1RC CORRECTED EXPLORATORY BUDGET")
+print("  recruited photographs     ", RECRUITED_EXPLORATORY_IMAGES_PER_DIRECTION,
+      "per source concept (existing spent population; none newly selected)")
+print("  conditions per cell       ", list(CORRECTED_EXPLORATORY_CONDITIONS))
+print("  EXACT GENERATIONS         ", _CORRECTED_N_CONDITIONS)
+print("  MAXIMUM TOKEN FORWARDS    ", _CORRECTED_MAX_TOKEN_FORWARDS,
+      f"({NEW_PROPERTY_MAX_NEW_TOKENS} per generation, early stop only reduces it)")
+print("  lens fits                  0")
+print("  backward passes            0")
+print("  resume unit               one checksum-valid JSON per completed")
+print("                            generated condition")
+print("  realization tolerance     ", _POST_CAST_TOLERANCE,
+      "relative, post-cast, coordinate and residual")
+print("  realization policy digest ", _realization_policy_digest())
+print("  integrity clauses enforced", len(_INTEGRITY_CLAUSES))
+print("  positive control          norm-matched direct answer; diagnoses the")
+print("                            instrument, cannot produce a GO, is not a")
+print("                            coordinate exchange, is scored separately")
+print("  primary outcome rule      alpha=1 exact exchange >= "
+      f"{NEW_PROPERTY_DEV_MIN_SUCCESS_RATE:.2f} in every modality with every")
+print("                            control at least "
+      f"{NEW_PROPERTY_DEV_MIN_CONTROL_MARGIN:.2f} below it, and every integrity")
+print("                            clause satisfied; no alpha sweep")
+print("  expected Drive usage      ~", _CORRECTED_DRIVE_MB, "MB")
 print("  label                     outcome-informed exploratory; not confirmation")
 print()
 NEW_PROPERTY_CONFIRM_BUDGET = followup_budget(
@@ -2381,7 +2540,7 @@ if REAL_MODE and FRESH_CONFIRMATION_ENABLED:
     )
     from jlens.mmpilot.digit_reasoning_confirmation import resolve_digit_endpoints
     from jlens.mmpilot.multimodal_lens import (
-        build_swap_bases_for_lens, holm_adjust,
+        build_swap_bases_for_lens, confirmation_leg_count_prompt, holm_adjust,
         load_broad_pooled_development_source, load_completed_causal_source,
         open_answer_matches, paired_binary_one_sided_p,
         select_causal_groups, unrestricted_swap_trial,
@@ -2531,12 +2690,9 @@ if REAL_MODE and FRESH_CONFIRMATION_ENABLED:
         target=_tokens[BROAD_POOLED_CONTROLS[1]],
     )
 
-    def _confirmation_prompt(modality, caption):
-        question = (
-            "How many legs does the animal in the evidence typically have? "
-            "Answer with one digit.\nAnswer:"
-        )
-        return f"Caption: {caption}\n{question}" if modality == "text" else question
+    # The wording lives in jlens.mmpilot.multimodal_lens so Stage 3DA can
+    # replay this run under the identical prompt instead of a copy of it.
+    _confirmation_prompt = confirmation_leg_count_prompt
 
     _confirmation_capability = []
     for _group in _confirmation_population:
@@ -2793,6 +2949,328 @@ if REAL_MODE and FRESH_CONFIRMATION_ENABLED:
     print("checksum", FRESH_CONFIRMATION_REPORT["report_checksum"])
 elif RUN_STAGE3D_FRESH_MULTIMODAL_CONFIRMATION:
     print("Stage 3D requested but blocked by model or confirmation budget.")
+'''
+)
+
+markdown(
+    r"""
+## 10E. Stage 3DA — the smallest exact replication of the confirmed result's realization
+
+Stage 5B1A establishes, from the code path alone, that no stored artifact of
+`FRESH_MULTIMODAL_CONFIRMATION_GO` can say whether its exchange was realized in
+the model's dtype: `unrestricted_swap_trial` computed the post-cast quantities
+inside `swap_coordinates` and then kept only the float64 pre-cast solve errors.
+Those are exact by construction, so the `1e-5` gate that stage enforced could
+never have caught this defect — and equally, it is no evidence that the defect
+was present.
+
+This stage is the smallest measurement that can settle it. It replays the
+**identical** recruited photographs, modalities, bases, band, positions and
+single-token endpoint through the same trial function, twice:
+
+| arm | policy | question |
+| --- | --- | --- |
+| `uncorrected` | none, exactly as the completed run | does it reproduce the stored top-1 token, and what post-cast error did that run actually incur? |
+| `corrected` | the frozen `MODEL_DTYPE_REALIZATION` | does a faithfully realized exchange preserve the recorded outcome? |
+
+Nothing is written into the completed run directory. The completed report is
+read by checksum and never opened for writing, and its verdict string is not
+restated as a new one. If the uncorrected arm fails to reproduce the stored
+tokens, the replay is not the same measurement and no comparison is licensed.
+
+A changed outcome under the corrected instrument does **not** retroactively
+invalidate the confirmed result by prose; it licenses a fresh confirmation.
+"""
+)
+code(
+    r'''
+CONFIRMATION_REALIZATION_REPLICATION = None
+if REAL_MODE and CONFIRMATION_REPLICATION_ENABLED:
+    from jlens.lens import JacobianLens
+    from jlens.mmpilot.coordinate_swap import (
+        random_two_direction_basis, resolve_concept_token,
+    )
+    from jlens.mmpilot.multimodal_followup import (
+        legacy_confirmation_replication_verdict, load_verified_report,
+    )
+    from jlens.mmpilot.multimodal_instrument import (
+        MODEL_DTYPE_REALIZATION, POST_CAST_TOLERANCE, realization_policy_digest,
+    )
+    from jlens.mmpilot.multimodal_lens import (
+        build_swap_bases_for_lens, confirmation_leg_count_prompt,
+        load_broad_pooled_development_source, open_answer_matches,
+        unrestricted_swap_trial,
+    )
+    from jlens.mmpilot.store import RunFingerprint, UnitStore, safe_key
+
+    _replication_source_path = (
+        Path(FRESH_CONFIRMATION_RUN_DIR) /
+        "fresh_multimodal_confirmation_report.json"
+    )
+    _completed = load_verified_report(
+        _replication_source_path,
+        expected_checksum=EXPECTED_FRESH_CONFIRMATION_REPORT_CHECKSUM,
+        label="completed fresh multimodal confirmation",
+    )
+    if _completed.get("verdict") != "FRESH_MULTIMODAL_CONFIRMATION_GO":
+        raise RuntimeError(
+            "Stage 3DA replays the confirmed run only; this report is "
+            + str(_completed.get("verdict"))
+        )
+    _stored_rows = [dict(row) for row in _completed.get("rows") or []]
+    if not _stored_rows:
+        raise RuntimeError("the pinned confirmation report stores no trial rows")
+    _stored_index = {
+        (str(row["group_id"]), str(row["modality"]), str(row["condition"])): row
+        for row in _stored_rows
+    }
+    _stored_group_ids = list(dict.fromkeys(
+        str(row["group_id"]) for row in _stored_rows
+    ))
+    _group_index = {str(group["group_id"]): group for group in GROUPS}
+    _missing = [g for g in _stored_group_ids if g not in _group_index]
+    if _missing:
+        raise RuntimeError(
+            "the cached manifest is missing confirmation groups " + repr(_missing[:10])
+        )
+
+    _replication_config = {
+        "study": "broad_pooled_confirmation_realization_replication.v1",
+        "original_report_checksum": EXPECTED_FRESH_CONFIRMATION_REPORT_CHECKSUM,
+        "original_run_dir": str(FRESH_CONFIRMATION_RUN_DIR),
+        "original_run_modified": False,
+        "model_repo_id": MODEL_REPO_ID,
+        "model_revision": MODEL_REVISION,
+        "audio_protocol_fingerprint": AUDIO_PROTOCOL_FINGERPRINT,
+        "manifest_checksum": MANIFEST_CHECKSUM,
+        "lens_checksum": EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+        "lens_refitted": False,
+        "direction": list(CONFIRMATION_DIRECTION),
+        "alpha": CONFIRMATION_ALPHA,
+        "layers": list(BROAD_POOLED_BAND),
+        "positions": "every original prompt position",
+        "endpoint": "unrestricted full-vocabulary next-token top1",
+        "conditions": ["exact", "zero", "random", "unrelated"],
+        "arms": ["uncorrected", "corrected"],
+        "n_groups": len(_stored_group_ids),
+        "model_dtype_realization_policy": MODEL_DTYPE_REALIZATION.to_dict(),
+        "model_dtype_realization_policy_digest": realization_policy_digest(),
+        "post_cast_relative_tolerance": POST_CAST_TOLERANCE,
+        "measures_only_realization_and_outcome_identity": True,
+        "commit": COMMIT,
+    }
+    _replication_digest = payload_checksum(_replication_config)
+    CONFIRMATION_REPLICATION_RUN_DIR = (
+        RUNS_ROOT / "mmconfirmrealization" /
+        f"mmconfirmrealization_real_{_replication_digest.split(':')[1][:12]}"
+    )
+    CONFIRMATION_REPLICATION_RUN_DIR.mkdir(parents=True, exist_ok=True)
+    (CONFIRMATION_REPLICATION_RUN_DIR / "scientific_config.json").write_text(
+        json.dumps(_replication_config, indent=2)
+    )
+    _replication_store = UnitStore(
+        CONFIRMATION_REPLICATION_RUN_DIR,
+        RunFingerprint(
+            mode="real", model_repo_id=MODEL_REPO_ID,
+            model_revision=MODEL_REVISION, processor_revision=MODEL_REVISION,
+            layers=tuple(BROAD_POOLED_BAND),
+            lens_checksum=EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+            manifest_checksum=MANIFEST_CHECKSUM,
+            split_id=EXPECTED_FRESH_CONFIRMATION_REPORT_CHECKSUM,
+            intervention_config={
+                "alpha": CONFIRMATION_ALPHA,
+                "conditions": ["exact", "zero", "random", "unrelated"],
+                "arms": ["uncorrected", "corrected"],
+                "positions": "all_original_prompt_positions",
+                "model_dtype_realization_policy_digest": realization_policy_digest(),
+            },
+            extra={"study_digest": _replication_digest},
+        ),
+    )
+    print("confirmation replication run state", _replication_store.open())
+
+    _replication_pin = load_broad_pooled_development_source(
+        BROAD_DEVELOPMENT_RUN_DIR,
+        expected_report_checksum=EXPECTED_BROAD_DEVELOPMENT_REPORT_CHECKSUM,
+        expected_population_digest=EXPECTED_BROAD_DEVELOPMENT_POPULATION_DIGEST,
+        expected_lens_checksum=EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+        expected_direction=CONFIRMATION_DIRECTION,
+    )
+    _replication_lens = JacobianLens.load(_replication_pin["lens_path"])
+    _replication_unembed = BACKEND.unembedding_weight()
+    _replication_tokens = {
+        name: resolve_concept_token(BACKEND.encode_candidate, name)
+        for name in (*CONFIRMATION_DIRECTION, *BROAD_POOLED_CONTROLS)
+    }
+    _replication_exact = build_swap_bases_for_lens(
+        _replication_lens, _replication_unembed, layers=BROAD_POOLED_BAND,
+        source=_replication_tokens[CONFIRMATION_DIRECTION[0]],
+        target=_replication_tokens[CONFIRMATION_DIRECTION[1]],
+    )
+    _replication_random = {
+        layer: random_two_direction_basis(basis, seed=20260822 + layer)
+        for layer, basis in _replication_exact.items()
+    }
+    _replication_unrelated = build_swap_bases_for_lens(
+        _replication_lens, _replication_unembed, layers=BROAD_POOLED_BAND,
+        source=_replication_tokens[BROAD_POOLED_CONTROLS[0]],
+        target=_replication_tokens[BROAD_POOLED_CONTROLS[1]],
+    )
+    _replication_conditions = (
+        ("exact", CONFIRMATION_ALPHA, _replication_exact),
+        ("zero", 0.0, _replication_exact),
+        ("random", CONFIRMATION_ALPHA, _replication_random),
+        ("unrelated", CONFIRMATION_ALPHA, _replication_unrelated),
+    )
+    _replication_rows = []
+    _replication_total = len(_stored_group_ids) * 3 * 4 * 2
+    for _group_id in _stored_group_ids:
+        _group = _group_index[_group_id]
+        for _modality in ("text", "image", "spoken_audio"):
+            _inputs = None
+            for _condition, _alpha, _bases in _replication_conditions:
+                for _arm, _policy in (
+                    ("uncorrected", None),
+                    ("corrected", MODEL_DTYPE_REALIZATION),
+                ):
+                    _key = safe_key(
+                        "realization", _arm, _group_id, _modality, _condition
+                    )
+                    _stored = _replication_store.load("intervention", _key)
+                    if _stored is None:
+                        _original = _stored_index.get(
+                            (_group_id, _modality, _condition)
+                        )
+                        if _original is None:
+                            raise RuntimeError(
+                                "the pinned confirmation report has no row for "
+                                f"{(_group_id, _modality, _condition)}"
+                            )
+                        if _inputs is None:
+                            _inputs = build_group_inputs(
+                                _group, _modality,
+                                confirmation_leg_count_prompt(
+                                    _modality, _group["caption"]
+                                ),
+                            )
+                        _trial = unrestricted_swap_trial(
+                            BACKEND, _inputs, bases=_bases, alpha=_alpha,
+                            compact_positions=True,
+                            realization_policy=_policy,
+                        )
+                        _surface = BACKEND.decode_token(
+                            _trial["patched_top_token_id"]
+                        ).strip()
+                        _stored = {
+                            "arm": _arm,
+                            "group_id": _group_id,
+                            "image_id": str(_group["image_id"]),
+                            "modality": _modality,
+                            "condition": _condition,
+                            "alpha": float(_alpha),
+                            "layers_patched": _trial["layers_patched"],
+                            "all_prompt_positions_patched": _trial[
+                                "all_prompt_positions_patched"
+                            ],
+                            "stored_top_token_id": int(
+                                _original["patched_top_token_id"]
+                            ),
+                            "replayed_top_token_id": int(
+                                _trial["patched_top_token_id"]
+                            ),
+                            "stored_success": bool(_original["success"]),
+                            "replayed_surface": _surface,
+                            "replayed_success": bool(
+                                open_answer_matches(
+                                    _surface, str(_original["expected"])
+                                )
+                            ),
+                            "max_post_cast_relative_coordinate_error": _trial[
+                                "max_post_cast_relative_coordinate_error"
+                            ],
+                            "max_post_cast_relative_residual_drift": _trial[
+                                "max_post_cast_relative_residual_drift"
+                            ],
+                            "all_model_dtype_realizations_converged": _trial[
+                                "all_model_dtype_realizations_converged"
+                            ],
+                            "max_model_dtype_corrections_applied": _trial[
+                                "max_model_dtype_corrections_applied"
+                            ],
+                            "ideal_pre_cast_coordinate_error": _trial[
+                                "max_coordinate_update_error"
+                            ],
+                            "model_dtype_realization_policy": _trial[
+                                "model_dtype_realization_policy"
+                            ],
+                        }
+                        _replication_store.save("intervention", _key, _stored)
+                    _replication_rows.append(_stored)
+                    if len(_replication_rows) % 48 == 0:
+                        print("realization replication trials",
+                              len(_replication_rows), "of", _replication_total)
+
+    CONFIRMATION_REALIZATION_REPLICATION = legacy_confirmation_replication_verdict(
+        _replication_rows,
+        original_report_checksum=EXPECTED_FRESH_CONFIRMATION_REPORT_CHECKSUM,
+        layers=BROAD_POOLED_BAND,
+    )
+    CONFIRMATION_REALIZATION_REPLICATION = {
+        **CONFIRMATION_REALIZATION_REPLICATION,
+        "scientific_config": _replication_config,
+        "rows": _replication_rows,
+    }
+    CONFIRMATION_REALIZATION_REPLICATION["report_checksum"] = payload_checksum({
+        key: value for key, value in CONFIRMATION_REALIZATION_REPLICATION.items()
+        if key != "report_checksum"
+    })
+    _replication_store.save(
+        "metric", "confirmation_realization_replication",
+        CONFIRMATION_REALIZATION_REPLICATION,
+    )
+    _replication_path = (
+        CONFIRMATION_REPLICATION_RUN_DIR /
+        "confirmation_realization_replication_report.json"
+    )
+    _replication_path.write_text(
+        json.dumps(CONFIRMATION_REALIZATION_REPLICATION, indent=2, default=str)
+    )
+    print("=" * 96)
+    print("CONFIRMATION REALIZATION REPLICATION —",
+          CONFIRMATION_REALIZATION_REPLICATION["verdict"])
+    print("=" * 96)
+    print("original report (unmodified) ",
+          CONFIRMATION_REALIZATION_REPLICATION["original_report_checksum"])
+    print("uncorrected reproduced stored",
+          CONFIRMATION_REALIZATION_REPLICATION[
+              "uncorrected_reproduced_stored_tokens"],
+          f"({CONFIRMATION_REALIZATION_REPLICATION['n_reproduced']}"
+          f"/{CONFIRMATION_REALIZATION_REPLICATION['n_uncorrected_rows']})")
+    print("original post-cast coord err ",
+          CONFIRMATION_REALIZATION_REPLICATION[
+              "original_max_post_cast_relative_coordinate_error"])
+    print("original post-cast resid     ",
+          CONFIRMATION_REALIZATION_REPLICATION[
+              "original_max_post_cast_relative_residual_drift"])
+    print("original within tolerance    ",
+          CONFIRMATION_REALIZATION_REPLICATION["original_within_tolerance"],
+          "at", CONFIRMATION_REALIZATION_REPLICATION[
+              "post_cast_relative_tolerance"])
+    print("corrected post-cast coord err",
+          CONFIRMATION_REALIZATION_REPLICATION[
+              "corrected_max_post_cast_relative_coordinate_error"])
+    print("corrected converged          ",
+          CONFIRMATION_REALIZATION_REPLICATION[
+              "corrected_realizations_converged"])
+    print("outcomes changed by fix      ",
+          CONFIRMATION_REALIZATION_REPLICATION["n_outcomes_changed"])
+    print("original verdict relabelled  ",
+          CONFIRMATION_REALIZATION_REPLICATION["original_verdict_relabelled"])
+    print("report                       ", _replication_path)
+    print("checksum                     ",
+          CONFIRMATION_REALIZATION_REPLICATION["report_checksum"])
+elif RUN_STAGE3DA_CONFIRMATION_REALIZATION_REPLICATION:
+    print("Stage 3DA requested but blocked by model or its budget.")
 '''
 )
 
@@ -3493,6 +3971,7 @@ if REAL_MODE and (PROPERTY_AUDIT_ENABLED or NEW_PROPERTY_DEV_ENABLED):
         build_swap_bases_for_lens, load_broad_pooled_development_source,
         select_causal_groups,
     )
+    from jlens.mmpilot.multimodal_instrument import MODEL_DTYPE_REALIZATION
     from jlens.mmpilot.store import RunFingerprint, UnitStore, safe_key
     from jlens.mmpilot.workspace_replication import (
         unrestricted_greedy_completion, unrestricted_greedy_swap_trial,
@@ -3880,6 +4359,7 @@ if REAL_MODE and (PROPERTY_AUDIT_ENABLED or NEW_PROPERTY_DEV_ENABLED):
                                     BACKEND, _inputs, bases=_bases, alpha=_alpha,
                                     answer=_target_answer.answer,
                                     max_new_tokens=NEW_PROPERTY_MAX_NEW_TOKENS,
+                                    realization_policy=MODEL_DTYPE_REALIZATION,
                                 )
                                 _stored = generation_trial_row(
                                     _trial, group=_group, modality=_modality,
@@ -3939,32 +4419,77 @@ elif RUN_STAGE5B0_PROPERTY_AUDIT or RUN_STAGE5B1_NEW_PROPERTY_DEVELOPMENT:
 
 markdown(
     r"""
-## 14B. Stages 5B01 and 5B1R: audit the failed audio linkage, then test the clean-capable subset
+## 14B. Stages 5B01, 5B1A and 5B1RC — audit the audio linkage, amend the flawed run, then rerun it correctly
 
-The completed identity-explicit audit remains `PROPERTY_AUDIT_NO_GO`: cow
-spoken audio scored 35/48 and missed the frozen 36/48 gate. Stage 5B01 is a
-CPU-only, read-only check that those failed rows point to uniquely joined local
-SpokenCOCO recordings and source metadata. It does not claim to transcribe the
-waveforms.
+### What went wrong
 
-If and only if that audit passes, Stage 5B1R reuses the completed clean answers
-to select the first eight cat and cow photographs that the untouched model
-answered correctly in all three modalities. It then runs the exact alpha=1
-L16-L40 coordinate exchange in both directions with zero, random, and
-unrelated controls. This stage was designed after the aggregate failure, so it
-is exploratory even if it passes. A favorable result must be frozen and
-repeated on new media before it becomes a generalization claim.
+The completed recruited exploratory run
+`mmnewpropertyrescue_real_6af6affcb145` reported 0/8 in every modality for both
+directions with `integrity_pass = true`. That flag was wrong, for two
+independent reasons.
+
+1. **The realization policy was never passed.** Stage 5B1R called
+   `unrestricted_greedy_swap_trial` without `realization_policy=`, so the
+   float64 coordinate exchange went straight into the bf16 residual stream with
+   no bounded correction. The trial diagnostics recorded post-cast **relative**
+   coordinate errors of roughly 0.21 (exact), 0.10 (random) and 0.29
+   (unrelated) against this repository's frozen tolerance of 0.02. The model
+   consumed something other than the intended exchange.
+2. **The verdict never looked.** `generation_trial_row` flattened the post-cast
+   errors correctly, but `_cell_records` scored `integrity_pass` from two
+   clauses only — patched positions and the layer list. It ignored the
+   post-cast errors, `all_hooks_fired`, `all_finite`, the alpha=1
+   exact-exchange flag and the realization convergence flag.
+
+So a broken instrument was reported in the vocabulary of a scientific null.
+
+### What these stages do
+
+**Stage 5B01** is the unchanged CPU-only audio metadata linkage audit.
+
+**Stage 5B1A** is CPU-only and read-only. It writes an amendment *beside* the
+flawed run that pins its report checksum, names the omitted integrity clauses,
+reclassifies it as `INSTRUMENT_INCONCLUSIVE`, and records
+`scientific_recompute = 0`. It rewrites nothing: the original report's bytes are
+re-hashed after the write and the hash is printed. It also audits the confirmed
+leg-count result's code path and states plainly whether its stored artifacts can
+settle the same question.
+
+**Stage 5B1RC** is the corrected causal rerun. Same property, prompt, concepts,
+directions, band, alpha, positions, modalities, population, controls and
+thresholds — nothing about the science moved. What changed is the instrument:
+the frozen `MODEL_DTYPE_REALIZATION` policy reaches every generated condition,
+the verdict enforces the full integrity clause set, and a **norm-matched
+direct-answer positive control** runs beside the exchange. The control uses the
+repository's existing `unrestricted_greedy_direct_answer_trial`; it injects the
+target answer's own lens direction with exactly the L2 norm the exchange would
+have had at that layer and position. Its rule is frozen here, before any
+corrected outcome exists:
+
+| exact exchange | direct-answer control | verdict |
+| --- | --- | --- |
+| passes, controls flat | any | `EFFECT_GO` (exploratory) |
+| fails | passes | `SCIENTIFIC_NULL` |
+| fails | fails | `INCONCLUSIVE` |
+| any | any, controls moved | `CONTROL_FAILURE` |
+| any | any, integrity failed | `INSTRUMENT_FAILURE` |
+
+The positive control diagnoses the instrument. It cannot turn a failed exchange
+into a GO — `instrument_state` has no branch that lets it — and there is no
+alpha sweep: alpha=1 remains the only exchange strength tested.
 """
 )
 code(
     r'''
 AUDIO_LINKAGE_REPORT = None
-RECRUITED_EXPLORATORY_REPORT = None
-if REAL_MODE and (AUDIO_LINKAGE_AUDIT_ENABLED or RECRUITED_EXPLORATORY_ENABLED):
+CORRECTED_EXPLORATORY_REPORT = None
+INSTRUMENT_AMENDMENT = None
+LEGACY_CONFIRMATION_AUDIT = None
+if REAL_MODE and (AUDIO_LINKAGE_AUDIT_ENABLED or CORRECTED_EXPLORATORY_ENABLED):
     from jlens.mmpilot.multimodal_followup import (
         PROPERTY_FAMILIES, audio_metadata_linkage_audit,
         generation_trial_row, load_file_by_sha256, property_prompt,
-        recruit_all_modality_capable_groups, recruited_exploratory_verdict,
+        recruit_all_modality_capable_groups,
     )
 
     _rescue_source_root = Path(RECRUITED_EXPLORATORY_SOURCE_RUN_DIR)
@@ -4049,7 +4574,7 @@ if REAL_MODE and (AUDIO_LINKAGE_AUDIT_ENABLED or RECRUITED_EXPLORATORY_ENABLED):
     print("report                      ", _alignment_path)
     print("checksum                    ", AUDIO_LINKAGE_REPORT["report_checksum"])
 
-    if RECRUITED_EXPLORATORY_ENABLED:
+    if CORRECTED_EXPLORATORY_ENABLED:
         if AUDIO_LINKAGE_REPORT["verdict"] != "AUDIO_METADATA_LINKAGE_GO":
             raise RuntimeError(
                 "recruited causal spending refused: audio metadata linkage did not pass"
@@ -4058,11 +4583,21 @@ if REAL_MODE and (AUDIO_LINKAGE_AUDIT_ENABLED or RECRUITED_EXPLORATORY_ENABLED):
         from jlens.mmpilot.coordinate_swap import (
             random_two_direction_basis, resolve_concept_token,
         )
+        from jlens.mmpilot.multimodal_followup import (
+            corrected_exploratory_verdict, direct_answer_trial_row,
+        )
+        from jlens.mmpilot.multimodal_instrument import (
+            INTEGRITY_CLAUSES, MODEL_DTYPE_REALIZATION, POST_CAST_TOLERANCE,
+            realization_policy_digest,
+        )
         from jlens.mmpilot.multimodal_lens import (
             build_swap_bases_for_lens, load_broad_pooled_development_source,
+            selected_lens_vector,
         )
         from jlens.mmpilot.store import RunFingerprint, UnitStore, safe_key
-        from jlens.mmpilot.workspace_replication import unrestricted_greedy_swap_trial
+        from jlens.mmpilot.workspace_replication import (
+            unrestricted_greedy_direct_answer_trial, unrestricted_greedy_swap_trial,
+        )
 
         _recruitment = recruit_all_modality_capable_groups(
             _source_groups, _source_capability_rows,
@@ -4081,8 +4616,34 @@ if REAL_MODE and (AUDIO_LINKAGE_AUDIT_ENABLED or RECRUITED_EXPLORATORY_ENABLED):
             expected_lens_checksum=EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
             expected_direction=CONFIRMATION_DIRECTION,
         )
+        _property = PROPERTY_FAMILIES["animal_sound"]
+        # Resolve the direct-answer tokens *before* anything is spent. A
+        # multi-token answer would leave the corrected rerun without its
+        # positive control, which is the one thing this rerun exists to add;
+        # failing here costs nothing, failing after 240 generations costs the
+        # whole session.
+        _answer_tokens = {}
+        for _src, _tgt in RECRUITED_EXPLORATORY_DIRECTIONS:
+            _answer = _property.answer_for(_tgt).answer
+            try:
+                _answer_tokens[_tgt] = resolve_concept_token(
+                    BACKEND.encode_candidate, _answer
+                )
+            except Exception as _exc:
+                raise RuntimeError(
+                    "Stage 5B1RC declares a norm-matched direct-answer positive "
+                    f"control on the answer token {_answer!r}, and this "
+                    "tokenizer does not give it a single vocabulary row: "
+                    f"{_exc}\n"
+                    "Nothing has been spent. Do not run the exchange without "
+                    "the control -- a failed exchange would then be exactly as "
+                    "unreadable as the run this stage exists to replace. The "
+                    "control's construction has to be refrozen for multi-token "
+                    "answers before this stage runs."
+                ) from _exc
         _rescue_config = {
-            "study": "multimodal_new_property_recruited_exploratory.v1",
+            "study": "multimodal_new_property_recruited_exploratory_corrected.v2",
+            "supersedes_report_checksum": EXPECTED_RECRUITED_EXPLORATORY_REPORT_CHECKSUM,
             "source_file_sha256": EXPECTED_RECRUITED_SOURCE_FILE_SHA256,
             "source_audit_digest": EXPECTED_RECRUITED_SOURCE_AUDIT_DIGEST,
             "audio_linkage_digest": AUDIO_LINKAGE_REPORT["audit_digest"],
@@ -4095,26 +4656,51 @@ if REAL_MODE and (AUDIO_LINKAGE_AUDIT_ENABLED or RECRUITED_EXPLORATORY_ENABLED):
             "lens_refitted": False,
             "layers": list(BROAD_POOLED_BAND),
             "alpha": 1.0,
+            "alpha_sweep": False,
             "positions": "every original prompt position",
             "prompt_id": "identity_explicit_v1",
             "directions": [list(pair) for pair in RECRUITED_EXPLORATORY_DIRECTIONS],
-            "conditions": ["exact", "zero", "random", "unrelated"],
+            "conditions": list(CORRECTED_EXPLORATORY_CONDITIONS),
             "images_per_direction": RECRUITED_EXPLORATORY_IMAGES_PER_DIRECTION,
+            "max_new_tokens": NEW_PROPERTY_MAX_NEW_TOKENS,
             "seed": RECRUITED_EXPLORATORY_SEED,
+            # --- the instrument, bound into the fingerprint
+            "model_dtype_realization_policy": MODEL_DTYPE_REALIZATION.to_dict(),
+            "model_dtype_realization_policy_digest": realization_policy_digest(),
+            "post_cast_relative_tolerance": POST_CAST_TOLERANCE,
+            "integrity_clauses_enforced": list(INTEGRITY_CLAUSES),
+            "positive_control": {
+                "kind": "norm_matched_direct_answer",
+                "implementation": (
+                    "jlens.mmpilot.workspace_replication."
+                    "unrestricted_greedy_direct_answer_trial"
+                ),
+                "answer_tokens": {
+                    concept: token.token_id
+                    for concept, token in sorted(_answer_tokens.items())
+                },
+                "alpha": 1.0,
+                "can_produce_a_go": False,
+                "rule_frozen_before_outcomes": True,
+            },
+            "thresholds": {
+                "min_success_rate": NEW_PROPERTY_DEV_MIN_SUCCESS_RATE,
+                "min_control_margin": NEW_PROPERTY_DEV_MIN_CONTROL_MARGIN,
+            },
             "outcome_informed_stage_design": True,
             "is_confirmation": False,
             "commit": COMMIT,
         }
         _rescue_digest = payload_checksum(_rescue_config)
-        RECRUITED_EXPLORATORY_RUN_DIR = (
-            RUNS_ROOT / "mmnewpropertyrescue" /
-            f"mmnewpropertyrescue_real_{_rescue_digest.split(':')[1][:12]}"
+        CORRECTED_EXPLORATORY_RUN_DIR = (
+            RUNS_ROOT / "mmnewpropertycorrected" /
+            f"mmnewpropertycorrected_real_{_rescue_digest.split(':')[1][:12]}"
         )
-        RECRUITED_EXPLORATORY_RUN_DIR.mkdir(parents=True, exist_ok=True)
-        (RECRUITED_EXPLORATORY_RUN_DIR / "scientific_config.json").write_text(
+        CORRECTED_EXPLORATORY_RUN_DIR.mkdir(parents=True, exist_ok=True)
+        (CORRECTED_EXPLORATORY_RUN_DIR / "scientific_config.json").write_text(
             json.dumps(_rescue_config, indent=2)
         )
-        (RECRUITED_EXPLORATORY_RUN_DIR / "recruitment.json").write_text(
+        (CORRECTED_EXPLORATORY_RUN_DIR / "recruitment.json").write_text(
             json.dumps({
                 key: value for key, value in _recruitment.items()
                 if key != "groups"
@@ -4130,50 +4716,70 @@ if REAL_MODE and (AUDIO_LINKAGE_AUDIT_ENABLED or RECRUITED_EXPLORATORY_ENABLED):
             intervention_config={
                 "alpha": 1.0,
                 "directions": [list(pair) for pair in RECRUITED_EXPLORATORY_DIRECTIONS],
-                "conditions": ["exact", "zero", "random", "unrelated"],
+                "conditions": list(CORRECTED_EXPLORATORY_CONDITIONS),
                 "positions": "all_original_prompt_positions",
                 "max_new_tokens": NEW_PROPERTY_MAX_NEW_TOKENS,
+                # A changed realization policy is a changed instrument, so it
+                # invalidates every stored unit rather than silently mixing
+                # corrected and uncorrected trials in one report.
+                "model_dtype_realization_policy_digest": realization_policy_digest(),
+                "positive_control": _rescue_config["positive_control"],
             },
             extra={"study_digest": _rescue_digest},
         )
-        _rescue_store = UnitStore(RECRUITED_EXPLORATORY_RUN_DIR, _fingerprint)
-        print("recruited exploratory run state", _rescue_store.open())
+        _rescue_store = UnitStore(CORRECTED_EXPLORATORY_RUN_DIR, _fingerprint)
+        print("corrected exploratory run state", _rescue_store.open())
 
         _lens = JacobianLens.load(_source_pin["lens_path"])
         _tokens = {
             name: resolve_concept_token(BACKEND.encode_candidate, name)
             for name in (*RECRUITED_EXPLORATORY_CONCEPTS, *BROAD_POOLED_CONTROLS)
         }
+        _unembed = BACKEND.unembedding_weight()
         _unrelated_bases = build_swap_bases_for_lens(
-            _lens, BACKEND.unembedding_weight(), layers=BROAD_POOLED_BAND,
+            _lens, _unembed, layers=BROAD_POOLED_BAND,
             source=_tokens[BROAD_POOLED_CONTROLS[0]],
             target=_tokens[BROAD_POOLED_CONTROLS[1]],
         )
-        _property = PROPERTY_FAMILIES["animal_sound"]
         _rescue_rows = []
+        _n_conditions = (
+            len(RECRUITED_EXPLORATORY_DIRECTIONS)
+            * RECRUITED_EXPLORATORY_IMAGES_PER_DIRECTION
+            * 3 * len(CORRECTED_EXPLORATORY_CONDITIONS)
+        )
         for _src, _tgt in RECRUITED_EXPLORATORY_DIRECTIONS:
             _target_answer = _property.answer_for(_tgt)
             _exact_bases = build_swap_bases_for_lens(
-                _lens, BACKEND.unembedding_weight(), layers=BROAD_POOLED_BAND,
+                _lens, _unembed, layers=BROAD_POOLED_BAND,
                 source=_tokens[_src], target=_tokens[_tgt],
             )
             _random_bases = {
-                layer: random_two_direction_basis(
-                    basis, seed=20260824 + layer
-                )
+                layer: random_two_direction_basis(basis, seed=20260824 + layer)
                 for layer, basis in _exact_bases.items()
+            }
+            # The positive control's direction is the *answer* token's own lens
+            # vector at each layer, the same construction the bases use for a
+            # concept token. Its magnitude is set inside the trial to the exact
+            # swap's per-position update norm, so it is not free steering.
+            _answer_vectors = {
+                int(layer): selected_lens_vector(
+                    _lens, _unembed, layer=int(layer),
+                    token_id=_answer_tokens[_tgt].token_id,
+                )
+                for layer in BROAD_POOLED_BAND
             }
             _conditions = (
                 ("exact", 1.0, _exact_bases),
                 ("zero", 0.0, _exact_bases),
                 ("random", 1.0, _random_bases),
                 ("unrelated", 1.0, _unrelated_bases),
+                ("direct_answer", 1.0, _exact_bases),
             )
             for _group in _recruitment["groups"][_src]:
                 for _modality in ("text", "image", "spoken_audio"):
                     for _condition, _alpha, _bases in _conditions:
                         _key = safe_key(
-                            "recruited", _src, _tgt, _group["group_id"],
+                            "corrected", _src, _tgt, _group["group_id"],
                             _modality, _condition,
                         )
                         _stored = _rescue_store.load("intervention", _key)
@@ -4185,31 +4791,51 @@ if REAL_MODE and (AUDIO_LINKAGE_AUDIT_ENABLED or RECRUITED_EXPLORATORY_ENABLED):
                                     _group["caption"],
                                 ),
                             )
-                            _trial = unrestricted_greedy_swap_trial(
-                                BACKEND, _inputs, bases=_bases, alpha=_alpha,
-                                answer=_target_answer.answer,
-                                max_new_tokens=NEW_PROPERTY_MAX_NEW_TOKENS,
-                            )
-                            _stored = generation_trial_row(
-                                _trial, group=_group, modality=_modality,
-                                condition=_condition, direction=(_src, _tgt),
-                                answer=_target_answer, layers=BROAD_POOLED_BAND,
-                            )
+                            if _condition == "direct_answer":
+                                _trial = unrestricted_greedy_direct_answer_trial(
+                                    BACKEND, _inputs, bases=_bases,
+                                    answer_vectors=_answer_vectors,
+                                    answer=_target_answer.answer,
+                                    max_new_tokens=NEW_PROPERTY_MAX_NEW_TOKENS,
+                                    realization_policy=MODEL_DTYPE_REALIZATION,
+                                    alpha=1.0,
+                                )
+                                _stored = direct_answer_trial_row(
+                                    _trial, group=_group, modality=_modality,
+                                    direction=(_src, _tgt),
+                                    answer=_target_answer,
+                                    layers=BROAD_POOLED_BAND,
+                                )
+                            else:
+                                _trial = unrestricted_greedy_swap_trial(
+                                    BACKEND, _inputs, bases=_bases, alpha=_alpha,
+                                    answer=_target_answer.answer,
+                                    max_new_tokens=NEW_PROPERTY_MAX_NEW_TOKENS,
+                                    realization_policy=MODEL_DTYPE_REALIZATION,
+                                )
+                                _stored = generation_trial_row(
+                                    _trial, group=_group, modality=_modality,
+                                    condition=_condition, direction=(_src, _tgt),
+                                    answer=_target_answer, layers=BROAD_POOLED_BAND,
+                                )
+                            # one checksum-valid atomic unit per completed
+                            # generated condition; a disconnect loses nothing
                             _rescue_store.save("intervention", _key, _stored)
                         _rescue_rows.append(_stored)
-                        if len(_rescue_rows) == 1 or len(_rescue_rows) % 48 == 0:
-                            print("recruited exploratory trials", len(_rescue_rows),
-                                  "of", 192)
+                        if len(_rescue_rows) == 1 or len(_rescue_rows) % 60 == 0:
+                            print("corrected exploratory conditions",
+                                  len(_rescue_rows), "of", _n_conditions)
 
-        RECRUITED_EXPLORATORY_REPORT = recruited_exploratory_verdict(
+        CORRECTED_EXPLORATORY_REPORT = corrected_exploratory_verdict(
             _rescue_rows, source_audit=_rescue_source,
             linkage_audit=AUDIO_LINKAGE_REPORT, recruitment=_recruitment,
+            superseded_report_checksum=EXPECTED_RECRUITED_EXPLORATORY_REPORT_CHECKSUM,
             layers=BROAD_POOLED_BAND,
             min_success_rate=NEW_PROPERTY_DEV_MIN_SUCCESS_RATE,
             min_control_margin=NEW_PROPERTY_DEV_MIN_CONTROL_MARGIN,
         )
-        RECRUITED_EXPLORATORY_REPORT = {
-            **RECRUITED_EXPLORATORY_REPORT,
+        CORRECTED_EXPLORATORY_REPORT = {
+            **CORRECTED_EXPLORATORY_REPORT,
             "scientific_config": _rescue_config,
             "recruitment": {
                 key: value for key, value in _recruitment.items()
@@ -4217,37 +4843,219 @@ if REAL_MODE and (AUDIO_LINKAGE_AUDIT_ENABLED or RECRUITED_EXPLORATORY_ENABLED):
             },
             "rows": _rescue_rows,
         }
-        RECRUITED_EXPLORATORY_REPORT["report_checksum"] = payload_checksum({
-            key: value for key, value in RECRUITED_EXPLORATORY_REPORT.items()
+        CORRECTED_EXPLORATORY_REPORT["report_checksum"] = payload_checksum({
+            key: value for key, value in CORRECTED_EXPLORATORY_REPORT.items()
             if key != "report_checksum"
         })
         _rescue_store.save(
-            "metric", "recruited_new_property_exploratory",
-            RECRUITED_EXPLORATORY_REPORT,
+            "metric", "corrected_new_property_exploratory",
+            CORRECTED_EXPLORATORY_REPORT,
         )
         _rescue_path = (
-            RECRUITED_EXPLORATORY_RUN_DIR /
-            "recruited_new_property_exploratory_report.json"
+            CORRECTED_EXPLORATORY_RUN_DIR /
+            "corrected_new_property_exploratory_report.json"
         )
         _rescue_path.write_text(
-            json.dumps(RECRUITED_EXPLORATORY_REPORT, indent=2, default=str)
+            json.dumps(CORRECTED_EXPLORATORY_REPORT, indent=2, default=str)
         )
         print("=" * 96)
-        print("RECRUITED NEW-PROPERTY EXPLORATORY —",
-              RECRUITED_EXPLORATORY_REPORT["verdict"])
+        print("CORRECTED RECRUITED EXPLORATORY —",
+              CORRECTED_EXPLORATORY_REPORT["verdict"])
         print("=" * 96)
         print("eligible clean-capable groups", _recruitment["eligible_counts"])
+        print("instrument state             ",
+              CORRECTED_EXPLORATORY_REPORT["instrument_state"])
         print("passing directions           ",
-              RECRUITED_EXPLORATORY_REPORT["passing_directions"])
+              CORRECTED_EXPLORATORY_REPORT["passing_directions"])
         print("failure modes                ",
-              RECRUITED_EXPLORATORY_REPORT["failure_modes"])
+              CORRECTED_EXPLORATORY_REPORT["failure_modes"])
+        for _row in CORRECTED_EXPLORATORY_REPORT["directions"]:
+            _control = _row["direct_answer_positive_control"]
+            print(f"  {_row['direction']:<12}", _row["instrument_state"])
+            for _cell in _row["cells"]:
+                print(
+                    f"    {_cell['modality']:<13}",
+                    f"exact {_cell['exact_successes']}/{_cell['n']}",
+                    "controls",
+                    {k: v["successes"] for k, v in _cell["controls"].items()},
+                    "post-cast ok", _cell["integrity_pass"],
+                )
+            print("    direct-answer positive control",
+                  {k: f"{v['successes']}/{v['n']}"
+                   for k, v in _control["by_modality"].items()},
+                  "passed", _control["passed"])
+        print("realization tolerance        ", POST_CAST_TOLERANCE)
+        print("realization policy digest    ", realization_policy_digest())
+        print("supersedes (not rewritten)   ",
+              EXPECTED_RECRUITED_EXPLORATORY_REPORT_CHECKSUM)
         print("source aggregate verdict     PROPERTY_AUDIT_NO_GO (unchanged)")
         print("label                        exploratory; not confirmation")
         print("report                       ", _rescue_path)
         print("checksum                     ",
-              RECRUITED_EXPLORATORY_REPORT["report_checksum"])
-elif RUN_STAGE5B01_AUDIO_LINKAGE_AUDIT or RUN_STAGE5B1R_RECRUITED_EXPLORATORY:
-    print("Stage 5B01/5B1R requested but its required gate is disabled.")
+              CORRECTED_EXPLORATORY_REPORT["report_checksum"])
+elif RUN_STAGE5B01_AUDIO_LINKAGE_AUDIT or RUN_STAGE5B1RC_CORRECTED_EXPLORATORY:
+    print("Stage 5B01/5B1RC requested but its required gate is disabled.")
+'''
+)
+
+markdown(
+    r"""
+### Stage 5B1A — the read-only historical amendment
+
+CPU-only, no model, no lens, zero forwards. Everything below is written *beside*
+the completed artifacts. `scientific_recompute` is `0`, the original verdict
+strings are reproduced verbatim, and the original report's bytes are re-hashed
+after the amendment is written so the printout proves nothing was touched.
+
+The second half audits the confirmed leg-count result
+(`FRESH_MULTIMODAL_CONFIRMATION_GO`). That study ran a different trial function,
+`unrestricted_swap_trial`, whose enforced gate was `1e-5` on
+`max_coordinate_update_error` and `max_orthogonal_residual_drift` — far tighter
+than 0.02, but those two fields are the **float64 pre-cast solve** errors, which
+are exact by construction and say nothing about what the bf16 residual stream
+received. The post-cast quantities were computed inside `swap_coordinates` but
+never persisted by that trial function. This stage reports that finding without
+reaffirming or invalidating the confirmed result, and names the smallest exact
+replication that could settle it.
+"""
+)
+code(
+    r'''
+if INSTRUMENT_AMENDMENT_ENABLED:
+    import hashlib
+    import inspect
+
+    from jlens.mmpilot.multimodal_followup import (
+        instrument_defect_amendment, legacy_confirmation_realization_audit,
+    )
+    from jlens.mmpilot.multimodal_instrument import POST_CAST_TOLERANCE
+    from jlens.mmpilot.multimodal_lens import unrestricted_swap_trial
+
+    AMENDMENT_RUN_DIR = RUNS_ROOT / "mmamendments"
+    AMENDMENT_RUN_DIR.mkdir(parents=True, exist_ok=True)
+
+    _flawed_path = (
+        Path(RECRUITED_EXPLORATORY_FLAWED_RUN_DIR) /
+        "recruited_new_property_exploratory_report.json"
+    )
+    _bytes_before = (
+        hashlib.sha256(_flawed_path.read_bytes()).hexdigest()
+        if _flawed_path.is_file() else None
+    )
+    INSTRUMENT_AMENDMENT = instrument_defect_amendment(
+        original_report_path=str(_flawed_path),
+        original_report_checksum=EXPECTED_RECRUITED_EXPLORATORY_REPORT_CHECKSUM,
+        original_run_name=Path(RECRUITED_EXPLORATORY_FLAWED_RUN_DIR).name,
+        original_verdict="RECRUITED_NEW_PROPERTY_EXPLORATORY_NO_GO",
+        omitted_clauses=RECRUITED_EXPLORATORY_OMITTED_CLAUSES,
+        observed_post_cast_relative_errors=(
+            RECRUITED_EXPLORATORY_OBSERVED_POST_CAST_ERRORS
+        ),
+        corrected_stage="5B1RC",
+    )
+    _amendment_path = (
+        AMENDMENT_RUN_DIR /
+        f"{Path(RECRUITED_EXPLORATORY_FLAWED_RUN_DIR).name}_instrument_amendment.json"
+    )
+    _amendment_path.write_text(
+        json.dumps(INSTRUMENT_AMENDMENT, indent=2, default=str)
+    )
+    _bytes_after = (
+        hashlib.sha256(_flawed_path.read_bytes()).hexdigest()
+        if _flawed_path.is_file() else None
+    )
+    print("=" * 96)
+    print("INSTRUMENT AMENDMENT —", INSTRUMENT_AMENDMENT["corrected_classification"])
+    print("=" * 96)
+    print("original run          ", INSTRUMENT_AMENDMENT["original_run_name"])
+    print("original verdict      ", INSTRUMENT_AMENDMENT["original_verdict"],
+          "(reproduced verbatim, unchanged)")
+    print("pinned report checksum", INSTRUMENT_AMENDMENT["original_report_checksum"])
+    print("omitted clauses       ",
+          INSTRUMENT_AMENDMENT["omitted_integrity_clauses"])
+    print("observed post-cast    ",
+          INSTRUMENT_AMENDMENT["observed_post_cast_relative_errors"],
+          "against tolerance", POST_CAST_TOLERANCE)
+    print("scientific_recompute  ", INSTRUMENT_AMENDMENT["scientific_recompute"])
+    print("original file sha256  ", _bytes_before, "->", _bytes_after,
+          "(unchanged)" if _bytes_before == _bytes_after else "CHANGED — STOP")
+    print("amendment             ", _amendment_path)
+    print("checksum              ", INSTRUMENT_AMENDMENT["amendment_checksum"])
+
+    # --- the confirmed leg-count result's own code path
+    #
+    # The question is what the *completed* run did, not what this code can do
+    # now: Stage 3DA's repair added a realization_policy parameter to
+    # unrestricted_swap_trial, so introspecting today's signature would answer
+    # a different question and answer it wrongly. The evidence used here is the
+    # completed run's own stored rows when they are reachable, and the pinned
+    # historical fact otherwise.
+    _confirmation_path = (
+        Path(FRESH_CONFIRMATION_RUN_DIR) / "fresh_multimodal_confirmation_report.json"
+    )
+    _confirmation_artifact_reachable = _confirmation_path.is_file()
+    if _confirmation_artifact_reachable:
+        _confirmation_payload = json.loads(_confirmation_path.read_text())
+        _confirmation_row_fields = sorted({
+            key
+            for row in _confirmation_payload.get("rows") or []
+            for key in row
+        })
+        _historical_policy_passed = any(
+            key.startswith("max_post_cast")
+            or key == "model_dtype_realization_policy_supplied"
+            for key in _confirmation_row_fields
+        )
+    else:
+        _confirmation_row_fields = list(LEGACY_CONFIRMATION_STORED_ROW_FIELDS)
+        _historical_policy_passed = LEGACY_CONFIRMATION_REALIZATION_POLICY_PASSED
+    LEGACY_CONFIRMATION_AUDIT = legacy_confirmation_realization_audit(
+        report_checksum=EXPECTED_FRESH_CONFIRMATION_REPORT_CHECKSUM,
+        trial_function="jlens.mmpilot.multimodal_lens.unrestricted_swap_trial",
+        realization_policy_passed=bool(_historical_policy_passed),
+        stored_diagnostic_fields=_confirmation_row_fields,
+        enforced_integrity_clauses=list(LEGACY_CONFIRMATION_ENFORCED_CLAUSES),
+        enforced_tolerance=1e-5,
+    )
+    _legacy_path = AMENDMENT_RUN_DIR / "fresh_confirmation_realization_audit.json"
+    _legacy_path.write_text(
+        json.dumps(LEGACY_CONFIRMATION_AUDIT, indent=2, default=str)
+    )
+    print()
+    print("=" * 96)
+    print("LEGACY CONFIRMATION REALIZATION AUDIT —",
+          LEGACY_CONFIRMATION_AUDIT["verdict"])
+    print("=" * 96)
+    print("pinned report checksum   ", LEGACY_CONFIRMATION_AUDIT["report_checksum"])
+    print("trial function           ", LEGACY_CONFIRMATION_AUDIT["trial_function"])
+    print("evidence source          ",
+          "stored rows" if _confirmation_artifact_reachable else "pinned historical fact")
+    print("realization policy passed",
+          LEGACY_CONFIRMATION_AUDIT["realization_policy_passed"], "(at the time of that run)")
+    print("today's trial function    ",
+          "accepts realization_policy"
+          if "realization_policy" in inspect.signature(unrestricted_swap_trial).parameters
+          else "still cannot accept one")
+    print("post-cast fields stored  ",
+          LEGACY_CONFIRMATION_AUDIT["post_cast_diagnostics_stored"] or "NONE")
+    print("post-cast gates enforced ",
+          LEGACY_CONFIRMATION_AUDIT["post_cast_diagnostics_enforced"] or "NONE")
+    print("enforced tolerance       ",
+          LEGACY_CONFIRMATION_AUDIT["enforced_tolerance"],
+          "on the float64 pre-cast solve error")
+    print("reaffirms original       ",
+          LEGACY_CONFIRMATION_AUDIT["reaffirms_original_result"])
+    print("invalidates original     ",
+          LEGACY_CONFIRMATION_AUDIT["invalidates_original_result"])
+    print("scientific_recompute     ",
+          LEGACY_CONFIRMATION_AUDIT["scientific_recompute"])
+    if LEGACY_CONFIRMATION_AUDIT["required_replication"]:
+        print("required replication     ",
+              LEGACY_CONFIRMATION_AUDIT["required_replication"]["smallest_sufficient_design"])
+    print("audit                    ", _legacy_path)
+    print("checksum                 ", LEGACY_CONFIRMATION_AUDIT["audit_checksum"])
+elif RUN_STAGE5B1A_INSTRUMENT_AMENDMENT:
+    print("Stage 5B1A requested but disabled.")
 '''
 )
 
@@ -4386,6 +5194,7 @@ if REAL_MODE and NEW_PROPERTY_CONFIRM_ENABLED:
         build_swap_bases_for_lens, load_broad_pooled_development_source,
         select_causal_groups,
     )
+    from jlens.mmpilot.multimodal_instrument import MODEL_DTYPE_REALIZATION
     from jlens.mmpilot.store import RunFingerprint, UnitStore, safe_key
     from jlens.mmpilot.workspace_replication import (
         unrestricted_greedy_completion, unrestricted_greedy_swap_trial,
@@ -4608,6 +5417,7 @@ if REAL_MODE and NEW_PROPERTY_CONFIRM_ENABLED:
                             BACKEND, _inputs, bases=_bases, alpha=_alpha,
                             answer=_target_answer.answer,
                             max_new_tokens=int(DESIGN["max_new_tokens"]),
+                            realization_policy=MODEL_DTYPE_REALIZATION,
                         )
                         _stored = generation_trial_row(
                             _trial, group=_group, modality=_modality,
@@ -4948,11 +5758,17 @@ if not REAL_MODE:
     # Keyed by the mock configuration so that changing the property family or
     # direction lands in a new directory instead of colliding with a stale one
     # and tripping the resume gate.
+    from jlens.mmpilot.multimodal_instrument import realization_policy_digest
+
     _mock_key = payload_checksum({
         "family": NEW_PROPERTY_FAMILY,
         "concepts": list(NEW_PROPERTY_CONCEPTS),
         "directions": [list(pair) for pair in NEW_PROPERTY_DEV_DIRECTIONS],
         "scenarios": list(SCENARIOS),
+        # The trial-record schema and the integrity clauses it feeds are part
+        # of the mock's configuration; a change to either must land in a new
+        # directory rather than resume rows a newer verdict cannot score.
+        "realization_policy_digest": realization_policy_digest(),
     }).split(":")[1][:12]
     MOCK_ROOT = RUNS_ROOT / "followup_mock" / _mock_key
     MOCK_LOCALIZATION = run_mock_localization(MOCK_ROOT / "localization", n_photographs=2)

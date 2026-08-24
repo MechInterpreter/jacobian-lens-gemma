@@ -43,12 +43,18 @@ import sys
 import types
 from pathlib import Path
 
+import pytest
 import torch
 
 from jlens.lens import JacobianLens
 from jlens.mmpilot import multimodal_followup as followup
 from jlens.mmpilot import multimodal_lens as mmlens
 from jlens.mmpilot.mock import MockPilotBackend, MockWorld
+from jlens.mmpilot.multimodal_instrument import (
+    INSTRUMENT_STATES,
+    INTEGRITY_CLAUSES,
+    MODEL_DTYPE_REALIZATION,
+)
 from jlens.mmpilot.store import payload_checksum
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -60,6 +66,106 @@ _CONCEPTS = (
     "microwave", "toilet",
 )
 _BAND = tuple(range(16, 41))
+
+
+#: Defect switches. Every one is off by default, so the harness's baseline is a
+#: faithfully realized intervention; a test turns exactly one on.
+_CLEAN_DEFECTS: dict = {
+    "uncorrected_relative_error": 0.21,   # what the completed flawed run saw
+    "corrected_relative_error": 0.004,
+    "relative_residual_drift": 0.001,
+    "direct_answer_match_error": 0.002,
+    "nonfinite": False,
+    "hooks_do_not_fire": False,
+    "controls_move": False,
+    "exact_never_moves": False,
+    "direct_answer_never_moves": False,
+    "correction_changes_outcome": False,
+}
+
+
+def _synthetic_swap_stats(
+    layers,
+    *,
+    alpha: float,
+    n_passes: int,
+    relative_error: float,
+    residual_drift: float,
+    converged: bool,
+    finite: bool = True,
+    policy=None,
+) -> dict:
+    """Per-layer hook stats in the exact shape ``swap_coordinates`` records.
+
+    The point of building *these* and letting
+    :func:`jlens.mmpilot.workspace_replication.summarize_swap_diagnostics`
+    compact them is that the harness then cannot disagree with production about
+    the summary's shape. The previous fake asserted its own shape by hand and
+    got ``by_layer`` wrong -- a list where production returns a dict keyed by
+    string layer number -- which is precisely why the verdict bug survived.
+    """
+    bad = float("nan")
+    stats = {}
+    for layer in sorted(map(int, layers)):
+        record = {
+            "alpha": float(alpha),
+            "n_positions": 4,
+            "update_norm": [1.0, 1.0, 1.0, 1.0],
+            "activation_norm_before": [10.0] * 4,
+            "activation_norm_after": [10.1] * 4,
+            "alpha_one_is_exact_exchange": float(alpha) == 1.0,
+            "model_dtype_realization": None if policy is None else policy.to_dict(),
+            "model_dtype_realization_converged": bool(converged),
+            "model_dtype_corrections_applied": 0 if policy is None else 2,
+            "max_coordinate_update_error": bad if not finite else 1e-12,
+            "max_post_cast_coordinate_update_error": float(relative_error) * 3.0,
+            "max_post_cast_relative_coordinate_update_error": float(relative_error),
+            "max_orthogonal_residual_drift": 1e-12,
+            "max_post_cast_relative_orthogonal_residual_drift": float(residual_drift),
+        }
+        stats[layer] = {
+            "layer": layer,
+            "n_forward_passes": int(n_passes),
+            "n_positions": 4,
+            "positions": [0, 1, 2, 3],
+            "basis": {"diagnostics": {"condition_number": 2.0, "numerical_rank": 2}},
+            "swap_history": [record] * int(n_passes),
+        }
+    return stats
+
+
+def _synthetic_direct_answer_stats(
+    layers, *, n_passes: int, match_error: float, policy=None
+) -> dict:
+    """The direct-answer control's hook stats, same reasoning as above."""
+    stats = {}
+    for layer in sorted(map(int, layers)):
+        stats[layer] = {
+            "layer": layer,
+            "n_forward_passes": int(n_passes),
+            "positions": [0, 1, 2, 3],
+            "answer_vector_norm": 1.0,
+            "answer_vector_checksum": "sha256:" + "0" * 64,
+            "history": [
+                {
+                    "n_positions": 4,
+                    "all_finite": True,
+                    "max_relative_norm_match_error": float(match_error),
+                    "model_dtype_realization_converged": True,
+                    "model_dtype_corrections_applied": 0 if policy is None else 1,
+                    "model_dtype_realization": (
+                        None if policy is None else policy.to_dict()
+                    ),
+                    "max_update_to_activation_ratio": 0.2,
+                }
+            ] * int(n_passes),
+        }
+    return stats
+
+
+def _with_hooks_not_fired(diagnostics: dict) -> dict:
+    """One hook silently missed a forward pass."""
+    return {**diagnostics, "all_hooks_fired": False}
 
 
 def _code_cells() -> list[str]:
@@ -122,9 +228,16 @@ def _synthetic_lens(d_model: int, path: Path) -> str:
 class _Harness:
     """Builds the fixture tree and runs the notebook for one stage."""
 
-    def __init__(self, tmp_path: Path, monkeypatch) -> None:
+    def __init__(self, tmp_path: Path, monkeypatch, **defects) -> None:
         self.tmp = tmp_path
         self.monkeypatch = monkeypatch
+        unknown = sorted(set(defects) - set(_CLEAN_DEFECTS))
+        assert not unknown, f"unknown defect switch(es) {unknown}"
+        self.defects = {**_CLEAN_DEFECTS, **defects}
+        #: Every swap / direct-answer call the notebook made, so a test can
+        #: assert the realization policy actually reached production code
+        #: rather than assert on a printed string.
+        self.calls: list[dict] = []
         self.world = MockWorld({name: (name,) for name in _CONCEPTS})
         self.backend = MockPilotBackend(self.world, n_layers=42)
         # The mock's encode_candidate deliberately appends a suffix token so
@@ -335,32 +448,190 @@ class _Harness:
                 "n_forward_passes": 1,
             }
 
+        defects = self.defects
+
         def fake_swap_trial(
-            _backend, _inputs, *, bases, alpha, answer, max_new_tokens=6, **_k
+            _backend, _inputs, *, bases, alpha, answer, max_new_tokens=6,
+            realization_policy=None, **_k
         ):
             kind = next(
                 (kinds.get(id(b), "exact") for b in bases.values()), "exact"
             )
-            moved = float(alpha) == 1.0 and kind == "exact"
+            moved = float(alpha) == 1.0 and (
+                kind == "exact" if not defects["controls_move"] else alpha != 0.0
+            )
+            if defects["exact_never_moves"] and kind == "exact":
+                moved = False
+            self.calls.append({
+                "trial": "swap",
+                "alpha": float(alpha),
+                "kind": kind,
+                "realization_policy": (
+                    None if realization_policy is None
+                    else realization_policy.to_dict()
+                ),
+            })
+            # An uncorrected cast leaves the intended coordinates unrealized.
+            # This is what the completed run actually did, and the harness
+            # reproduces it whenever the caller omits the policy.
+            error = (
+                float(defects["uncorrected_relative_error"])
+                if realization_policy is None
+                else float(defects["corrected_relative_error"])
+            )
+            stats = _synthetic_swap_stats(
+                sorted(bases),
+                alpha=float(alpha),
+                n_passes=1,
+                relative_error=error,
+                residual_drift=float(defects["relative_residual_drift"]),
+                converged=(
+                    realization_policy is None
+                    or error <= float(realization_policy.relative_coordinate_tolerance)
+                ),
+                finite=not defects["nonfinite"],
+                policy=realization_policy,
+            )
+            passes = 0 if defects["hooks_do_not_fire"] else 1
             return {
                 "generated_text": str(answer) if moved else sounds[seen["concept"]],
                 "alpha": float(alpha),
+                "alpha_role": "exact_exchange" if alpha == 1.0 else "nonexact",
                 "layers_patched": sorted(bases),
                 "all_prompt_positions_patched": True,
                 "n_forward_passes": 1,
-                "intervention_diagnostics": {
-                    "by_layer": [{
-                        "max_after_to_before_activation_ratio": 1.02,
-                        "max_update_to_activation_ratio": 0.2,
-                    }],
-                    "max_post_cast_relative_residual_drift": 0.0,
-                    "max_post_cast_relative_coordinate_error": 0.0,
-                    "all_hooks_fired": True,
-                },
+                "teacher_forcing_used": False,
+                "candidate_list_supplied": False,
+                # The real summariser, not a hand-written stand-in. The bug this
+                # harness missed was a fake that returned ``by_layer`` as a list
+                # while production returned a dict keyed by layer; calling the
+                # production summariser makes that class of drift impossible.
+                "intervention_diagnostics": wr.summarize_swap_diagnostics(
+                    stats, expected_forward_passes=passes or 1
+                ) if passes else _with_hooks_not_fired(
+                    wr.summarize_swap_diagnostics(stats, expected_forward_passes=1)
+                ),
+            }
+
+        def fake_direct_answer_trial(
+            _backend, _inputs, *, bases, answer_vectors, answer,
+            max_new_tokens=6, realization_policy=None, alpha=1.0, **_k
+        ):
+            if set(map(int, bases)) != set(map(int, answer_vectors)):
+                raise AssertionError(
+                    "the direct-answer control must cover exactly the band"
+                )
+            self.calls.append({
+                "trial": "direct_answer",
+                "alpha": float(alpha),
+                "realization_policy": (
+                    None if realization_policy is None
+                    else realization_policy.to_dict()
+                ),
+            })
+            moved = not defects["direct_answer_never_moves"]
+            stats = _synthetic_direct_answer_stats(
+                sorted(map(int, bases)),
+                n_passes=1,
+                match_error=float(defects["direct_answer_match_error"]),
+                policy=realization_policy,
+            )
+            return {
+                "generated_text": str(answer) if moved else sounds[seen["concept"]],
+                "condition": "direct_answer_norm_matched",
+                "alpha": float(alpha),
+                "layers_patched": sorted(map(int, bases)),
+                "all_prompt_positions_patched": True,
+                "n_forward_passes": 1,
+                "teacher_forcing_used": False,
+                "candidate_list_supplied": False,
+                "intervention_diagnostics": wr.summarize_direct_answer_diagnostics(
+                    stats, expected_forward_passes=1
+                ),
+            }
+
+        def fake_single_token_swap_trial(
+            _backend, _inputs, *, bases, alpha=1.0, realization_policy=None,
+            compact_positions=False, **_k
+        ):
+            """The Stage 3D/3DA single-token endpoint, with real diagnostics."""
+            kind = next(
+                (kinds.get(id(b), "exact") for b in bases.values()), "exact"
+            )
+            self.calls.append({
+                "trial": "single_token_swap",
+                "alpha": float(alpha),
+                "kind": kind,
+                "realization_policy": (
+                    None if realization_policy is None
+                    else realization_policy.to_dict()
+                ),
+            })
+            error = (
+                float(defects["uncorrected_relative_error"])
+                if realization_policy is None
+                else float(defects["corrected_relative_error"])
+            )
+            stats = _synthetic_swap_stats(
+                sorted(bases), alpha=float(alpha), n_passes=1,
+                relative_error=error,
+                residual_drift=float(defects["relative_residual_drift"]),
+                converged=(
+                    realization_policy is None
+                    or error <= float(realization_policy.relative_coordinate_tolerance)
+                ),
+                policy=realization_policy,
+            )
+            summary = wr.summarize_swap_diagnostics(stats, expected_forward_passes=1)
+            moved = float(alpha) == 1.0 and kind == "exact"
+            if realization_policy is not None and defects["correction_changes_outcome"]:
+                moved = not moved
+            return {
+                "alpha": float(alpha),
+                "layers_patched": sorted(bases),
+                "all_prompt_positions_patched": True,
+                "positions_patched": {},
+                "clean_top_token_id": 11,
+                "patched_top_token_id": 4 if moved else 2,
+                "prediction_changed": moved,
+                "max_activation_norm_ratio": 1.02,
+                "min_activation_norm_ratio": 1.0,
+                "max_update_to_activation_norm_ratio": 0.2,
+                "max_orthogonal_residual_drift": 1e-12,
+                "max_coordinate_update_error": 1e-12,
+                "coordinate_error_basis": "float64_pre_cast_solve",
+                "max_post_cast_relative_coordinate_error": summary[
+                    "max_post_cast_relative_coordinate_error"
+                ],
+                "max_post_cast_relative_residual_drift": summary[
+                    "max_post_cast_relative_residual_drift"
+                ],
+                "all_layers_are_exact_alpha_one_exchange_before_cast": summary[
+                    "all_layers_are_exact_alpha_one_exchange_before_cast"
+                ],
+                "all_model_dtype_realizations_converged": summary[
+                    "all_model_dtype_realizations_converged"
+                ],
+                "max_model_dtype_corrections_applied": summary[
+                    "max_model_dtype_corrections_applied"
+                ],
+                "model_dtype_realization_policy": summary[
+                    "model_dtype_realization_policy"
+                ],
+                "teacher_forcing_used": False,
+                "candidate_list_supplied": False,
             }
 
         mp.setattr(wr, "unrestricted_greedy_completion", fake_completion)
         mp.setattr(wr, "unrestricted_greedy_swap_trial", fake_swap_trial)
+        mp.setattr(
+            wr, "unrestricted_greedy_direct_answer_trial", fake_direct_answer_trial
+        )
+        mp.setattr(ml, "unrestricted_swap_trial", fake_single_token_swap_trial)
+        mp.setattr(
+            self.backend, "decode_token",
+            lambda token_id: {4: "4", 2: "2", 11: "?"}.get(int(token_id), "?"),
+        )
 
     def _prepare_prompt_screen_source(self, ns: dict) -> tuple[Path, str, str]:
         """Materialise the checksum-pinned failed B0 source for Stage 5B00."""
@@ -420,8 +691,20 @@ class _Harness:
         return root, file_sha, audit_digest
 
     # ------------------------------------------------------------------ run
-    def run(self, **switches: bool) -> dict:
+    def run(self, **switches) -> dict:
         self._install()
+        # Values that are not plain booleans are multi-line parenthesised
+        # literals in the config cell, which a line-oriented rewrite cannot
+        # replace. Those are applied to the namespace right after the config
+        # cell instead, which is equally real: the stage cell reads them then.
+        after_config = {
+            name: value for name, value in switches.items()
+            if not isinstance(value, bool)
+        }
+        switches = {
+            name: value for name, value in switches.items()
+            if isinstance(value, bool)
+        }
         overrides = {name: repr(value) for name, value in switches.items()}
         overrides["RUN_REAL_MATCHED_JLENS"] = "True"
         overrides["CONFIRM_MODEL_LOAD"] = "True"
@@ -467,6 +750,8 @@ class _Harness:
                 ns["EXPECTED_RECRUITED_SOURCE_FILE_SHA256"] = file_sha
                 ns["EXPECTED_RECRUITED_SOURCE_AUDIT_DIGEST"] = audit_digest
             exec(compile(source, "cell", "exec"), ns)
+            if "RUN_REAL_MATCHED_JLENS = " in source:
+                ns.update(after_config)
             if "EXPANDED_MANIFEST_CACHE" in source and ns.get("REAL_MODE"):
                 ns["RUNS_ROOT"] = self.runs
                 ns["EXPANDED_MANIFEST_CACHE"] = self.manifest
@@ -655,21 +940,48 @@ def test_stage_5b1_development_executes_when_the_audit_passes(
     assert directions, "no directions were scored"
 
 
-def test_stage_5b1r_recruited_exploratory_executes_real_cell(
-    tmp_path, monkeypatch
-) -> None:
-    """The post-NO_GO rescue reaches its real intervention loop and report."""
-
-    harness = _Harness(tmp_path, monkeypatch)
+def _run_corrected(tmp_path, monkeypatch, **defects):
+    """Execute the real Stage 5B01 + 5B1RC cells against the synthetic backend."""
+    harness = _Harness(tmp_path, monkeypatch, **defects)
     harness.script_model()
     ns = harness.run(
         RUN_STAGE5B01_AUDIO_LINKAGE_AUDIT=True,
-        RUN_STAGE5B1R_RECRUITED_EXPLORATORY=True,
-        CONFIRM_RECRUITED_EXPLORATORY_BUDGET=True,
+        RUN_STAGE5B1RC_CORRECTED_EXPLORATORY=True,
+        CONFIRM_CORRECTED_EXPLORATORY_BUDGET=True,
     )
-    linkage = ns["AUDIO_LINKAGE_REPORT"]
-    assert linkage["verdict"] == "AUDIO_METADATA_LINKAGE_GO"
-    report = ns["RECRUITED_EXPLORATORY_REPORT"]
+    return harness, ns
+
+
+def test_stage_5b1rc_passes_the_realization_policy_into_every_condition(
+    tmp_path, monkeypatch
+) -> None:
+    """The root defect, asserted where it happened rather than in a docstring.
+
+    Stage 5B1R called ``unrestricted_greedy_swap_trial`` with no
+    ``realization_policy=``. This asserts the corrected cell passes the frozen
+    policy on *every* generated condition -- exact, zero, random, unrelated and
+    the direct-answer control -- by inspecting the calls production code
+    actually made.
+    """
+    harness, ns = _run_corrected(tmp_path, monkeypatch)
+    assert ns["AUDIO_LINKAGE_REPORT"]["verdict"] == "AUDIO_METADATA_LINKAGE_GO"
+    assert harness.calls, "the corrected stage ran no trials"
+    expected = MODEL_DTYPE_REALIZATION.to_dict()
+    for call in harness.calls:
+        assert call["realization_policy"] == expected, call
+    # every declared condition really ran, including the alpha=0 parity arm
+    kinds = {call["kind"] for call in harness.calls if call["trial"] == "swap"}
+    assert kinds == {"exact", "random", "unrelated"}
+    assert {call["alpha"] for call in harness.calls} == {0.0, 1.0}
+    assert any(call["trial"] == "direct_answer" for call in harness.calls)
+
+
+def test_stage_5b1rc_reports_the_real_diagnostic_shape_and_a_valid_instrument(
+    tmp_path, monkeypatch
+) -> None:
+    """The corrected cell produces scorable rows and a named instrument state."""
+    _harness, ns = _run_corrected(tmp_path, monkeypatch)
+    report = ns["CORRECTED_EXPLORATORY_REPORT"]
     assert report is not None
     assert report["rows"]
     assert report["source_aggregate_verdict_unchanged"] is True
@@ -678,6 +990,471 @@ def test_stage_5b1r_recruited_exploratory_executes_real_cell(
     assert report["outcome_informed_stage_design"] is True
     assert report["is_confirmation"] is False
     assert report["lens_refitted"] is False
+    assert report["alpha_sweep_run"] is False
+    assert report["primary_alpha"] == 1.0
+    assert report["design_changed_from_superseded_run"] is False
+    assert report["supersedes_report_checksum"] == (
+        ns["EXPECTED_RECRUITED_EXPLORATORY_REPORT_CHECKSUM"]
+    )
+    # the exact bug the old fake hid: production returns by_layer as a dict
+    # keyed by string layer number, and every flattened row must carry the
+    # integrity evidence rather than an absent-means-pass default
+    for row in report["rows"]:
+        if row["condition"] == "direct_answer":
+            continue
+        assert isinstance(row["max_coordinate_update_error"], float)
+        assert isinstance(row["max_orthogonal_residual_drift"], float)
+        assert row["all_hooks_fired"] is True
+        assert row["all_finite"] is True
+        assert row["all_model_dtype_realizations_converged"] is True
+        assert row["model_dtype_realization_policy"] == (
+            MODEL_DTYPE_REALIZATION.to_dict()
+        )
+    assert report["instrument_state"] in INSTRUMENT_STATES
+    assert report["verdict"] == (
+        f"CORRECTED_RECRUITED_EXPLORATORY_{report['instrument_state']}"
+    )
+
+
+def test_favorable_valid_primary_effect_is_an_exploratory_go(
+    tmp_path, monkeypatch
+) -> None:
+    """The scripted world moves the exact arm and nothing else."""
+    _harness, ns = _run_corrected(tmp_path, monkeypatch)
+    report = ns["CORRECTED_EXPLORATORY_REPORT"]
+    assert report["instrument_state"] == "EFFECT_GO"
+    assert report["verdict"] == "CORRECTED_RECRUITED_EXPLORATORY_EFFECT_GO"
+    assert report["passing_directions"]
+    # a GO here is still exploratory and still needs a fresh population
+    assert report["is_confirmation"] is False
+    assert report["fresh_confirmation_licensed_directly"] is False
+
+
+def test_direct_answer_passes_while_the_primary_fails_is_a_scientific_null(
+    tmp_path, monkeypatch
+) -> None:
+    """The one combination that licenses reading a null as a null."""
+    _harness, ns = _run_corrected(tmp_path, monkeypatch, exact_never_moves=True)
+    report = ns["CORRECTED_EXPLORATORY_REPORT"]
+    assert report["instrument_state"] == "SCIENTIFIC_NULL"
+    assert not report["passing_directions"]
+    for row in report["directions"]:
+        assert row["direct_answer_positive_control"]["passed"] is True
+        assert row["failure_mode"] == "no_effect_in_every_modality"
+
+
+def test_primary_and_direct_answer_both_failing_is_inconclusive(
+    tmp_path, monkeypatch
+) -> None:
+    """No causal leverage on this path at all: never reported as a null."""
+    _harness, ns = _run_corrected(
+        tmp_path, monkeypatch,
+        exact_never_moves=True, direct_answer_never_moves=True,
+    )
+    report = ns["CORRECTED_EXPLORATORY_REPORT"]
+    assert report["instrument_state"] == "INCONCLUSIVE"
+    assert report["verdict"] == "CORRECTED_RECRUITED_EXPLORATORY_INCONCLUSIVE"
+    for row in report["directions"]:
+        assert row["direct_answer_positive_control"]["passed"] is False
+        assert row["failure_mode"] == "no_effect_and_positive_control_also_failed"
+
+
+def test_controls_that_move_are_a_control_failure_not_a_null(
+    tmp_path, monkeypatch
+) -> None:
+    _harness, ns = _run_corrected(tmp_path, monkeypatch, controls_move=True)
+    report = ns["CORRECTED_EXPLORATORY_REPORT"]
+    assert report["instrument_state"] == "CONTROL_FAILURE"
+    assert report["verdict"] == "CORRECTED_RECRUITED_EXPLORATORY_CONTROL_FAILURE"
+
+
+def test_an_uncorrected_cast_is_instrument_failure_not_a_null(
+    tmp_path, monkeypatch
+) -> None:
+    """The completed flawed run's actual numbers, scored by the fixed verdict.
+
+    0.21 is the worst post-cast relative coordinate error that run recorded.
+    Under the old two-clause check this produced ``integrity_pass = true`` and
+    a printed 0/8 null.
+    """
+    _harness, ns = _run_corrected(
+        tmp_path, monkeypatch,
+        corrected_relative_error=0.21, exact_never_moves=True,
+    )
+    report = ns["CORRECTED_EXPLORATORY_REPORT"]
+    assert report["instrument_state"] == "INSTRUMENT_FAILURE"
+    assert report["verdict"] == "CORRECTED_RECRUITED_EXPLORATORY_INSTRUMENT_FAILURE"
+    for row in report["directions"]:
+        assert "coordinate_integrity_failed" in row["failure_mode"]
+        assert "post_cast_coordinate_error_within_tolerance" in row["failure_mode"]
+        for cell in row["cells"]:
+            assert cell["integrity_pass"] is False
+
+
+def test_nonconvergent_realization_is_instrument_failure(
+    tmp_path, monkeypatch
+) -> None:
+    """The bounded correction ran out of budget: refuse, do not score."""
+    _harness, ns = _run_corrected(
+        tmp_path, monkeypatch, corrected_relative_error=0.5,
+    )
+    report = ns["CORRECTED_EXPLORATORY_REPORT"]
+    assert report["instrument_state"] == "INSTRUMENT_FAILURE"
+    failures = {
+        clause
+        for row in report["directions"]
+        for cell in row["cells"]
+        for clause in cell["integrity_failed_clauses"]
+    }
+    assert "model_dtype_realization_converged" in failures
+
+
+def test_residual_drift_out_of_tolerance_is_instrument_failure(
+    tmp_path, monkeypatch
+) -> None:
+    _harness, ns = _run_corrected(
+        tmp_path, monkeypatch, relative_residual_drift=0.03,
+    )
+    report = ns["CORRECTED_EXPLORATORY_REPORT"]
+    assert report["instrument_state"] == "INSTRUMENT_FAILURE"
+    failures = {
+        clause
+        for row in report["directions"]
+        for cell in row["cells"]
+        for clause in cell["integrity_failed_clauses"]
+    }
+    assert "post_cast_residual_drift_within_tolerance" in failures
+
+
+def test_hooks_that_do_not_fire_are_instrument_failure(
+    tmp_path, monkeypatch
+) -> None:
+    _harness, ns = _run_corrected(tmp_path, monkeypatch, hooks_do_not_fire=True)
+    report = ns["CORRECTED_EXPLORATORY_REPORT"]
+    assert report["instrument_state"] == "INSTRUMENT_FAILURE"
+    failures = {
+        clause
+        for row in report["directions"]
+        for cell in row["cells"]
+        for clause in cell["integrity_failed_clauses"]
+    }
+    assert "all_hooks_fired" in failures
+
+
+def test_nonfinite_diagnostics_are_instrument_failure(
+    tmp_path, monkeypatch
+) -> None:
+    _harness, ns = _run_corrected(tmp_path, monkeypatch, nonfinite=True)
+    report = ns["CORRECTED_EXPLORATORY_REPORT"]
+    assert report["instrument_state"] == "INSTRUMENT_FAILURE"
+    failures = {
+        clause
+        for row in report["directions"]
+        for cell in row["cells"]
+        for clause in cell["integrity_failed_clauses"]
+    }
+    assert "all_finite" in failures
+
+
+def test_corrected_rerun_fits_nothing_and_runs_no_backward_pass(
+    tmp_path, monkeypatch
+) -> None:
+    """Zero fitting, zero gradients, and the pinned lens reused as-is."""
+    harness = _Harness(tmp_path, monkeypatch)
+    harness.script_model()
+    fits: list[str] = []
+    backwards: list[str] = []
+    from jlens import fitting as fitting_module
+    from jlens.lens import JacobianLens
+
+    for name in dir(fitting_module):
+        attribute = getattr(fitting_module, name)
+        if callable(attribute) and name.startswith("fit"):
+            monkeypatch.setattr(
+                fitting_module, name,
+                lambda *_a, _n=name, **_k: fits.append(_n),
+            )
+    original_backward = torch.Tensor.backward
+
+    def refuse_backward(self, *args, **kwargs):
+        backwards.append("backward")
+        return original_backward(self, *args, **kwargs)
+
+    monkeypatch.setattr(torch.Tensor, "backward", refuse_backward)
+    original_save = JacobianLens.save
+    saves: list[str] = []
+    monkeypatch.setattr(
+        JacobianLens, "save",
+        lambda self, path, *a, **k: (saves.append(str(path)), original_save(self, path, *a, **k))[1],
+    )
+    ns = harness.run(
+        RUN_STAGE5B01_AUDIO_LINKAGE_AUDIT=True,
+        RUN_STAGE5B1RC_CORRECTED_EXPLORATORY=True,
+        CONFIRM_CORRECTED_EXPLORATORY_BUDGET=True,
+    )
+    assert ns["CORRECTED_EXPLORATORY_REPORT"] is not None
+    assert fits == [], f"the corrected rerun fitted something: {fits}"
+    assert backwards == [], "the corrected rerun ran a backward pass"
+    assert saves == [], f"the corrected rerun wrote a lens: {saves}"
+
+
+def test_interrupted_corrected_rerun_resumes_without_recomputing(
+    tmp_path, monkeypatch
+) -> None:
+    """Every completed condition survives a disconnect and is not recomputed."""
+    first_harness, first_ns = _run_corrected(tmp_path / "a", monkeypatch)
+    run_dir = Path(first_ns["CORRECTED_EXPLORATORY_RUN_DIR"])
+    n_units = len(list((run_dir / "units" / "intervention").glob("*.json")))
+    assert n_units == len(first_ns["CORRECTED_EXPLORATORY_REPORT"]["rows"])
+    first_calls = len(first_harness.calls)
+    assert first_calls == n_units
+
+    # Second session, same configuration, same run directory: nothing is
+    # recomputed and the report is identical.
+    second = _Harness(tmp_path / "a", monkeypatch)
+    second.script_model()
+    second.runs = first_harness.runs
+    second_ns = second.run(
+        RUN_STAGE5B01_AUDIO_LINKAGE_AUDIT=True,
+        RUN_STAGE5B1RC_CORRECTED_EXPLORATORY=True,
+        CONFIRM_CORRECTED_EXPLORATORY_BUDGET=True,
+    )
+    assert second.calls == [], "a resumed session recomputed completed units"
+    assert (
+        second_ns["CORRECTED_EXPLORATORY_REPORT"]["report_checksum"]
+        == first_ns["CORRECTED_EXPLORATORY_REPORT"]["report_checksum"]
+    )
+
+
+def test_a_changed_realization_policy_changes_the_fingerprint(
+    tmp_path, monkeypatch
+) -> None:
+    """A different instrument must refuse the old units, not mix with them."""
+    from jlens.mmpilot import multimodal_instrument as instrument
+    from jlens.mmpilot.coordinate_swap import ModelDtypeRealizationPolicy
+
+    baseline = instrument.realization_policy_digest()
+    looser = instrument.realization_policy_digest(
+        ModelDtypeRealizationPolicy(
+            max_corrections=8,
+            relative_coordinate_tolerance=0.05,
+            relative_residual_tolerance=0.05,
+            minimum_scale=1.0,
+        )
+    )
+    assert baseline != looser
+
+    _harness, first_ns = _run_corrected(tmp_path / "a", monkeypatch)
+    first_dir = Path(first_ns["CORRECTED_EXPLORATORY_RUN_DIR"])
+    config = json.loads((first_dir / "scientific_config.json").read_text())
+    assert config["model_dtype_realization_policy_digest"] == baseline
+    fingerprint = json.loads(
+        (first_dir / "fingerprint.json").read_text()
+    )
+    assert baseline in json.dumps(fingerprint)
+
+    # A run directory written under a different policy is refused, not merged.
+    stale = json.loads(json.dumps(fingerprint))
+    stale["intervention_config"]["model_dtype_realization_policy_digest"] = looser
+    second_dir = tmp_path / "b" / "run"
+    second_dir.mkdir(parents=True)
+    (second_dir / "fingerprint.json").write_text(json.dumps(stale))
+    from jlens.mmpilot.store import IncompatibleStateError, RunFingerprint, UnitStore
+
+    requested = RunFingerprint(**{
+        **{k: v for k, v in fingerprint.items() if k != "layers"},
+        "layers": tuple(fingerprint["layers"]),
+    })
+    with pytest.raises(IncompatibleStateError):
+        UnitStore(second_dir, requested).open()
+
+
+def test_stage_5b1a_amends_read_only_and_leaves_the_source_untouched(
+    tmp_path, monkeypatch
+) -> None:
+    """The historical amendment: pinned, reclassified, and byte-for-byte safe."""
+    harness = _Harness(tmp_path, monkeypatch)
+    flawed_dir = tmp_path / "flawed-run"
+    flawed_dir.mkdir(parents=True)
+    flawed_path = flawed_dir / "recruited_new_property_exploratory_report.json"
+    flawed_payload = {
+        "verdict": "RECRUITED_NEW_PROPERTY_EXPLORATORY_NO_GO",
+        "rows": [{"condition": "exact", "success": False}],
+    }
+    flawed_path.write_text(json.dumps(flawed_payload, indent=2), encoding="utf-8")
+    before = hashlib.sha256(flawed_path.read_bytes()).hexdigest()
+
+    harness.script_model()
+    ns = harness.run(
+        RUN_STAGE5B1A_INSTRUMENT_AMENDMENT=True,
+        RECRUITED_EXPLORATORY_FLAWED_RUN_DIR=str(flawed_dir),
+    )
+    amendment = ns["INSTRUMENT_AMENDMENT"]
+    assert amendment["scientific_recompute"] == 0
+    assert amendment["corrected_classification"] == "INSTRUMENT_INCONCLUSIVE"
+    assert amendment["original_report_modified"] is False
+    assert amendment["original_units_modified"] is False
+    assert amendment["original_verdict"] == (
+        "RECRUITED_NEW_PROPERTY_EXPLORATORY_NO_GO"
+    )
+    assert amendment["original_report_checksum"] == (
+        ns["EXPECTED_RECRUITED_EXPLORATORY_REPORT_CHECKSUM"]
+    )
+    assert set(amendment["omitted_integrity_clauses"]) <= set(INTEGRITY_CLAUSES)
+    assert "post_cast_coordinate_error_within_tolerance" in (
+        amendment["omitted_integrity_clauses"]
+    )
+    assert amendment["observed_post_cast_relative_errors"]["exact"] == 0.21
+    # the historical run is byte-for-byte unchanged
+    after = hashlib.sha256(flawed_path.read_bytes()).hexdigest()
+    assert before == after
+    assert json.loads(flawed_path.read_text()) == flawed_payload
+
+    # the leg-count confirmation audit, in the same CPU-only stage
+    legacy = ns["LEGACY_CONFIRMATION_AUDIT"]
+    assert legacy["scientific_recompute"] == 0
+    assert legacy["reaffirms_original_result"] is False
+    assert legacy["invalidates_original_result"] is False
+    assert legacy["realization_policy_passed"] is False
+    assert legacy["verdict"] == "ARTIFACTS_INSUFFICIENT_REPLICATION_REQUIRED"
+    assert legacy["required_replication"]["reproduces_stored_outcome_required"]
+    assert legacy["required_replication"]["writes_to_original_run"] is False
+
+
+def _completed_confirmation_fixture(tmp_path: Path, groups) -> tuple[Path, str]:
+    """A stand-in for the checksum-pinned completed leg-count confirmation."""
+    rows = []
+    for group in groups:
+        for modality in ("text", "image", "spoken_audio"):
+            for condition in ("exact", "zero", "random", "unrelated"):
+                moved = condition == "exact"
+                rows.append({
+                    "group_id": str(group["group_id"]),
+                    "image_id": str(group["image_id"]),
+                    "modality": modality,
+                    "condition": condition,
+                    "expected": "4",
+                    "patched_top_token_id": 4 if moved else 2,
+                    "patched_surface": "4" if moved else "2",
+                    "success": moved,
+                    "all_prompt_positions_patched": True,
+                    "layers_patched": list(_BAND),
+                    "max_activation_norm_ratio": 1.02,
+                    "max_update_to_activation_norm_ratio": 0.2,
+                    "max_orthogonal_residual_drift": 0.0,
+                    "max_coordinate_update_error": 0.0,
+                })
+    payload = {
+        "schema": "jlens.mmpilot.broad_pooled_multimodal_confirmation.v1",
+        "verdict": "FRESH_MULTIMODAL_CONFIRMATION_GO",
+        "rows": rows,
+    }
+    checksum = payload_checksum(payload)
+    run_dir = tmp_path / "completed-confirmation"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "fresh_multimodal_confirmation_report.json").write_text(
+        json.dumps({**payload, "report_checksum": checksum}, indent=2),
+        encoding="utf-8",
+    )
+    return run_dir, checksum
+
+
+def _run_stage_3da(tmp_path, monkeypatch, **defects):
+    harness = _Harness(tmp_path, monkeypatch, **defects)
+    harness.script_model()
+    run_dir, checksum = _completed_confirmation_fixture(
+        tmp_path, harness.groups[:2]
+    )
+    ns = harness.run(
+        RUN_STAGE3DA_CONFIRMATION_REALIZATION_REPLICATION=True,
+        CONFIRM_CONFIRMATION_REPLICATION_BUDGET=True,
+        CONFIRM_MODEL_LOAD=True,
+        FRESH_CONFIRMATION_RUN_DIR=str(run_dir),
+        EXPECTED_FRESH_CONFIRMATION_REPORT_CHECKSUM=checksum,
+    )
+    return harness, ns, run_dir, checksum
+
+
+def test_stage_3da_replays_both_arms_and_never_writes_to_the_confirmed_run(
+    tmp_path, monkeypatch
+) -> None:
+    """The smallest exact replication of the confirmed result's realization."""
+    harness, ns, run_dir, checksum = _run_stage_3da(tmp_path, monkeypatch)
+    report = ns["CONFIRMATION_REALIZATION_REPLICATION"]
+    assert report is not None
+    assert report["original_report_checksum"] == checksum
+    assert report["original_report_modified"] is False
+    assert report["original_units_modified"] is False
+    assert report["original_verdict_relabelled"] is False
+    # both arms ran, and only the corrected one carried a policy
+    policies = [
+        call["realization_policy"] for call in harness.calls
+        if call["trial"] == "single_token_swap"
+    ]
+    assert policies.count(None) == len(policies) / 2
+    assert policies.count(MODEL_DTYPE_REALIZATION.to_dict()) == len(policies) / 2
+    assert report["n_uncorrected_rows"] == report["n_corrected_rows"]
+    # nothing was written into the completed run directory
+    assert sorted(p.name for p in run_dir.iterdir()) == [
+        "fresh_multimodal_confirmation_report.json"
+    ]
+
+
+def test_stage_3da_reports_repaired_and_preserved_when_the_outcome_holds(
+    tmp_path, monkeypatch
+) -> None:
+    _harness, ns, _dir, _sum = _run_stage_3da(tmp_path, monkeypatch)
+    report = ns["CONFIRMATION_REALIZATION_REPLICATION"]
+    assert report["uncorrected_reproduced_stored_tokens"] is True
+    assert report["original_within_tolerance"] is False
+    assert report["corrected_realizations_converged"] is True
+    assert report["n_outcomes_changed"] == 0
+    assert report["verdict"] == "CONFIRMATION_REALIZATION_REPAIRED_AND_PRESERVED"
+
+
+def test_stage_3da_reports_a_changed_outcome_without_relabelling_the_original(
+    tmp_path, monkeypatch
+) -> None:
+    """A changed outcome licenses a fresh confirmation, not a retroactive verdict."""
+    _harness, ns, _dir, _sum = _run_stage_3da(
+        tmp_path, monkeypatch, correction_changes_outcome=True
+    )
+    report = ns["CONFIRMATION_REALIZATION_REPLICATION"]
+    assert report["verdict"] == "CONFIRMATION_REALIZATION_REPAIRED_AND_CHANGED"
+    assert report["n_outcomes_changed"] > 0
+    assert report["original_verdict_relabelled"] is False
+    assert "FRESH_MULTIMODAL_CONFIRMATION_GO" not in json.dumps(
+        {k: v for k, v in report.items() if k != "rows"}
+    )
+
+
+def test_stage_3da_reports_clean_when_the_original_cast_was_within_tolerance(
+    tmp_path, monkeypatch
+) -> None:
+    """If the confirmed run was already faithful, nothing needed repairing."""
+    _harness, ns, _dir, _sum = _run_stage_3da(
+        tmp_path, monkeypatch, uncorrected_relative_error=0.001
+    )
+    report = ns["CONFIRMATION_REALIZATION_REPLICATION"]
+    assert report["original_within_tolerance"] is True
+    assert report["verdict"] == "CONFIRMATION_REALIZATION_CLEAN"
+
+
+def test_stage_5b1a_needs_no_model_and_spends_no_forward(
+    tmp_path, monkeypatch
+) -> None:
+    """CPU-only really means CPU-only."""
+    harness = _Harness(tmp_path, monkeypatch)
+    flawed_dir = tmp_path / "flawed-run"
+    flawed_dir.mkdir(parents=True)
+    harness.script_model()
+    ns = harness.run(
+        RUN_STAGE5B1A_INSTRUMENT_AMENDMENT=True,
+        RECRUITED_EXPLORATORY_FLAWED_RUN_DIR=str(flawed_dir),
+    )
+    assert ns["MODEL_ENABLED"] is False
+    assert ns["INSTRUMENT_AMENDMENT"] is not None
+    assert ns["CORRECTED_EXPLORATORY_REPORT"] is None
 
 
 def test_full_5b1_to_5b3_chain_executes(tmp_path, monkeypatch) -> None:

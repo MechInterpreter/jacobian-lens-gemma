@@ -907,6 +907,19 @@ def test_freeze_uses_the_resolved_empirical_answer_not_the_declared_one() -> Non
                 "layers_patched": list(VALIDATED_BAND),
                 "max_activation_norm_ratio": 1.0,
                 "max_update_to_activation_norm_ratio": 0.1,
+                # the complete realized-intervention shape; the verdict now
+                # refuses to score a row whose diagnostics are absent
+                "alpha": 0.0 if condition == "zero" else 1.0,
+                "all_hooks_fired": True,
+                "all_finite": True,
+                "all_layers_are_exact_alpha_one_exchange_before_cast": (
+                    condition != "zero"
+                ),
+                "all_model_dtype_realizations_converged": True,
+                "max_coordinate_update_error": 0.0,
+                "max_orthogonal_residual_drift": 0.0,
+                "teacher_forcing_used": False,
+                "candidate_list_supplied": False,
             }
             for modality in MODALITIES
             for condition in REQUIRED_CONDITIONS

@@ -43,6 +43,7 @@ from jlens.lens import JacobianLens
 from jlens.metadata import file_sha256
 from jlens.mmpilot.coordinate_swap import (
     ConceptToken,
+    ModelDtypeRealizationPolicy,
     SwapBasis,
     build_swap_basis_from_vectors,
     coordinate_swap_band,
@@ -1254,6 +1255,26 @@ def summarize_cross_eval(rows: Sequence[Mapping], *, shuffle_seed: int = 2026081
     return payload
 
 
+#: The exact wording the completed leg-count confirmation asked. It lives here
+#: rather than as a closure inside one notebook cell because Stage 3DA replays
+#: that run, and a replay under a different prompt is not a replay.
+CONFIRMATION_LEG_COUNT_QUESTION = (
+    "How many legs does the animal in the evidence typically have? "
+    "Answer with one digit.\nAnswer:"
+)
+
+
+def confirmation_leg_count_prompt(modality: str, caption: str) -> str:
+    """The confirmed study's prompt: the caption is shown to the text arm only.
+
+    The image and spoken-audio arms see the question alone, so the evidence
+    they answer from is the photograph or the recording rather than the words.
+    """
+    if str(modality) == "text":
+        return f"Caption: {caption}\n{CONFIRMATION_LEG_COUNT_QUESTION}"
+    return CONFIRMATION_LEG_COUNT_QUESTION
+
+
 @torch.no_grad()
 def unrestricted_swap_trial(
     backend,
@@ -1266,6 +1287,7 @@ def unrestricted_swap_trial(
     clean_logits: torch.Tensor | None = None,
     compact_positions: bool = False,
     position_rule: str = PRIMARY_POSITION_RULE,
+    realization_policy: ModelDtypeRealizationPolicy | None = None,
 ) -> dict:
     """One paper-style exchange scored on the unrestricted next-token output.
 
@@ -1273,6 +1295,17 @@ def unrestricted_swap_trial(
     identical intervention path and are labelled interpolation or
     extrapolation.  Optional token ids add graded full-vocabulary diagnostics;
     they never restrict the model's output or supply candidates to it.
+
+    Two fields here are easy to misread and were misread once.
+    ``max_coordinate_update_error`` and ``max_orthogonal_residual_drift`` are
+    the **float64 pre-cast** solve errors: exact by construction, and no
+    evidence at all about what the model's bf16 residual stream received. The
+    ``max_post_cast_*`` fields are the ones that answer that, and they are now
+    persisted rather than computed and discarded. ``realization_policy`` is
+    optional and defaults to ``None`` so that a replication can reproduce a
+    completed run's exact uncorrected path; pass
+    :data:`jlens.mmpilot.workspace_replication.TEXT_MODEL_DTYPE_REALIZATION`
+    for any new measurement.
     """
 
     if clean_logits is None:
@@ -1293,6 +1326,7 @@ def unrestricted_swap_trial(
         position_rule=position_rule,
         evidence_span=inputs.modality_token_range,
         record_coordinates=False,
+        realization_policy=realization_policy,
     ) as stats:
         patched = backend.forward_logits(inputs.tensors)[
             0, inputs.final_prompt_position
@@ -1319,6 +1353,12 @@ def unrestricted_swap_trial(
     update_ratios: list[float] = []
     orthogonal_drifts: list[float] = []
     coordinate_errors: list[float] = []
+    post_cast_coordinate_errors: list[float] = []
+    post_cast_residual_drifts: list[float] = []
+    realizations_converged: list[bool] = []
+    exact_before_cast: list[bool] = []
+    corrections_applied: list[int] = []
+    realization_payload: dict | None = None
     for layer in sorted(stats):
         swap = dict(stats[layer].get("swap") or {})
         before = list(swap.get("activation_norm_before") or [])
@@ -1334,6 +1374,28 @@ def unrestricted_swap_trial(
         )
         orthogonal_drifts.append(float(swap.get("max_orthogonal_residual_drift", 0.0)))
         coordinate_errors.append(float(swap.get("max_coordinate_update_error", 0.0)))
+        # What the model's own dtype actually received. Computed by
+        # swap_coordinates on every call, policy or not; previously discarded
+        # here, which is why no completed artifact can answer the question.
+        if "max_post_cast_relative_coordinate_update_error" in swap:
+            post_cast_coordinate_errors.append(
+                float(swap["max_post_cast_relative_coordinate_update_error"])
+            )
+        if "max_post_cast_relative_orthogonal_residual_drift" in swap:
+            post_cast_residual_drifts.append(
+                float(swap["max_post_cast_relative_orthogonal_residual_drift"])
+            )
+        realizations_converged.append(
+            bool(swap.get("model_dtype_realization_converged", True))
+        )
+        exact_before_cast.append(bool(swap.get("alpha_one_is_exact_exchange")))
+        corrections_applied.append(
+            int(swap.get("model_dtype_corrections_applied") or 0)
+        )
+        if realization_payload is None and isinstance(
+            swap.get("model_dtype_realization"), Mapping
+        ):
+            realization_payload = dict(swap["model_dtype_realization"])
 
     result = {
         "alpha": float(alpha),
@@ -1359,6 +1421,22 @@ def unrestricted_swap_trial(
         "max_update_to_activation_norm_ratio": max(update_ratios, default=0.0),
         "max_orthogonal_residual_drift": max(orthogonal_drifts, default=0.0),
         "max_coordinate_update_error": max(coordinate_errors, default=0.0),
+        "coordinate_error_basis": "float64_pre_cast_solve",
+        "max_post_cast_relative_coordinate_error": max(
+            post_cast_coordinate_errors, default=None
+        ),
+        "max_post_cast_relative_residual_drift": max(
+            post_cast_residual_drifts, default=None
+        ),
+        "all_layers_are_exact_alpha_one_exchange_before_cast": (
+            bool(exact_before_cast) and all(exact_before_cast)
+        ),
+        "all_model_dtype_realizations_converged": (
+            bool(realizations_converged) and all(realizations_converged)
+        ),
+        "max_model_dtype_corrections_applied": max(corrections_applied, default=0),
+        "model_dtype_realization_policy": realization_payload,
+        "model_dtype_realization_policy_supplied": realization_payload is not None,
     }
     if target_token_id is not None:
         target = int(target_token_id)
@@ -1459,6 +1537,7 @@ __all__ = [
     "load_broad_pooled_development_source",
     "paired_binary_one_sided_p",
     "plan_units",
+    "confirmation_leg_count_prompt",
     "selected_lens_vector",
     "select_causal_groups",
     "summarize_cross_eval",

@@ -53,8 +53,18 @@ import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
+from jlens.mmpilot.multimodal_instrument import (
+    INSTRUMENT_STATES,
+    INTEGRITY_CLAUSES,
+    MODEL_DTYPE_REALIZATION,
+    POST_CAST_TOLERANCE,
+    cell_integrity,
+    instrument_state,
+    realization_policy_digest,
+)
 from jlens.mmpilot.multimodal_lens import (
     MODALITIES,
     _verified_payload,
@@ -75,6 +85,32 @@ EXCLUSION_AUDIT_VERSION = "mmpilot.multimodal_population_exclusion_audit.v1"
 AUDIO_LINKAGE_AUDIT_VERSION = "mmpilot.multimodal_audio_metadata_linkage_audit.v1"
 RECRUITED_EXPLORATORY_VERSION = (
     "mmpilot.multimodal_new_property_recruited_exploratory.v1"
+)
+#: The corrected rerun. A new version string because the implementation
+#: changed: the frozen model-dtype realization policy is now passed into every
+#: generated condition, the verdict enforces the full integrity clause set, and
+#: a norm-matched direct-answer positive control runs beside the exchange.
+#: Nothing about the scientific design moved -- same property, prompt,
+#: concepts, directions, band, alpha, positions, modalities, population,
+#: controls and thresholds.
+CORRECTED_EXPLORATORY_VERSION = (
+    "mmpilot.multimodal_new_property_recruited_exploratory_corrected.v2"
+)
+INSTRUMENT_AMENDMENT_VERSION = (
+    "mmpilot.multimodal_swap_instrument_amendment.v1"
+)
+LEGACY_CONFIRMATION_AUDIT_VERSION = (
+    "mmpilot.multimodal_legacy_confirmation_realization_audit.v1"
+)
+
+#: What the direct-answer arm is for, stated once so a report cannot quietly
+#: promote it. It is a diagnostic of causal leverage on this path, never a
+#: measurement of coordinate exchange.
+DIRECT_ANSWER_CONTROL_ROLE = (
+    "norm-matched direct-answer positive control: diagnoses whether any "
+    "intervention of the exchange's magnitude on this band and these positions "
+    "can move the requested answer. A pass licenses reading a failed exchange "
+    "as a scientific null. It can never turn a failed exchange into a GO."
 )
 
 #: The validated contiguous band. Only the **pooled** lens spans it: the broad
@@ -1972,7 +2008,15 @@ def _cell_records(
     layers: Sequence[int],
     max_activation_norm_ratio: float,
     max_update_ratio: float,
+    post_cast_tolerance: float = POST_CAST_TOLERANCE,
 ) -> list[dict]:
+    """One record per modality, with the **complete** integrity clause set.
+
+    ``post_cast_tolerance`` defaults to the repository's frozen 0.02; it is a
+    parameter so a test can exercise the boundary, never so a study can relax
+    it. Both the scientific condition and all three controls are scored, since
+    a control whose intervention was not realized measures nothing either.
+    """
     cells: list[dict] = []
     for modality in modalities:
         modality_rows = [row for row in rows if str(row.get("modality")) == modality]
@@ -1984,19 +2028,29 @@ def _cell_records(
             for condition in conditions
         }
         exact = by_condition["exact"]
+        # Every scientific and control trial in this cell, scored against the
+        # complete clause set. The first version checked two clauses -- the
+        # patched positions and the layer list -- and therefore certified an
+        # intervention that had never been realized in the model's dtype.
+        scored_rows = [
+            row for condition_rows in by_condition.values() for row in condition_rows
+        ]
+        integrity = cell_integrity(
+            scored_rows,
+            layers=layers,
+            tolerance=float(post_cast_tolerance),
+            max_activation_norm_ratio=float(max_activation_norm_ratio),
+            max_update_ratio=float(max_update_ratio),
+        )
         cell = {
             "modality": modality,
             "n": len(exact),
             "exact_successes": sum(bool(row.get("success")) for row in exact),
             "exact_success_rate": _rate(exact),
             "controls": {},
-            "integrity_pass": bool(exact)
-            and all(
-                bool(row.get("all_prompt_positions_patched"))
-                and list(row.get("layers_patched") or []) == list(layers)
-                for condition_rows in by_condition.values()
-                for row in condition_rows
-            ),
+            "integrity_pass": bool(exact) and bool(integrity["passed"]),
+            "integrity": integrity,
+            "integrity_failed_clauses": sorted(integrity["failed_clause_counts"]),
             "max_activation_norm_ratio": max(
                 (float(row.get("max_activation_norm_ratio", 1.0)) for row in exact),
                 default=1.0,
@@ -2026,23 +2080,107 @@ def _cell_records(
     return cells
 
 
+def _direct_answer_record(
+    rows: Sequence[Mapping],
+    *,
+    modalities: Sequence[str],
+    layers: Sequence[int],
+    min_success_rate: float,
+    max_update_ratio: float,
+    post_cast_tolerance: float,
+) -> dict:
+    """Score the norm-matched direct-answer arm for one direction.
+
+    Absent rows mean the arm was not run, which is ``available = False`` and
+    ``passed = None`` -- not a pass and not a failure. It has to clear the same
+    success rate in **every** modality to license reading a null, because a
+    control that only works in text says nothing about an image-route null.
+    """
+    if not rows:
+        return {
+            "available": False,
+            "passed": None,
+            "integrity_pass": None,
+            "by_modality": {},
+            "role": DIRECT_ANSWER_CONTROL_ROLE,
+        }
+    integrity = cell_integrity(
+        rows,
+        layers=layers,
+        tolerance=float(post_cast_tolerance),
+        # The control replaces the exchange's update rather than adding to the
+        # activation, so only the update-magnitude limit is meaningful here.
+        max_activation_norm_ratio=1.0,
+        max_update_ratio=float(max_update_ratio),
+    )
+    by_modality: dict[str, dict] = {}
+    for modality in modalities:
+        modality_rows = [
+            row for row in rows if str(row.get("modality")) == modality
+        ]
+        by_modality[str(modality)] = {
+            "n": len(modality_rows),
+            "successes": sum(bool(row.get("success")) for row in modality_rows),
+            "success_rate": _rate(modality_rows),
+            "meets_rate": bool(modality_rows)
+            and _rate(modality_rows) >= float(min_success_rate),
+        }
+    passed = bool(integrity["passed"]) and all(
+        row["meets_rate"] for row in by_modality.values()
+    )
+    return {
+        "available": True,
+        "passed": bool(passed),
+        "integrity_pass": bool(integrity["passed"]),
+        "integrity": integrity,
+        "min_success_rate": float(min_success_rate),
+        "by_modality": by_modality,
+        "role": DIRECT_ANSWER_CONTROL_ROLE,
+        "is_coordinate_exchange": False,
+        "can_produce_a_go": False,
+    }
+
+
 def failure_mode(
     cells: Sequence[Mapping],
     *,
     min_success_rate: float,
     min_control_margin: float,
+    direct_answer_available: bool = False,
+    direct_answer_passed: bool | None = None,
 ) -> str:
     """Name why a set of cells failed, so a null is never confused with a bug.
 
     A run where the controls moved the answer too is not a null result about
     the hypothesis; it is a broken instrument, and the two must never share a
-    verdict string.
+    verdict string. Neither is a run whose intervention was never realized in
+    the model's dtype: ``coordinate_integrity_failed`` now names the *specific*
+    clauses that failed, because "integrity" was previously reported as passing
+    while the post-cast coordinate error stood at ten times its tolerance.
+
+    When the instrument is clean and the exchange still moved nothing, the
+    remaining question is whether anything on this path could have. A study
+    that declared a norm-matched direct-answer positive control and saw it
+    *also* fail reports ``no_effect_and_positive_control_also_failed``, which
+    :func:`jlens.mmpilot.multimodal_instrument.instrument_state` maps to
+    ``INCONCLUSIVE``. Studies that never declared such an arm keep the plain
+    ``no_effect_in_every_modality`` string; the licence to *read* that string
+    as a null is enforced at the verdict, not invented here.
     """
 
     if not cells or any(not cell["n"] for cell in cells):
         return "no_trials"
     if not all(cell["integrity_pass"] for cell in cells):
-        return "coordinate_integrity_failed"
+        clauses = sorted({
+            clause
+            for cell in cells
+            for clause in cell.get("integrity_failed_clauses") or ()
+        })
+        return (
+            f"coordinate_integrity_failed[{','.join(clauses)}]"
+            if clauses
+            else "coordinate_integrity_failed"
+        )
     if not all(cell["activation_norms_sane"] for cell in cells):
         return "activation_norms_out_of_range"
     controls_moved = any(
@@ -2057,6 +2195,8 @@ def failure_mode(
     if controls_moved:
         return "controls_also_moved_the_answer"
     if not effect_present:
+        if direct_answer_available and not direct_answer_passed:
+            return "no_effect_and_positive_control_also_failed"
         return "no_effect_in_every_modality"
     if not all(
         control["exact_minus_control"] >= float(min_control_margin)
@@ -2083,6 +2223,15 @@ def generation_trial_row(
     layer under ``intervention_diagnostics``; the verdict functions read flat
     worst-case fields. This is the only place that mapping happens, so a
     renamed diagnostic breaks one function rather than four notebook cells.
+
+    Every integrity field is carried through, including the four booleans the
+    first version dropped (``all_finite``, the alpha=1 exact-exchange flag, the
+    model-dtype realization convergence flag, and the summariser's own
+    post-cast audit result). A **missing** diagnostic is emitted as ``None``
+    rather than as a passing default: ``float(x or 0.0)`` on an absent
+    post-cast error is precisely what let an unrealized intervention score as
+    ``integrity_pass = true``. :func:`jlens.mmpilot.multimodal_instrument.
+    trial_integrity` fails any clause whose evidence is ``None``.
     """
 
     diagnostics = dict(trial.get("intervention_diagnostics") or {})
@@ -2107,6 +2256,20 @@ def generation_trial_row(
             if isinstance(row.get(key), (int, float))
         ]
         return max(values) if values else float(default)
+
+    def _measured(key: str) -> float | None:
+        """The diagnostic, or ``None`` when it was never recorded."""
+        value = diagnostics.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        return float(value)
+
+    def _recorded_flag(key: str) -> bool | None:
+        value = diagnostics.get(key)
+        return bool(value) if isinstance(value, bool) else None
+
+    raw_policy = diagnostics.get("model_dtype_realization_policy")
+    realization_policy = dict(raw_policy) if isinstance(raw_policy, Mapping) else None
 
     generated = str(trial.get("generated_text") or "")
     aliases = (
@@ -2138,15 +2301,159 @@ def generation_trial_row(
         "max_update_to_activation_norm_ratio": _worst(
             "max_update_to_activation_ratio", 0.0
         ),
-        "max_orthogonal_residual_drift": float(
-            diagnostics.get("max_post_cast_relative_residual_drift") or 0.0
+        "max_orthogonal_residual_drift": _measured(
+            "max_post_cast_relative_residual_drift"
         ),
-        "max_coordinate_update_error": float(
-            diagnostics.get("max_post_cast_relative_coordinate_error") or 0.0
+        "max_coordinate_update_error": _measured(
+            "max_post_cast_relative_coordinate_error"
         ),
-        "all_hooks_fired": bool(diagnostics.get("all_hooks_fired")),
-        "teacher_forcing_used": False,
-        "candidate_list_supplied": False,
+        "max_ideal_coordinate_error": _worst("max_ideal_coordinate_error", 0.0),
+        "max_post_cast_absolute_coordinate_error": _worst(
+            "max_post_cast_coordinate_error", 0.0
+        ),
+        "all_hooks_fired": _recorded_flag("all_hooks_fired"),
+        "all_finite": _recorded_flag("all_finite"),
+        "all_layers_are_exact_alpha_one_exchange_before_cast": _recorded_flag(
+            "all_layers_are_exact_alpha_one_exchange_before_cast"
+        ),
+        "all_model_dtype_realizations_converged": _recorded_flag(
+            "all_model_dtype_realizations_converged"
+        ),
+        "post_cast_audit_passed": _recorded_flag("post_cast_audit_passed"),
+        "post_cast_error_threshold": _measured("post_cast_error_threshold"),
+        "model_dtype_realization_version": diagnostics.get(
+            "model_dtype_realization_version"
+        ),
+        "model_dtype_realization_policy": realization_policy,
+        "model_dtype_realization_policy_digest": (
+            payload_checksum(realization_policy) if realization_policy else None
+        ),
+        "max_model_dtype_corrections_applied": int(
+            _worst("max_model_dtype_corrections_applied", 0)
+        ),
+        "diagnostic_checksum": diagnostics.get("diagnostic_checksum"),
+        "teacher_forcing_used": bool(trial.get("teacher_forcing_used", False)),
+        "candidate_list_supplied": bool(
+            trial.get("candidate_list_supplied", False)
+        ),
+    }
+
+
+def direct_answer_trial_row(
+    trial: Mapping,
+    *,
+    group: Mapping,
+    modality: str,
+    direction: Sequence[str],
+    answer: PropertyAnswer | Mapping,
+    layers: Sequence[int] = VALIDATED_BAND,
+) -> dict:
+    """Flatten one norm-matched direct-answer positive-control trial.
+
+    The control comes from
+    :func:`jlens.mmpilot.workspace_replication.unrestricted_greedy_direct_answer_trial`
+    -- the repository's existing implementation, which adds the *answer*
+    token's lens direction with exactly the L2 norm the exact exchange would
+    have had at that layer and position. It is not additive steering invented
+    here, and it is not a coordinate swap: it is scored into its own
+    ``condition = "direct_answer"`` row so no aggregation can mistake it for
+    one.
+
+    What it can and cannot do is fixed in
+    :func:`jlens.mmpilot.multimodal_instrument.instrument_state`: a passing
+    control licenses *reading* a failed exchange as a scientific null, and a
+    failing one forces ``INCONCLUSIVE``. Neither outcome can produce a GO.
+    """
+
+    diagnostics = dict(trial.get("intervention_diagnostics") or {})
+    raw_by_layer = diagnostics.get("by_layer") or {}
+    if isinstance(raw_by_layer, Mapping):
+        by_layer = [
+            row for _layer, row in sorted(
+                raw_by_layer.items(), key=lambda item: int(item[0])
+            )
+        ]
+    else:
+        by_layer = list(raw_by_layer)
+    if not all(isinstance(row, Mapping) for row in by_layer):
+        raise MultimodalFollowupRefused(
+            "intervention_diagnostics.by_layer must contain mapping records"
+        )
+
+    def _worst(key: str, default: float) -> float:
+        values = [
+            float(row[key])
+            for row in by_layer
+            if isinstance(row.get(key), (int, float))
+        ]
+        return max(values) if values else float(default)
+
+    def _measured(key: str) -> float | None:
+        value = diagnostics.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        return float(value)
+
+    def _recorded_flag(key: str) -> bool | None:
+        value = diagnostics.get(key)
+        return bool(value) if isinstance(value, bool) else None
+
+    raw_policy = diagnostics.get("model_dtype_realization_policy")
+    realization_policy = dict(raw_policy) if isinstance(raw_policy, Mapping) else None
+    generated = str(trial.get("generated_text") or "")
+    aliases = (
+        list(answer.aliases)
+        if isinstance(answer, PropertyAnswer)
+        else list(answer.get("aliases") or [])
+    )
+    return {
+        "direction": f"{direction[0]}->{direction[1]}",
+        "source": str(direction[0]),
+        "target": str(direction[1]),
+        "group_id": str(group["group_id"]),
+        "image_id": str(group["image_id"]),
+        "modality": str(modality),
+        "condition": "direct_answer",
+        "arm": "positive_control",
+        "is_coordinate_exchange": False,
+        "intervention": "norm_matched_direct_answer",
+        "alpha": float(trial.get("alpha", 1.0)),
+        "layers_patched": sorted(
+            int(layer) for layer in trial.get("layers_patched") or layers
+        ),
+        "all_prompt_positions_patched": bool(
+            trial.get("all_prompt_positions_patched")
+        ),
+        "n_forward_passes": int(trial.get("n_forward_passes") or 0),
+        "generated_text": generated,
+        "expected_aliases": aliases,
+        "expected": aliases[0] if aliases else "",
+        "success": property_answer_matches(generated, answer),
+        # The control replaces the exchange's update with a norm-matched one,
+        # so "activation norm ratio" is not measured on this path; the update
+        # magnitude is, and it is gated by the same limit.
+        "max_activation_norm_ratio": 1.0,
+        "max_update_to_activation_norm_ratio": _worst(
+            "max_update_to_activation_ratio", 0.0
+        ),
+        "max_relative_norm_match_error": _measured("max_relative_norm_match_error"),
+        "all_hooks_fired": _recorded_flag("all_hooks_fired"),
+        "all_finite": _recorded_flag("all_finite"),
+        "all_model_dtype_realizations_converged": _recorded_flag(
+            "all_model_dtype_realizations_converged"
+        ),
+        "model_dtype_realization_policy": realization_policy,
+        "model_dtype_realization_policy_digest": (
+            payload_checksum(realization_policy) if realization_policy else None
+        ),
+        "max_model_dtype_corrections_applied": int(
+            _worst("max_model_dtype_corrections_applied", 0)
+        ),
+        "diagnostic_checksum": diagnostics.get("diagnostic_checksum"),
+        "teacher_forcing_used": bool(trial.get("teacher_forcing_used", False)),
+        "candidate_list_supplied": bool(
+            trial.get("candidate_list_supplied", False)
+        ),
     }
 
 
@@ -2161,21 +2468,54 @@ def new_property_development_verdict(
     max_activation_norm_ratio: float = 1.25,
     max_update_ratio: float = 0.50,
     modalities: Sequence[str] = MODALITIES,
+    post_cast_tolerance: float = POST_CAST_TOLERANCE,
+    direct_answer_min_success_rate: float | None = None,
 ) -> dict:
-    """Score Stage B1. Development only; a pass licenses freezing, nothing else."""
+    """Score Stage B1. Development only; a pass licenses freezing, nothing else.
+
+    Rows whose ``condition`` is ``"direct_answer"`` are held out of the primary
+    grid and scored as the norm-matched positive control. They are optional:
+    Stage B1 as originally frozen has no such arm and behaves exactly as
+    before. When they are present, each direction additionally reports an
+    ``instrument_state`` from
+    :func:`jlens.mmpilot.multimodal_instrument.instrument_state`, which is the
+    only place a failed exchange is allowed to be *called* a null.
+
+    The control cannot create a pass: ``passed`` is computed from the exact
+    coordinate-exchange cells alone, exactly as before.
+    """
 
     assert_controls_complete(REQUIRED_CONDITIONS)
+    if direct_answer_min_success_rate is None:
+        direct_answer_min_success_rate = float(min_success_rate)
     directions = sorted({str(row.get("direction")) for row in rows if row.get("direction")})
     per_direction = []
     for direction in directions:
         direction_rows = [row for row in rows if str(row.get("direction")) == direction]
+        primary_rows = [
+            row for row in direction_rows
+            if str(row.get("condition")) != "direct_answer"
+        ]
+        control_rows = [
+            row for row in direction_rows
+            if str(row.get("condition")) == "direct_answer"
+        ]
         cells = _cell_records(
-            direction_rows,
+            primary_rows,
             modalities=modalities,
             conditions=REQUIRED_CONDITIONS,
             layers=layers,
             max_activation_norm_ratio=max_activation_norm_ratio,
             max_update_ratio=max_update_ratio,
+            post_cast_tolerance=post_cast_tolerance,
+        )
+        direct = _direct_answer_record(
+            control_rows,
+            modalities=modalities,
+            layers=layers,
+            min_success_rate=float(direct_answer_min_success_rate),
+            max_update_ratio=max_update_ratio,
+            post_cast_tolerance=post_cast_tolerance,
         )
         passed = bool(cells) and all(
             cell["n"]
@@ -2188,15 +2528,29 @@ def new_property_development_verdict(
             and cell["activation_norms_sane"]
             for cell in cells
         )
+        mode = failure_mode(
+            cells,
+            min_success_rate=min_success_rate,
+            min_control_margin=min_control_margin,
+            direct_answer_available=direct["available"],
+            direct_answer_passed=direct["passed"],
+        )
         per_direction.append(
             {
                 "direction": direction,
                 "cells": cells,
                 "passed": passed,
-                "failure_mode": failure_mode(
-                    cells,
-                    min_success_rate=min_success_rate,
-                    min_control_margin=min_control_margin,
+                "failure_mode": mode,
+                "direct_answer_positive_control": direct,
+                "instrument_state": instrument_state(
+                    integrity_passed=bool(cells)
+                    and all(cell["integrity_pass"] for cell in cells)
+                    and all(cell["n"] for cell in cells)
+                    and (not direct["available"] or direct["integrity_pass"]),
+                    controls_moved=mode == "controls_also_moved_the_answer",
+                    effect_present=passed,
+                    direct_answer_available=direct["available"],
+                    direct_answer_passed=direct["passed"],
                 ),
             }
         )
@@ -2231,6 +2585,15 @@ def new_property_development_verdict(
         "failure_modes": {
             row["direction"]: row["failure_mode"] for row in per_direction
         },
+        "instrument_states": {
+            row["direction"]: row["instrument_state"] for row in per_direction
+        },
+        "instrument_state_vocabulary": list(INSTRUMENT_STATES),
+        "integrity_clauses_enforced": list(INTEGRITY_CLAUSES),
+        "post_cast_relative_tolerance": float(post_cast_tolerance),
+        "model_dtype_realization_policy": MODEL_DTYPE_REALIZATION.to_dict(),
+        "model_dtype_realization_policy_digest": realization_policy_digest(),
+        "direct_answer_positive_control_role": DIRECT_ANSWER_CONTROL_ROLE,
         "claim_boundary": (
             "development on a fresh-but-now-spent population. A passing "
             "direction may be frozen and repeated; it may not be reported as a "
@@ -2259,7 +2622,17 @@ def recruited_exploratory_verdict(
     min_success_rate: float = 0.50,
     min_control_margin: float = 0.25,
 ) -> dict:
-    """Score the post-NO_GO clean-capability recruitment experiment."""
+    """Score the post-NO_GO clean-capability recruitment experiment.
+
+    **Superseded by :func:`corrected_exploratory_verdict`.** The run this
+    scored (``mmnewpropertyrescue_real_6af6affcb145``) was produced by a stage
+    that never passed the model-dtype realization policy, so its intervention
+    was not realized within tolerance; see
+    :func:`instrument_defect_amendment`. The function is kept, not deleted,
+    because the completed artifact still has to be readable -- but it is not
+    the entry point for any new run, and it declares no direct-answer positive
+    control, so a null it produces is not readable as a scientific null.
+    """
 
     if source_audit.get("verdict") != "PROPERTY_AUDIT_NO_GO":
         raise MultimodalFollowupRefused(
@@ -2306,6 +2679,561 @@ def recruited_exploratory_verdict(
         ),
     }
     payload.pop("report_checksum", None)
+    return {**payload, "report_checksum": payload_checksum(payload)}
+
+
+def corrected_exploratory_verdict(
+    rows: Sequence[Mapping],
+    *,
+    source_audit: Mapping,
+    linkage_audit: Mapping,
+    recruitment: Mapping,
+    superseded_report_checksum: str,
+    layers: Sequence[int] = VALIDATED_BAND,
+    min_success_rate: float = 0.50,
+    min_control_margin: float = 0.25,
+    post_cast_tolerance: float = POST_CAST_TOLERANCE,
+) -> dict:
+    """Score the corrected rerun of the recruited animal-sound exploratory test.
+
+    Identical science to :func:`recruited_exploratory_verdict` -- same
+    property, prompt, concepts, directions, band, alpha, positions, modalities,
+    population, controls and thresholds. What changed is the instrument: the
+    frozen realization policy reaches every generated condition, the full
+    integrity clause set is enforced, and a norm-matched direct-answer positive
+    control runs beside the exchange.
+
+    Args:
+        superseded_report_checksum: The flawed run's report checksum, pinned so
+            this report names what it replaces instead of quietly occupying its
+            place. The flawed run is never rewritten.
+
+    Raises:
+        MultimodalFollowupRefused: If the direct-answer arm is missing for any
+            direction. The corrected design declares it; a rerun without it
+            would reproduce the original ambiguity, so it is refused rather
+            than scored.
+
+    The verdict is
+    ``CORRECTED_RECRUITED_EXPLORATORY_<state>`` for a ``state`` in
+    :data:`jlens.mmpilot.multimodal_instrument.INSTRUMENT_STATES`, taken from
+    the worst direction. ``EFFECT_GO`` still means *exploratory* GO on a spent
+    population and still requires a fresh, frozen confirmation before any
+    generalization claim.
+    """
+
+    if source_audit.get("verdict") != "PROPERTY_AUDIT_NO_GO":
+        raise MultimodalFollowupRefused(
+            "the corrected rerun is defined only as a follow-up to the pinned NO_GO"
+        )
+    if linkage_audit.get("verdict") != "AUDIO_METADATA_LINKAGE_GO":
+        raise MultimodalFollowupRefused(
+            "the failed-audio metadata linkage audit did not pass"
+        )
+    if not str(superseded_report_checksum or ""):
+        raise MultimodalFollowupRefused(
+            "the corrected rerun must pin the checksum of the run it supersedes"
+        )
+    directions = sorted(
+        {str(row.get("direction")) for row in rows if row.get("direction")}
+    )
+    without_control = [
+        direction
+        for direction in directions
+        if not any(
+            str(row.get("direction")) == direction
+            and str(row.get("condition")) == "direct_answer"
+            for row in rows
+        )
+    ]
+    if directions and without_control:
+        raise MultimodalFollowupRefused(
+            "the corrected design declares a norm-matched direct-answer "
+            f"positive control; {without_control} have none. Without it a "
+            "failed exchange cannot be distinguished from a path with no "
+            "causal leverage, which is the ambiguity this rerun exists to "
+            "remove"
+        )
+    capability_go = bool(recruitment.get("complete"))
+    base = new_property_development_verdict(
+        rows,
+        audit=source_audit,
+        layers=layers,
+        capability_go=capability_go,
+        min_success_rate=min_success_rate,
+        min_control_margin=min_control_margin,
+        post_cast_tolerance=post_cast_tolerance,
+    )
+    states = [row["instrument_state"] for row in base["directions"]]
+    # Worst-first: a broken instrument anywhere disqualifies the whole run, and
+    # a GO requires every direction to have produced one.
+    if not capability_go:
+        state = "INCONCLUSIVE"
+    elif not states:
+        state = "INCONCLUSIVE"
+    elif "INSTRUMENT_FAILURE" in states:
+        state = "INSTRUMENT_FAILURE"
+    elif "CONTROL_FAILURE" in states:
+        state = "CONTROL_FAILURE"
+    elif "EFFECT_GO" in states:
+        state = "EFFECT_GO"
+    elif "INCONCLUSIVE" in states:
+        state = "INCONCLUSIVE"
+    else:
+        state = "SCIENTIFIC_NULL"
+    payload = {
+        **base,
+        "version": CORRECTED_EXPLORATORY_VERSION,
+        "verdict": f"CORRECTED_RECRUITED_EXPLORATORY_{state}",
+        "instrument_state": state,
+        "supersedes_report_checksum": str(superseded_report_checksum),
+        "superseded_run_rewritten": False,
+        "source_aggregate_verdict": "PROPERTY_AUDIT_NO_GO",
+        "source_aggregate_verdict_unchanged": True,
+        "audio_linkage_audit_digest": linkage_audit.get("audit_digest"),
+        "recruitment_digest": recruitment.get("selection_digest"),
+        "selection_uses_only_clean_capability": True,
+        "causal_outcomes_used_for_selection": False,
+        "outcome_informed_stage_design": True,
+        "label": "exploratory",
+        "is_confirmation": False,
+        "fresh_confirmation_licensed_directly": False,
+        "alpha_sweep_run": False,
+        "primary_alpha": 1.0,
+        "design_changed_from_superseded_run": False,
+        "instrument_changed_from_superseded_run": True,
+        "claim_boundary": (
+            "Corrected instrument, unchanged design. A GO here is exploratory "
+            "evidence on a spent population and must be repeated on a fresh "
+            "population under the frozen design before it is called confirmed. "
+            "A SCIENTIFIC_NULL is a null about this property and direction "
+            "only, and is readable as one solely because the norm-matched "
+            "direct-answer positive control passed on the same path."
+        ),
+    }
+    payload.pop("report_checksum", None)
+    return {**payload, "report_checksum": payload_checksum(payload)}
+
+
+def instrument_defect_amendment(
+    *,
+    original_report_path: str,
+    original_report_checksum: str,
+    original_run_name: str,
+    original_verdict: str,
+    omitted_clauses: Sequence[str],
+    observed_post_cast_relative_errors: Mapping[str, float],
+    corrected_stage: str,
+    written_utc: str | None = None,
+) -> dict:
+    """Reclassify a completed run as instrument-inconclusive, read-only.
+
+    Writes **beside** the original artifact. It opens no completed report for
+    writing, touches no ``units/`` directory and recomputes no scientific
+    quantity: ``scientific_recompute`` is ``0`` and a test asserts it. The
+    original verdict string is reproduced verbatim and the corrected
+    classification sits next to it, exactly as
+    :mod:`jlens.mmpilot.endpoint_amend` does for the endpoint relabelling.
+
+    What the amendment asserts is narrow and mechanical: the run's intervention
+    was not realized within the repository's own frozen tolerance, and its
+    verdict function never asked. It therefore has no licence to be read as a
+    scientific null. It does **not** assert that the corrected instrument would
+    produce a different outcome -- only the corrected rerun can say that.
+
+    Raises:
+        MultimodalFollowupRefused: If any binding is missing, if no omitted
+            clause is named, or if a named clause is not in
+            :data:`jlens.mmpilot.multimodal_instrument.INTEGRITY_CLAUSES`.
+    """
+    missing = [
+        name
+        for name, value in (
+            ("original_report_path", original_report_path),
+            ("original_report_checksum", original_report_checksum),
+            ("original_run_name", original_run_name),
+            ("original_verdict", original_verdict),
+            ("corrected_stage", corrected_stage),
+        )
+        if not str(value or "")
+    ]
+    if missing:
+        raise MultimodalFollowupRefused(
+            f"an instrument amendment cannot name what it corrects: {missing}"
+        )
+    clauses = [str(name) for name in omitted_clauses]
+    if not clauses:
+        raise MultimodalFollowupRefused(
+            "an instrument amendment that names no omitted clause corrects "
+            "nothing"
+        )
+    unknown = sorted(set(clauses) - set(INTEGRITY_CLAUSES))
+    if unknown:
+        raise MultimodalFollowupRefused(
+            f"unknown integrity clause(s) {unknown}; the vocabulary is frozen: "
+            f"{list(INTEGRITY_CLAUSES)}"
+        )
+    payload = {
+        "schema": "jlens.mmpilot.multimodal_instrument_amendment.v1",
+        "amendment_version": INSTRUMENT_AMENDMENT_VERSION,
+        "written_utc": written_utc
+        or datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        # --- the binding
+        "original_report_path": str(original_report_path),
+        "original_report_checksum": str(original_report_checksum),
+        "original_run_name": str(original_run_name),
+        "original_verdict": str(original_verdict),
+        "original_verdict_is_reproduced_verbatim": True,
+        # --- the defect
+        "defect": (
+            "the model-dtype realization policy was not passed into the "
+            "generated swap conditions, and the verdict's integrity check "
+            "omitted the clauses below, so a post-cast coordinate error far "
+            "outside the frozen tolerance was reported as integrity_pass=true"
+        ),
+        "omitted_integrity_clauses": clauses,
+        "post_cast_relative_tolerance": float(POST_CAST_TOLERANCE),
+        "observed_post_cast_relative_errors": {
+            str(key): float(value)
+            for key, value in observed_post_cast_relative_errors.items()
+        },
+        "realization_policy_that_should_have_been_used": (
+            MODEL_DTYPE_REALIZATION.to_dict()
+        ),
+        # --- the reclassification
+        "corrected_classification": "INSTRUMENT_INCONCLUSIVE",
+        "original_outputs_are_retained_as_historical_evidence": True,
+        "original_null_is_readable_as_a_scientific_null": False,
+        "corrected_stage": str(corrected_stage),
+        # --- what did not change
+        "scientific_recompute": 0,
+        "scientific_numbers_unchanged": True,
+        "original_report_modified": False,
+        "original_units_modified": False,
+        "original_run_modified": False,
+        "verdict_changed_by_prose": False,
+        "boundary": (
+            "This amendment records that the completed run's intervention was "
+            "not realized within tolerance and that its verdict never checked. "
+            "It re-measures nothing, promotes nothing and demotes nothing "
+            "numerically; it withdraws only the licence to read the recorded "
+            "null as a null."
+        ),
+    }
+    return {**payload, "amendment_checksum": payload_checksum(payload)}
+
+
+def legacy_confirmation_realization_audit(
+    *,
+    report_checksum: str,
+    trial_function: str,
+    realization_policy_passed: bool,
+    stored_diagnostic_fields: Sequence[str],
+    enforced_integrity_clauses: Sequence[str],
+    enforced_tolerance: float,
+    written_utc: str | None = None,
+) -> dict:
+    """Ask whether the confirmed leg-count result shares the new defect.
+
+    Read-only and model-free: it inspects **which code path** the completed
+    confirmation ran and **which fields** its stored rows carry, and decides
+    whether those artifacts can settle the question at all. It deliberately
+    cannot reaffirm or invalidate the confirmed result, because neither is
+    derivable from artifacts that never recorded the measurement in question.
+
+    Returns:
+        A payload whose ``verdict`` is one of
+
+        ``ARTIFACTS_SUFFICIENT_AND_CLEAN``
+            The run passed a realization policy and its verdict enforced the
+            post-cast clauses. Nothing further is needed.
+        ``ARTIFACTS_INSUFFICIENT_REPLICATION_REQUIRED``
+            The post-cast diagnostics were computed inside
+            :func:`jlens.mmpilot.coordinate_swap.swap_coordinates` but never
+            persisted by the trial function, so the stored rows cannot answer
+            the question either way. The smallest exact replication is named
+            in ``required_replication``.
+    """
+    stored = [str(name) for name in stored_diagnostic_fields]
+    enforced = [str(name) for name in enforced_integrity_clauses]
+    post_cast_stored = [
+        name for name in stored if name.startswith("max_post_cast")
+    ]
+    post_cast_enforced = [
+        name
+        for name in enforced
+        if name.startswith("post_cast_")
+        or name == "model_dtype_realization_converged"
+    ]
+    sufficient = bool(
+        realization_policy_passed and post_cast_stored and post_cast_enforced
+    )
+    payload = {
+        "schema": "jlens.mmpilot.multimodal_legacy_confirmation_audit.v1",
+        "audit_version": LEGACY_CONFIRMATION_AUDIT_VERSION,
+        "written_utc": written_utc
+        or datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "report_checksum": str(report_checksum),
+        "trial_function": str(trial_function),
+        "realization_policy_passed": bool(realization_policy_passed),
+        "post_cast_diagnostics_stored": post_cast_stored,
+        "post_cast_diagnostics_enforced": post_cast_enforced,
+        "enforced_integrity_clauses": enforced,
+        "enforced_tolerance": float(enforced_tolerance),
+        "frozen_post_cast_tolerance": float(POST_CAST_TOLERANCE),
+        "artifacts_sufficient": sufficient,
+        "verdict": (
+            "ARTIFACTS_SUFFICIENT_AND_CLEAN"
+            if sufficient
+            else "ARTIFACTS_INSUFFICIENT_REPLICATION_REQUIRED"
+        ),
+        "required_replication": (
+            None
+            if sufficient
+            else {
+                "why": (
+                    "the enforced coordinate and residual gates read the "
+                    "float64 pre-cast solve error, which is exact by "
+                    "construction and says nothing about what the bf16 "
+                    "residual stream received. The post-cast quantities were "
+                    "computed but never persisted by the trial function, so "
+                    "no stored artifact can settle this"
+                ),
+                "smallest_sufficient_design": (
+                    "replay the identical recruited photographs, modalities, "
+                    "bases, band, positions and endpoint through the same "
+                    "trial path, twice: once with no realization policy to "
+                    "reproduce the stored top-1 token exactly and measure the "
+                    "post-cast error the confirmed run actually incurred, and "
+                    "once with the frozen policy to see whether a faithfully "
+                    "realized exchange preserves the recorded outcome"
+                ),
+                "reproduces_stored_outcome_required": True,
+                "writes_to_original_run": False,
+            }
+        ),
+        "reaffirms_original_result": False,
+        "invalidates_original_result": False,
+        "scientific_recompute": 0,
+        "original_report_modified": False,
+        "boundary": (
+            "A code-path and artifact-content audit. It reports what the "
+            "completed confirmation measured and stored, and whether that is "
+            "enough to decide the realization question. It does not decide "
+            "the scientific question in either direction."
+        ),
+    }
+    return {**payload, "audit_checksum": payload_checksum(payload)}
+
+
+def legacy_confirmation_replication_verdict(
+    rows: Sequence[Mapping],
+    *,
+    original_report_checksum: str,
+    layers: Sequence[int] = VALIDATED_BAND,
+    tolerance: float = POST_CAST_TOLERANCE,
+    written_utc: str | None = None,
+) -> dict:
+    """Score the smallest exact replication of the confirmed leg-count result.
+
+    :func:`legacy_confirmation_realization_audit` establishes that no stored
+    artifact of ``FRESH_MULTIMODAL_CONFIRMATION_GO`` can say whether its
+    intervention was realized in the model's dtype -- the post-cast quantities
+    were computed and discarded. This scores the replication that can.
+
+    Each row is one photograph x modality x condition, replayed through the
+    identical trial path, and carries two arms:
+
+    ``uncorrected``
+        no realization policy, exactly as the completed run ran. Its job is to
+        reproduce the stored top-1 token and to *measure* the post-cast error
+        that run incurred. If it does not reproduce the stored token, the
+        replay is not the same measurement and nothing is concluded.
+    ``corrected``
+        the frozen policy applied. Its job is to say whether a faithfully
+        realized exchange preserves the recorded outcome.
+
+    Returns:
+        A payload whose ``verdict`` is one of
+
+        ``CONFIRMATION_REALIZATION_CLEAN``
+            The completed run's own post-cast error was already within
+            tolerance. The confirmed result stands unchanged and needed no
+            repair.
+        ``CONFIRMATION_REALIZATION_REPAIRED_AND_PRESERVED``
+            It was out of tolerance, the corrected instrument converges, and
+            every recorded outcome is unchanged. The confirmed claim survives
+            on a faithful instrument.
+        ``CONFIRMATION_REALIZATION_REPAIRED_AND_CHANGED``
+            The corrected instrument converges and some outcome differs. This
+            is reported, not resolved: it says the completed GO rests on an
+            instrument that has now been shown to matter, and it licenses a
+            fresh confirmation, not a retroactive relabelling.
+        ``CONFIRMATION_REALIZATION_INSTRUMENT_FAILURE``
+            The corrected instrument does not converge either, so the corrected
+            arm measures nothing.
+        ``CONFIRMATION_REPLICATION_FAILED``
+            The uncorrected arm did not reproduce the stored tokens, so this is
+            not a replay of the completed run and no comparison is licensed.
+
+    Nothing here rewrites, promotes, demotes or relabels the completed
+    confirmation report. ``original_report_modified`` is ``False`` and the
+    original verdict string is never restated as a new one.
+    """
+
+    if not str(original_report_checksum or ""):
+        raise MultimodalFollowupRefused(
+            "the replication must pin the confirmation report it replays"
+        )
+    arms = {"uncorrected": [], "corrected": []}
+    for row in rows:
+        arm = str(row.get("arm"))
+        if arm not in arms:
+            raise MultimodalFollowupRefused(
+                f"unknown replication arm {arm!r}; expected one of {sorted(arms)}"
+            )
+        arms[arm].append(dict(row))
+    if not arms["uncorrected"] or not arms["corrected"]:
+        raise MultimodalFollowupRefused(
+            "the replication needs both the uncorrected replay and the "
+            "corrected arm; one alone cannot separate the instrument from the "
+            "result"
+        )
+
+    def _worst(records, key):
+        values = [
+            float(record[key])
+            for record in records
+            if isinstance(record.get(key), (int, float))
+            and not isinstance(record.get(key), bool)
+        ]
+        return max(values) if values else None
+
+    def _layers_ok(records):
+        return bool(records) and all(
+            [int(layer) for layer in record.get("layers_patched") or []]
+            == [int(layer) for layer in layers]
+            and bool(record.get("all_prompt_positions_patched"))
+            for record in records
+        )
+
+    reproduced = [
+        bool(record.get("replayed_top_token_id") == record.get("stored_top_token_id"))
+        for record in arms["uncorrected"]
+    ]
+    path_identical = bool(reproduced) and all(reproduced)
+    original_error = _worst(
+        arms["uncorrected"], "max_post_cast_relative_coordinate_error"
+    )
+    original_drift = _worst(
+        arms["uncorrected"], "max_post_cast_relative_residual_drift"
+    )
+    corrected_error = _worst(
+        arms["corrected"], "max_post_cast_relative_coordinate_error"
+    )
+    corrected_drift = _worst(
+        arms["corrected"], "max_post_cast_relative_residual_drift"
+    )
+    corrected_converged = bool(arms["corrected"]) and all(
+        bool(record.get("all_model_dtype_realizations_converged"))
+        for record in arms["corrected"]
+    )
+    original_within_tolerance = (
+        original_error is not None
+        and original_drift is not None
+        and original_error <= float(tolerance)
+        and original_drift <= float(tolerance)
+    )
+    corrected_within_tolerance = (
+        corrected_error is not None
+        and corrected_drift is not None
+        and corrected_error <= float(tolerance)
+        and corrected_drift <= float(tolerance)
+    )
+    by_key = {
+        (
+            str(record.get("group_id")),
+            str(record.get("modality")),
+            str(record.get("condition")),
+        ): record
+        for record in arms["uncorrected"]
+    }
+    changed = []
+    for record in arms["corrected"]:
+        key = (
+            str(record.get("group_id")),
+            str(record.get("modality")),
+            str(record.get("condition")),
+        )
+        original = by_key.get(key)
+        if original is None:
+            raise MultimodalFollowupRefused(
+                f"the corrected arm has no uncorrected counterpart for {key}"
+            )
+        if bool(record.get("replayed_success")) != bool(
+            original.get("stored_success")
+        ):
+            changed.append(
+                {
+                    "group_id": key[0],
+                    "modality": key[1],
+                    "condition": key[2],
+                    "stored_success": bool(original.get("stored_success")),
+                    "corrected_success": bool(record.get("replayed_success")),
+                }
+            )
+    if not path_identical:
+        verdict = "CONFIRMATION_REPLICATION_FAILED"
+    elif original_within_tolerance:
+        verdict = "CONFIRMATION_REALIZATION_CLEAN"
+    elif not (corrected_converged and corrected_within_tolerance):
+        verdict = "CONFIRMATION_REALIZATION_INSTRUMENT_FAILURE"
+    elif changed:
+        verdict = "CONFIRMATION_REALIZATION_REPAIRED_AND_CHANGED"
+    else:
+        verdict = "CONFIRMATION_REALIZATION_REPAIRED_AND_PRESERVED"
+
+    payload = {
+        "schema": "jlens.mmpilot.multimodal_legacy_confirmation_replication.v1",
+        "version": LEGACY_CONFIRMATION_AUDIT_VERSION,
+        "written_utc": written_utc
+        or datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "original_report_checksum": str(original_report_checksum),
+        "original_report_modified": False,
+        "original_units_modified": False,
+        "original_verdict_relabelled": False,
+        "layers": [int(layer) for layer in layers],
+        "post_cast_relative_tolerance": float(tolerance),
+        "model_dtype_realization_policy": MODEL_DTYPE_REALIZATION.to_dict(),
+        "model_dtype_realization_policy_digest": realization_policy_digest(),
+        "n_uncorrected_rows": len(arms["uncorrected"]),
+        "n_corrected_rows": len(arms["corrected"]),
+        "uncorrected_reproduced_stored_tokens": path_identical,
+        "n_reproduced": sum(reproduced),
+        "layers_and_positions_match": {
+            "uncorrected": _layers_ok(arms["uncorrected"]),
+            "corrected": _layers_ok(arms["corrected"]),
+        },
+        "original_max_post_cast_relative_coordinate_error": original_error,
+        "original_max_post_cast_relative_residual_drift": original_drift,
+        "original_within_tolerance": original_within_tolerance,
+        "corrected_max_post_cast_relative_coordinate_error": corrected_error,
+        "corrected_max_post_cast_relative_residual_drift": corrected_drift,
+        "corrected_realizations_converged": corrected_converged,
+        "corrected_within_tolerance": corrected_within_tolerance,
+        "outcomes_changed_by_correction": changed,
+        "n_outcomes_changed": len(changed),
+        "verdict": verdict,
+        "claim_boundary": (
+            "A replication of the completed confirmation's intervention path, "
+            "run in its own directory. It measures what that run's bf16 "
+            "residual stream received and whether a faithfully realized "
+            "exchange preserves the recorded outcomes. It does not rewrite, "
+            "promote, demote or relabel the completed report, and a changed "
+            "outcome licenses a fresh confirmation rather than a retroactive "
+            "verdict."
+        ),
+    }
     return {**payload, "report_checksum": payload_checksum(payload)}
 
 
@@ -2784,6 +3712,35 @@ def stage_map() -> dict:
                 "label": "outcome-informed exploratory",
                 "fits": 0,
                 "confirms": False,
+                "superseded_by": "B1RC",
+                "superseded_reason": (
+                    "its generated conditions were run without the model-dtype "
+                    "realization policy and its verdict omitted the post-cast "
+                    "integrity clauses, so its recorded null is "
+                    "instrument-inconclusive"
+                ),
+            },
+            {
+                "stage": "B1A",
+                "name": "instrument amendment and confirmed-result code-path audit",
+                "population": "completed artifacts, read-only",
+                "label": "read-only amendment",
+                "fits": 0,
+                "new_model_forwards": 0,
+                "scientific_recompute": 0,
+                "confirms": False,
+            },
+            {
+                "stage": "B1RC",
+                "name": "corrected clean-capable recruited exploratory rerun",
+                "population": (
+                    "the same spent B0 media B1R used; nothing newly selected"
+                ),
+                "label": "outcome-informed exploratory",
+                "fits": 0,
+                "confirms": False,
+                "instrument_changes_only": True,
+                "adds_positive_control": "norm-matched direct answer",
             },
             {
                 "stage": "B2",
@@ -2822,6 +3779,10 @@ def stage_map() -> dict:
 
 
 __all__ = [
+    "CORRECTED_EXPLORATORY_VERSION",
+    "DIRECT_ANSWER_CONTROL_ROLE",
+    "INSTRUMENT_AMENDMENT_VERSION",
+    "LEGACY_CONFIRMATION_AUDIT_VERSION",
     "ANIMAL_SOUND_PROMPT_CANDIDATES",
     "AUDIO_LINKAGE_AUDIT_VERSION",
     "ASYMMETRY_VERSION",
@@ -2862,6 +3823,8 @@ __all__ = [
     "confirmation_verdict",
     "development_direction_record",
     "exclusion_universe",
+    "corrected_exploratory_verdict",
+    "direct_answer_trial_row",
     "failure_mode",
     "followup_budget",
     "freeze_new_property_design",
@@ -2875,6 +3838,9 @@ __all__ = [
     "localization_budget",
     "localization_claim_boundary",
     "localization_grid",
+    "instrument_defect_amendment",
+    "legacy_confirmation_realization_audit",
+    "legacy_confirmation_replication_verdict",
     "new_property_development_verdict",
     "property_prompt",
     "property_prompt_candidate",

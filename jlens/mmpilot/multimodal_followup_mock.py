@@ -49,6 +49,10 @@ from jlens.mmpilot.multimodal_followup import (
     new_property_development_verdict,
     summarize_localization,
 )
+from jlens.mmpilot.multimodal_instrument import (
+    MODEL_DTYPE_REALIZATION,
+    realization_policy_digest,
+)
 from jlens.mmpilot.store import RunFingerprint, UnitStore, payload_checksum, safe_key
 
 __all__ = [
@@ -146,8 +150,21 @@ def _trial_record(
         },
         "max_activation_norm_ratio": 1.05,
         "max_update_to_activation_norm_ratio": 0.20,
+        # The mock stands in for a *faithfully realized* intervention, so it
+        # emits the complete diagnostic shape the real trial path produces.
+        # Emitting a partial one made the verdict's integrity check look
+        # satisfied by rows that had never been measured.
         "max_orthogonal_residual_drift": 0.0,
         "max_coordinate_update_error": 0.0,
+        "all_hooks_fired": True,
+        "all_finite": True,
+        "all_layers_are_exact_alpha_one_exchange_before_cast": (
+            condition != "zero"
+        ),
+        "all_model_dtype_realizations_converged": True,
+        "post_cast_audit_passed": True,
+        "model_dtype_realization_policy": MODEL_DTYPE_REALIZATION.to_dict(),
+        "max_model_dtype_corrections_applied": 0,
         "teacher_forcing_used": False,
         "candidate_list_supplied": False,
         "generated_text": generated,
@@ -435,6 +452,12 @@ def _mock_stage(
         "lens_checksum": MOCK_LENS_CHECKSUM,
         "direction": list(direction),
         "scenario": scenario,
+        # The trial-record schema is part of what these units *are*: a unit
+        # written before the integrity clauses existed cannot be scored by a
+        # verdict that enforces them. Binding the policy digest sends a schema
+        # change to a new directory instead of resuming stale rows into a
+        # spurious NO_GO.
+        "realization_policy_digest": realization_policy_digest(),
     }
     store = _store(root, config=config, split_id=audit["audit_digest"])
     computed = 0

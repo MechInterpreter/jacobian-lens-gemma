@@ -1119,11 +1119,21 @@ def summarize_swap_diagnostics(
     """Compact the real hook audit without persisting activation-sized arrays."""
 
     by_layer = {}
+    # The policy the hooks actually ran under, lifted out of the per-position
+    # records so a saved trial states it rather than implying it. ``None`` here
+    # is itself the finding: it means no realization policy was passed and the
+    # exchange was cast to model dtype uncorrected.
+    realization_policy: dict | None = None
     for layer in sorted(map(int, stats)):
         row = dict(stats[layer])
         history = list(row.get("swap_history") or ())
         if not history and row.get("swap"):
             history = [dict(row["swap"])]
+        for record in history:
+            candidate = record.get("model_dtype_realization")
+            if isinstance(candidate, Mapping):
+                realization_policy = dict(candidate)
+                break
         update_ratios = []
         activation_ratios = []
         for record in history:
@@ -1230,6 +1240,12 @@ def summarize_swap_diagnostics(
         "all_model_dtype_realizations_converged": bool(layers)
         and all(row["all_model_dtype_realizations_converged"] for row in layers),
         "model_dtype_realization_version": MODEL_DTYPE_REALIZATION_VERSION,
+        "model_dtype_realization_policy": realization_policy,
+        "model_dtype_realization_policy_supplied": realization_policy is not None,
+        "max_model_dtype_corrections_applied": max(
+            (int(row["max_model_dtype_corrections_applied"]) for row in layers),
+            default=0,
+        ),
         "max_post_cast_relative_coordinate_error": max(
             relative_errors, default=None
         ),
@@ -1394,6 +1410,11 @@ def _norm_matched_direct_answer_band(
                             "model_dtype_corrections_applied": (
                                 len(correction_history) - 1
                             ),
+                            "model_dtype_realization": (
+                                None
+                                if realization_policy is None
+                                else realization_policy.to_dict()
+                            ),
                             "max_update_to_activation_ratio": float(
                                 (
                                     actual_norm
@@ -1415,11 +1436,39 @@ def _norm_matched_direct_answer_band(
         yield stats
 
 
-def summarize_direct_answer_diagnostics(stats: Mapping[int, Mapping]) -> dict:
+def summarize_direct_answer_diagnostics(
+    stats: Mapping[int, Mapping], *, expected_forward_passes: int | None = None
+) -> dict:
+    """Compact the direct-answer control's hook audit.
+
+    ``expected_forward_passes`` is how many greedy steps the generation
+    actually took. It was previously assumed to equal ``TEXT_MAX_NEW_TOKENS``,
+    which made ``all_hooks_fired`` false for every early-stopped completion and
+    for every caller running a different token budget -- the multimodal
+    animal-sound study runs six. The swap summariser takes the same argument
+    for the same reason; passing it is what lets the two arms be gated by one
+    integrity rule.
+    """
+    expected_passes = (
+        TEXT_MAX_NEW_TOKENS
+        if expected_forward_passes is None
+        else int(expected_forward_passes)
+    )
+    if expected_passes < 1:
+        raise WorkspaceReplicationRefused(
+            "direct-answer diagnostics require at least one completed "
+            "generation pass"
+        )
     by_layer = {}
+    realization_policy: dict | None = None
     for layer in sorted(map(int, stats)):
         row = dict(stats[layer])
         history = list(row.get("history") or ())
+        for record in history:
+            candidate = record.get("model_dtype_realization")
+            if isinstance(candidate, Mapping):
+                realization_policy = dict(candidate)
+                break
         by_layer[str(layer)] = {
             "n_forward_passes": int(row.get("n_forward_passes") or 0),
             "n_records": len(history),
@@ -1456,18 +1505,45 @@ def summarize_direct_answer_diagnostics(stats: Mapping[int, Mapping]) -> dict:
         "version": TEXT_DIAGNOSTIC_VERSION,
         "control": "direct_answer_norm_matched_to_exact_swap_per_position",
         "by_layer": by_layer,
+        "model_dtype_realization_version": MODEL_DTYPE_REALIZATION_VERSION,
+        "model_dtype_realization_policy": realization_policy,
+        "model_dtype_realization_policy_supplied": realization_policy is not None,
         "all_hooks_fired": bool(by_layer)
         and all(
-            row["n_forward_passes"] == TEXT_MAX_NEW_TOKENS
-            and row["n_records"] == TEXT_MAX_NEW_TOKENS
+            row["n_forward_passes"] == expected_passes
+            and row["n_records"] == expected_passes
             for row in by_layer.values()
         ),
+        "expected_forward_passes": expected_passes,
         "all_finite": bool(by_layer)
         and all(row["all_finite"] for row in by_layer.values()),
         "all_model_dtype_realizations_converged": bool(by_layer)
         and all(
             row["all_model_dtype_realizations_converged"]
             for row in by_layer.values()
+        ),
+        "max_relative_norm_match_error": max(
+            (
+                float(row["max_relative_norm_match_error"])
+                for row in by_layer.values()
+                if row["max_relative_norm_match_error"] is not None
+            ),
+            default=None,
+        ),
+        "max_update_to_activation_ratio": max(
+            (
+                float(row["max_update_to_activation_ratio"])
+                for row in by_layer.values()
+                if row["max_update_to_activation_ratio"] is not None
+            ),
+            default=None,
+        ),
+        "max_model_dtype_corrections_applied": max(
+            (
+                int(row["max_model_dtype_corrections_applied"])
+                for row in by_layer.values()
+            ),
+            default=0,
         ),
     }
     return {**payload, "diagnostic_checksum": payload_checksum(payload)}
@@ -1522,7 +1598,9 @@ def unrestricted_greedy_direct_answer_trial(
             str(layer): int(stats[layer].get("n_forward_passes") or 0)
             for layer in sorted(stats)
         },
-        "intervention_diagnostics": summarize_direct_answer_diagnostics(stats),
+        "intervention_diagnostics": summarize_direct_answer_diagnostics(
+            stats, expected_forward_passes=int(generated["n_forward_passes"])
+        ),
     }
 
 

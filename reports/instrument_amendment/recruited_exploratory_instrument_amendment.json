@@ -1,0 +1,45 @@
+{
+  "schema": "jlens.mmpilot.multimodal_instrument_amendment.v1",
+  "amendment_version": "mmpilot.multimodal_swap_instrument_amendment.v1",
+  "written_utc": "2026-08-24T00:00:00+00:00",
+  "original_report_path": "/content/drive/MyDrive/jacobian-lens-gemma/runs/mmnewpropertyrescue/mmnewpropertyrescue_real_6af6affcb145/recruited_new_property_exploratory_report.json",
+  "original_report_checksum": "sha256:467a2862cef70f0b59a75678c6a73c68259f4b29f715a97fbb831914710f660a",
+  "original_run_name": "mmnewpropertyrescue_real_6af6affcb145",
+  "original_verdict": "RECRUITED_NEW_PROPERTY_EXPLORATORY_NO_GO",
+  "original_verdict_is_reproduced_verbatim": true,
+  "defect": "the model-dtype realization policy was not passed into the generated swap conditions, and the verdict's integrity check omitted the clauses below, so a post-cast coordinate error far outside the frozen tolerance was reported as integrity_pass=true",
+  "omitted_integrity_clauses": [
+    "all_hooks_fired",
+    "all_finite",
+    "alpha_one_exact_exchange_before_cast",
+    "model_dtype_realization_converged",
+    "post_cast_coordinate_error_within_tolerance",
+    "post_cast_residual_drift_within_tolerance"
+  ],
+  "post_cast_relative_tolerance": 0.02,
+  "observed_post_cast_relative_errors": {
+    "exact": 0.21,
+    "random": 0.1,
+    "unrelated": 0.29,
+    "zero": 0.0
+  },
+  "realization_policy_that_should_have_been_used": {
+    "version": "jlens.mmpilot.coordinate_swap.model_dtype_realization.v1",
+    "max_corrections": 8,
+    "relative_coordinate_tolerance": 0.02,
+    "relative_residual_tolerance": 0.02,
+    "minimum_scale": 1.0
+  },
+  "corrected_classification": "INSTRUMENT_INCONCLUSIVE",
+  "original_outputs_are_retained_as_historical_evidence": true,
+  "original_null_is_readable_as_a_scientific_null": false,
+  "corrected_stage": "5B1RC",
+  "scientific_recompute": 0,
+  "scientific_numbers_unchanged": true,
+  "original_report_modified": false,
+  "original_units_modified": false,
+  "original_run_modified": false,
+  "verdict_changed_by_prose": false,
+  "boundary": "This amendment records that the completed run's intervention was not realized within tolerance and that its verdict never checked. It re-measures nothing, promotes nothing and demotes nothing numerically; it withdraws only the licence to read the recorded null as a null.",
+  "amendment_checksum": "sha256:a984649b1d44c0b145aa4e012d94a1ecb001788e1e4d465b9ed880c6fb653d01"
+}
