@@ -253,7 +253,13 @@ FRESH_CONFIRMATION_IMAGES_RECRUITED = 16
 # session. Unlike the pinned loaders above, these paths are NOT
 # checksum-verified — they can only widen exclusion, never substitute for a
 # checksum-pinned population loader. See EXTRA_SPENT_REPORT_PATHS below.
-EXTRA_SPENT_REPORT_PATHS = ()
+EXTRA_SPENT_REPORT_PATHS = (
+    # The withdrawn body_covering attempt. It opened 144 photographs during
+    # clean capability screening, so all 144 are spent and must not reappear
+    # in the animal_sound population.
+    "/content/drive/MyDrive/jacobian-lens-gemma/runs/mmnewproperty/"
+    "mmnewpropertydev_real_baad443fdc39/new_property_audit_report.json",
+)
 
 # Experiment A. The band grid and its analysis rule live in
 # jlens.mmpilot.multimodal_followup.localization_grid() and are frozen there
@@ -262,25 +268,40 @@ EXTRA_SPENT_REPORT_PATHS = ()
 LOCALIZATION_DIRECTION = ("bird", "cat")
 LOCALIZATION_ALPHA = 1.0
 
-# Experiment B. 'body_covering' is the audited first choice: it is not
-# derivable from leg count, it keeps 'bird' available, and its answers are
-# ordinary one-word nouns. 'animal_sound' is the declared fallback; it refuses
-# 'bird' outright because COCO birds have no single conventional sound.
-# Concepts whose covering is contested (horse, cow, zebra, giraffe, elephant)
-# are refused by the audit and cannot be selected here.
-NEW_PROPERTY_FAMILY = "body_covering"
-NEW_PROPERTY_FALLBACK_FAMILY = "animal_sound"
-NEW_PROPERTY_CONCEPTS = ("bird", "cat", "sheep")
+# Experiment B, second design. The first attempt used 'body_covering' and
+# returned PROPERTY_AUDIT_NO_GO on clean capability alone, before any causal
+# forward was spent. Reading its failures showed the real defect was not the
+# prompt: a covering is *visible in the photograph*, so the model can answer by
+# describing pixels ("black", "spotted", "stripes", "patches") instead of
+# consulting the animal's identity. That gives it a route around the very
+# variable the intervention edits, and would have made an image-route null
+# uninterpretable. 'body_covering' is now disqualified in code.
+#
+# 'animal_sound' replaces it for the opposite reason: a still photograph
+# carries no sound, so every route must go through identity to answer — the
+# same structure that makes leg count work.
+#
+# 'bird' is screened rather than assumed. Selection admits a group only when
+# its caption contains the literal word "bird" (measured: 28 of 39 bird-ish
+# captions naming a species are filtered out), so text and spoken audio see a
+# generic bird while only the image route shows a species. Whether one sound
+# answer is stable in all three routes is decided by DOMINANT_ANSWER_RULE,
+# fixed before the data is opened, and bird is refused if it is not.
+NEW_PROPERTY_FAMILY = "animal_sound"
+NEW_PROPERTY_FALLBACK_FAMILY = None
+NEW_PROPERTY_CONCEPTS = ("bird", "cat", "cow", "dog")
 NEW_PROPERTY_DEV_DIRECTIONS = (
+    ("cat", "cow"), ("cow", "cat"),
+    ("cat", "dog"), ("dog", "cat"),
     ("bird", "cat"), ("cat", "bird"),
-    ("bird", "sheep"), ("sheep", "bird"),
-    ("cat", "sheep"), ("sheep", "cat"),
 )
 # Predeclared tie-break, fixed before any outcome: if development licenses
 # several directions, confirmation takes the first of these that passed.
+# bird->cat leads because it reuses the confirmed pair; the cow/dog pairs
+# follow because both of their concepts are species-homogeneous.
 NEW_PROPERTY_DIRECTION_PRIORITY = (
-    "bird->cat", "bird->sheep", "cat->sheep",
-    "sheep->cat", "sheep->bird", "cat->bird",
+    "bird->cat", "cat->cow", "cat->dog",
+    "cow->cat", "dog->cat", "cat->bird",
 )
 NEW_PROPERTY_MAX_NEW_TOKENS = 6
 NEW_PROPERTY_DEV_CANDIDATES_PER_CONCEPT = 48
@@ -288,13 +309,13 @@ NEW_PROPERTY_DEV_IMAGES_PER_DIRECTION = 8
 NEW_PROPERTY_DEV_MIN_SUCCESS_RATE = 0.50
 NEW_PROPERTY_DEV_MIN_CONTROL_MARGIN = 0.25
 NEW_PROPERTY_MIN_CLEAN_CAPABILITY_RATE = 0.75
-NEW_PROPERTY_DEV_SEED = "multimodal-new-property-development-20260823-v1"
+NEW_PROPERTY_DEV_SEED = "multimodal-new-property-sound-development-20260824-v1"
 NEW_PROPERTY_CONFIRM_CANDIDATES = 64
 NEW_PROPERTY_CONFIRM_IMAGES = 16
 NEW_PROPERTY_CONFIRM_MIN_SUCCESS_RATE = 0.75
 NEW_PROPERTY_CONFIRM_MIN_CONTROL_MARGIN = 0.25
 NEW_PROPERTY_CONFIRM_FAMILYWISE_ALPHA = 0.05
-NEW_PROPERTY_CONFIRM_SEED = "multimodal-new-property-confirmation-20260823-v1"
+NEW_PROPERTY_CONFIRM_SEED = "multimodal-new-property-sound-confirmation-20260824-v1"
 # Written by Stage 5B2 and read by Stage 5B3. Stage 5B3 refuses to open a
 # fresh photograph until this file exists and verifies.
 NEW_PROPERTY_FROZEN_DESIGN_PATH = None
@@ -588,8 +609,8 @@ NEW_PROPERTY_DEV_BUDGET = followup_budget(
     n_directions=len(NEW_PROPERTY_DEV_DIRECTIONS),
 )
 print("STAGE 5B0/5B1 NEW-PROPERTY AUDIT + DEVELOPMENT BUDGET")
-print("  property family           ", NEW_PROPERTY_FAMILY, "(fallback",
-      NEW_PROPERTY_FALLBACK_FAMILY + ")")
+print("  property family           ", NEW_PROPERTY_FAMILY,
+      f"(fallback {NEW_PROPERTY_FALLBACK_FAMILY})")
 print("  endpoint                  unrestricted complete generation,",
       NEW_PROPERTY_MAX_NEW_TOKENS, "tokens")
 print("  directions                ", [f"{a}->{b}" for a, b in NEW_PROPERTY_DEV_DIRECTIONS])
@@ -3270,6 +3291,19 @@ if REAL_MODE and (PROPERTY_AUDIT_ENABLED or NEW_PROPERTY_DEV_ENABLED):
         }
         for concept in NEW_PROPERTY_CONCEPTS
     }
+    # Raw completions per concept per modality, so DOMINANT_ANSWER_RULE can
+    # resolve any concept whose answer is empirical rather than declared.
+    # The rule was fixed in code before these were read.
+    _completions_by_concept = {
+        concept: {
+            modality: [
+                row["generated"] for row in _capability_rows
+                if row["concept"] == concept and row["modality"] == modality
+            ]
+            for modality in ("text", "image", "spoken_audio")
+        }
+        for concept in NEW_PROPERTY_CONCEPTS
+    }
     PROPERTY_AUDIT_REPORT = audit_property_family(
         NEW_PROPERTY_FAMILY,
         available_media={
@@ -3278,6 +3312,7 @@ if REAL_MODE and (PROPERTY_AUDIT_ENABLED or NEW_PROPERTY_DEV_ENABLED):
         min_media_per_concept=NEW_PROPERTY_DEV_CANDIDATES_PER_CONCEPT,
         clean_capability=_capability_by_concept,
         min_clean_capability_rate=NEW_PROPERTY_MIN_CLEAN_CAPABILITY_RATE,
+        observed_completions=_completions_by_concept,
     )
     PROPERTY_AUDIT_REPORT = {
         **PROPERTY_AUDIT_REPORT,
@@ -3298,6 +3333,15 @@ if REAL_MODE and (PROPERTY_AUDIT_ENABLED or NEW_PROPERTY_DEV_ENABLED):
           [row["concept"] for row in PROPERTY_AUDIT_REPORT["refused_concepts"]])
     print("usable after data   ", PROPERTY_AUDIT_REPORT["usable_concepts"])
     print("clean capability    ", _capability_by_concept)
+    print("perceptually avail. ", PROPERTY_AUDIT_REPORT["perceptually_available"],
+          "| family disqualified", PROPERTY_AUDIT_REPORT["family_disqualified"])
+    for _row in PROPERTY_AUDIT_REPORT["concepts"]:
+        _res = _row.get("empirical_resolution")
+        if _res:
+            print(f"  empirical answer for {_row['concept']}:",
+                  "RESOLVED ->" + str(_res.get("answer")) if _res.get("resolved")
+                  else "UNRESOLVED (" + str(_res.get("reason")) + ")")
+            print("    counts by modality", _res.get("counts_by_modality"))
     print("candidate directions",
           [row["direction"] for row in PROPERTY_AUDIT_REPORT["candidate_directions"]])
     print("audit report", _audit_path)
@@ -4106,7 +4150,16 @@ if not REAL_MODE:
         run_mock_new_property_study,
     )
 
-    MOCK_ROOT = RUNS_ROOT / "followup_mock"
+    # Keyed by the mock configuration so that changing the property family or
+    # direction lands in a new directory instead of colliding with a stale one
+    # and tripping the resume gate.
+    _mock_key = payload_checksum({
+        "family": NEW_PROPERTY_FAMILY,
+        "concepts": list(NEW_PROPERTY_CONCEPTS),
+        "directions": [list(pair) for pair in NEW_PROPERTY_DEV_DIRECTIONS],
+        "scenarios": list(SCENARIOS),
+    }).split(":")[1][:12]
+    MOCK_ROOT = RUNS_ROOT / "followup_mock" / _mock_key
     MOCK_LOCALIZATION = run_mock_localization(MOCK_ROOT / "localization", n_photographs=2)
     print("MOCK localization verdict     ", MOCK_LOCALIZATION["verdict"])
     print("  label / confirmation        ", MOCK_LOCALIZATION["label"],

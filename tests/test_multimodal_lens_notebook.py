@@ -168,8 +168,10 @@ def test_notebook_contains_the_followup_stage_contract() -> None:
         "artifact_exclusion_audit",
         "generation_trial_row",
         "unrestricted_greedy_swap_trial",
-        "NEW_PROPERTY_FAMILY = \"body_covering\"",
-        "NEW_PROPERTY_FALLBACK_FAMILY = \"animal_sound\"",
+        "NEW_PROPERTY_FAMILY = \"animal_sound\"",
+        "DOMINANT_ANSWER_RULE",
+        "observed_completions=_completions_by_concept",
+        "perceptually_available",
         "NEW_PROPERTY_DIRECTION_PRIORITY",
         "stage_map",
         "followup_budget",
@@ -251,3 +253,13 @@ def test_mock_notebook_exercises_every_followup_outcome(tmp_path: Path, monkeypa
         namespace["MOCK_LOCALIZATION"]["claim_boundary"]["onset_layer_claimed"] is False
     )
     assert namespace["MOCK_ASYMMETRY"]["cause_of_asymmetry_identified"] is False
+
+
+def test_notebook_records_why_body_covering_was_withdrawn() -> None:
+    source = _source()
+    assert "visible in the photograph" in source
+    assert "body_covering" in source
+    assert "DOMINANT_ANSWER_RULE" in source
+    # the spent first attempt is wired into the exclusion universe
+    assert "mmnewpropertydev_real_baad443fdc39" in source
+    assert "EXTRA_SPENT_REPORT_PATHS = (" in source

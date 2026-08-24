@@ -695,6 +695,12 @@ class PropertyAnswer:
     aliases: tuple[str, ...]
     admissible: bool
     reason: str
+    #: When True the answer is not declared here. It is resolved from the clean
+    #: capability screen by :data:`DOMINANT_ANSWER_RULE`, a rule fixed before
+    #: any data is opened. Used where the concept's *correct* answer varies
+    #: across subtypes the model may see, but its *stable* answer is the thing
+    #: the causal test actually needs.
+    empirical_answer_required: bool = False
 
     def to_dict(self) -> dict:
         payload = asdict(self)
@@ -711,9 +717,24 @@ class PropertyFamily:
     question: str
     answers: tuple[PropertyAnswer, ...]
     rationale: str
+    #: Whether the property can be answered by looking at the photograph
+    #: instead of by consulting the animal's identity. This is the criterion
+    #: the first audit was missing. A perceptually available property gives the
+    #: model a route around the variable the intervention edits, so a null in
+    #: the image modality cannot be told apart from a perceptual override and
+    #: the causal test is not interpretable.
+    perceptually_available: bool
+    perceptual_rationale: str
     max_new_tokens: int = 6
     caption_prefix: str = "Caption: {caption}\n"
     notes: tuple[str, ...] = field(default_factory=tuple)
+    disqualified_reason: str = ""
+
+    @property
+    def disqualified(self) -> bool:
+        """Perceptually available properties cannot carry a causal claim here."""
+
+        return bool(self.perceptually_available or self.disqualified_reason)
 
     def prompt(self, modality: str, caption: str) -> str:
         """The frozen prompt. Text carries the caption; image/audio do not."""
@@ -733,6 +754,116 @@ class PropertyFamily:
         )
 
 
+#: The rule that fixes an empirical answer, committed before any completion is
+#: read. It names a decision procedure, not an answer, so applying it to data
+#: later is not a post-hoc choice.
+DOMINANT_ANSWER_RULE = {
+    "version": PROPERTY_AUDIT_VERSION,
+    "rule": (
+        "the concept's answer is the single most frequent normalized final "
+        "lexical item across the clean capability screen, pooled over "
+        "modalities; the concept is admissible only if that same item is also "
+        "the most frequent in every individual modality and reaches the "
+        "capability threshold in every individual modality"
+    ),
+    "ties_refused": True,
+    "declared_before_data": True,
+    "standard": (
+        "stability, not taxonomic correctness: the causal test asks whether an "
+        "identity edit changes the model's identity-conditioned answer, so the "
+        "source answer must be reliably produced, not externally right"
+    ),
+}
+
+
+def answer_key(generated: str) -> str:
+    """The normalized final lexical item of a completion, or ''.
+
+    The same surface reduction the scorer uses, exposed so the dominant-answer
+    rule and the matcher can never drift apart.
+    """
+
+    import re
+
+    from jlens.mmpilot.full_vocabulary import normalize_generated_text
+    from jlens.mmpilot.workspace_replication import (
+        _CONTROL_TOKEN_WORDS,
+        _before_first_control_token,
+    )
+
+    words = re.findall(
+        r"\w+",
+        normalize_generated_text(_before_first_control_token(str(generated))),
+        flags=re.UNICODE,
+    )
+    while len(words) > 1 and words[-1] in _CONTROL_TOKEN_WORDS:
+        words.pop()
+    return words[-1] if words else ""
+
+
+def resolve_dominant_answer(
+    completions_by_modality: Mapping[str, Sequence[str]],
+    *,
+    threshold: float,
+    modalities: Sequence[str] = MODALITIES,
+) -> dict:
+    """Apply :data:`DOMINANT_ANSWER_RULE` to one concept's clean completions."""
+
+    from collections import Counter
+
+    per_modality: dict[str, Counter] = {}
+    pooled: Counter = Counter()
+    for modality in modalities:
+        keys = [answer_key(value) for value in completions_by_modality.get(modality, ())]
+        keys = [key for key in keys if key]
+        per_modality[modality] = Counter(keys)
+        pooled.update(keys)
+
+    result = {
+        "rule": dict(DOMINANT_ANSWER_RULE),
+        "threshold": float(threshold),
+        "pooled_counts": dict(pooled.most_common(8)),
+        "counts_by_modality": {
+            modality: dict(counter.most_common(5))
+            for modality, counter in per_modality.items()
+        },
+    }
+    if not pooled:
+        return {**result, "resolved": False, "reason": "no completions"}
+    ranked = pooled.most_common()
+    if len(ranked) > 1 and ranked[0][1] == ranked[1][1]:
+        return {**result, "resolved": False, "reason": "pooled tie between top answers"}
+    answer = ranked[0][0]
+
+    rates = {}
+    for modality in modalities:
+        counter = per_modality[modality]
+        total = sum(counter.values())
+        rates[modality] = (counter.get(answer, 0) / total) if total else 0.0
+        if total and counter.most_common(1)[0][0] != answer:
+            return {
+                **result,
+                "resolved": False,
+                "answer_candidate": answer,
+                "rates_by_modality": rates,
+                "reason": f"a different answer dominates in {modality}",
+            }
+    if any(rate < float(threshold) for rate in rates.values()):
+        return {
+            **result,
+            "resolved": False,
+            "answer_candidate": answer,
+            "rates_by_modality": rates,
+            "reason": "the dominant answer is below threshold in some modality",
+        }
+    return {
+        **result,
+        "resolved": True,
+        "answer": answer,
+        "rates_by_modality": rates,
+    }
+
+
 _BODY_COVERING = PropertyFamily(
     name="body_covering",
     question=(
@@ -743,7 +874,23 @@ _BODY_COVERING = PropertyFamily(
         "Body covering is not derivable from leg count, is a property every "
         "COCO animal has, and has a short common-noun answer that an "
         "instruction model produces unprompted. It keeps 'bird' available, "
-        "which links the new property to the confirmed phenomenon."
+        "which links the new property to the confirmed phenomenon. It was "
+        "tried first and is now disqualified; see perceptual_rationale."
+    ),
+    perceptually_available=True,
+    perceptual_rationale=(
+        "The covering is visible in the photograph, so the model can answer by "
+        "describing pixels instead of consulting identity. Measured: the image "
+        "route scored 0.729/0.667/0.625 for bird/cat/sheep against 0.77-0.94 "
+        "for text and spoken audio, and its failures were appearance words "
+        "(black, spotted, stripes, iridescent, patches) rather than wrong "
+        "coverings. A swap null in the image route could therefore mean the "
+        "identity variable does not feed the answer, or that visual evidence "
+        "overrode it, and this design cannot separate those."
+    ),
+    disqualified_reason=(
+        "perceptually available: the causal test would not be interpretable in "
+        "the image modality"
     ),
     answers=(
         PropertyAnswer(
@@ -805,10 +952,17 @@ _ANIMAL_SOUND = PropertyFamily(
         "Answer with one word.\nAnswer:"
     ),
     rationale=(
-        "Animal sound is independent of both leg count and body covering and "
-        "has conventional one-word answers for a few species. It is admissible "
-        "for far fewer concepts than body covering, which is why it is the "
-        "second candidate rather than the first."
+        "Animal sound cannot be read off a still photograph, so every route "
+        "must go through the animal's identity to answer it. That is the same "
+        "structure that makes leg count work, and it is why this is now the "
+        "primary candidate rather than the fallback."
+    ),
+    perceptually_available=False,
+    perceptual_rationale=(
+        "A still image carries no sound, so the answer cannot be obtained by "
+        "describing the picture. The model must identify the animal and then "
+        "recall its call, which is the identity-mediated path the intervention "
+        "edits."
     ),
     answers=(
         PropertyAnswer(
@@ -828,10 +982,17 @@ _ANIMAL_SOUND = PropertyFamily(
             "'baa' is the imitation and 'bleat' the verb for the same sound",
         ),
         PropertyAnswer(
-            "bird", "", (), False,
-            "COCO 'bird' spans gulls, ducks, pigeons and raptors, whose "
-            "conventional answers ('chirp', 'tweet', 'sing', 'caw', 'quack') "
-            "genuinely differ; there is no single correct surface form",
+            "bird", "", (), True,
+            "no single answer is taxonomically correct for COCO birds, which "
+            "span gulls, ducks, pigeons and raptors. But the causal test needs "
+            "a stable identity-conditioned answer, not a correct one, and the "
+            "selection rule admits a group only when its caption contains the "
+            "literal word 'bird', so the text and spoken-audio routes see a "
+            "generic bird while only the image route shows a species. Whether "
+            "one answer is stable in all three routes is therefore an "
+            "empirical question, resolved by DOMINANT_ANSWER_RULE and refused "
+            "if no single answer dominates in every modality",
+            empirical_answer_required=True,
         ),
         PropertyAnswer(
             "horse", "", (), False,
@@ -900,26 +1061,58 @@ def audit_property_family(
     min_media_per_concept: int = 0,
     clean_capability: Mapping[str, Mapping[str, float]] | None = None,
     min_clean_capability_rate: float = 0.75,
+    observed_completions: Mapping[str, Mapping[str, Sequence[str]]] | None = None,
+    allow_perceptually_available: bool = False,
 ) -> dict:
     """Decide which concepts and directions this property may legitimately use.
 
-    Three filters, in order, all of which must be recorded:
+    Four filters, in order, all of which are recorded:
 
+    0. **Perceptual availability** — a property the model can answer by looking
+       at the photograph gives it a route around the variable the intervention
+       edits, so a null in the image modality is uninterpretable. Such a family
+       is disqualified outright. This is the filter the first audit lacked, and
+       its absence is why ``body_covering`` was tried and had to be withdrawn.
     1. **Semantic admissibility** — declared in :data:`PROPERTY_FAMILIES`; a
-       concept whose correct surface answer is contested is refused outright.
+       concept whose correct surface answer is contested is refused, unless it
+       is marked ``empirical_answer_required``, in which case its answer is
+       resolved from ``observed_completions`` by :data:`DOMINANT_ANSWER_RULE`.
     2. **Media availability** — ``available_media[concept]`` fresh photograph
        groups must reach ``min_media_per_concept``.
     3. **Clean capability** — the untouched model must answer the property
        question in *every* modality at ``min_clean_capability_rate``.
 
-    A direction survives only if both endpoints survive all three and the two
+    A direction survives only if both endpoints survive all four and the two
     answers differ, which is the filter leg count could not provide.
     """
 
     spec = PROPERTY_FAMILIES[family] if isinstance(family, str) else family
+    disqualified = bool(spec.disqualified) and not allow_perceptually_available
     rows: list[dict] = []
     for answer in spec.answers:
         record = answer.to_dict()
+        record["empirical_resolution"] = None
+        if answer.empirical_answer_required:
+            resolution = (
+                resolve_dominant_answer(
+                    (observed_completions or {}).get(answer.concept, {}),
+                    threshold=float(min_clean_capability_rate),
+                )
+                if observed_completions is not None
+                else {"resolved": False, "reason": "no completions supplied yet"}
+            )
+            record["empirical_resolution"] = resolution
+            if resolution.get("resolved"):
+                record["answer"] = str(resolution["answer"])
+                record["aliases"] = [str(resolution["answer"])]
+                record["alias_set_size"] = 1
+                record["admissible"] = True
+            else:
+                record["admissible"] = False
+                record["reason"] = (
+                    f"{record['reason']}; the rule did not resolve a stable "
+                    f"answer ({resolution.get('reason')})"
+                )
         media = int((available_media or {}).get(answer.concept, 0))
         capability = dict((clean_capability or {}).get(answer.concept, {}))
         record["available_media"] = media
@@ -936,7 +1129,8 @@ def audit_property_family(
             else None
         )
         record["usable"] = bool(
-            answer.admissible
+            record["admissible"]
+            and not disqualified
             and (record["media_sufficient"] is not False)
             and (record["capability_by_modality_sufficient"] is not False)
         )
@@ -962,6 +1156,11 @@ def audit_property_family(
     payload = {
         "version": PROPERTY_AUDIT_VERSION,
         "family": spec.name,
+        "perceptually_available": bool(spec.perceptually_available),
+        "perceptual_rationale": spec.perceptual_rationale,
+        "family_disqualified": disqualified,
+        "family_disqualified_reason": spec.disqualified_reason,
+        "dominant_answer_rule": dict(DOMINANT_ANSWER_RULE),
         "question": spec.question,
         "prompt_by_modality": {
             modality: spec.prompt(modality, "{caption}") for modality in MODALITIES
@@ -996,7 +1195,11 @@ def audit_property_family(
         ),
     }
     payload["verdict"] = (
-        "PROPERTY_AUDIT_GO" if directions else "PROPERTY_AUDIT_NO_GO"
+        "PROPERTY_AUDIT_PERCEPTUALLY_AVAILABLE_NO_GO"
+        if disqualified
+        else "PROPERTY_AUDIT_GO"
+        if directions
+        else "PROPERTY_AUDIT_NO_GO"
     )
     return {**payload, "audit_digest": payload_checksum(payload)}
 
@@ -1009,6 +1212,10 @@ def assert_property_pair_changes_answer(
     spec = PROPERTY_FAMILIES[family] if isinstance(family, str) else family
     source_answer = spec.answer_for(source)
     target_answer = spec.answer_for(target)
+    if spec.disqualified:
+        raise MultimodalFollowupRefused(
+            f"{spec.name}: {spec.disqualified_reason}"
+        )
     for answer in (source_answer, target_answer):
         if not answer.admissible:
             raise MultimodalFollowupRefused(
@@ -2010,6 +2217,8 @@ __all__ = [
     "assert_design_frozen",
     "assert_lens_reused_not_refitted",
     "assert_open_endpoint",
+    "DOMINANT_ANSWER_RULE",
+    "answer_key",
     "assert_property_pair_changes_answer",
     "asymmetry_replication_design",
     "asymmetry_replication_verdict",
@@ -2031,6 +2240,7 @@ __all__ = [
     "localization_claim_boundary",
     "localization_grid",
     "new_property_development_verdict",
+    "resolve_dominant_answer",
     "stage_map",
     "summarize_localization",
 ]
