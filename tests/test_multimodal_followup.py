@@ -22,6 +22,7 @@ from jlens.mmpilot.multimodal_followup import (
     assert_open_endpoint,
     assert_property_pair_changes_answer,
     asymmetry_replication_design,
+    audio_metadata_linkage_audit,
     audit_property_family,
     bands_are_nested_chain,
     development_direction_record,
@@ -35,6 +36,8 @@ from jlens.mmpilot.multimodal_followup import (
     localization_grid,
     new_property_development_verdict,
     property_answer_matches,
+    recruit_all_modality_capable_groups,
+    recruited_exploratory_verdict,
     resolve_dominant_answer,
     summarize_localization,
 )
@@ -48,6 +51,85 @@ from jlens.mmpilot.multimodal_followup_mock import (
     run_mock_new_property_study,
 )
 from jlens.mmpilot.store import IncompatibleStateError, RunFingerprint, UnitStore
+
+
+def test_audio_metadata_linkage_audit_is_honest_about_its_boundary(tmp_path) -> None:
+    audio = tmp_path / "cow.wav"
+    source = tmp_path / "metadata.json"
+    audio.write_bytes(b"RIFF")
+    source.write_text("{}", encoding="utf-8")
+    groups = [{
+        "group_id": "g-cow", "image_id": "img-cow", "caption": "a cow",
+        "audio_path": str(audio), "audio_record_id": "cow",
+        "caption_id": "cap-cow", "source_file": str(source),
+        "source_metadata_checksum": "sha256:abc",
+        "synchronization_method": "explicit_metadata_fields",
+        "media_validation_status": "valid",
+    }]
+    rows = [{
+        "concept": "cow", "group_id": "g-cow", "image_id": "img-cow",
+        "modality": "spoken_audio", "generated": "meow", "pass": False,
+    }]
+    audit = audio_metadata_linkage_audit(groups, rows)
+    assert audit["verdict"] == "AUDIO_METADATA_LINKAGE_GO"
+    assert audit["metadata_linkage_verified"] is True
+    assert audit["waveform_content_independently_transcribed"] is False
+    assert audit["model_forwards"] == 0
+
+
+def test_audio_metadata_linkage_audit_refuses_conflicting_owner(tmp_path) -> None:
+    audio = tmp_path / "shared.wav"
+    source = tmp_path / "metadata.json"
+    audio.write_bytes(b"RIFF")
+    source.write_text("{}", encoding="utf-8")
+    common = {
+        "audio_path": str(audio), "audio_record_id": "shared",
+        "caption_id": "cap", "source_file": str(source),
+        "source_metadata_checksum": "sha256:abc",
+        "synchronization_method": "explicit_metadata_fields",
+        "media_validation_status": "valid",
+    }
+    groups = [
+        {**common, "group_id": "g1", "image_id": "i1", "caption": "a cow"},
+        {**common, "group_id": "g2", "image_id": "i2", "caption": "another cow"},
+    ]
+    rows = [{
+        "concept": "cow", "group_id": "g1", "image_id": "i1",
+        "modality": "spoken_audio", "generated": "meow", "pass": False,
+    }]
+    assert audio_metadata_linkage_audit(groups, rows)["verdict"] == (
+        "AUDIO_METADATA_LINKAGE_NO_GO"
+    )
+
+
+def test_recruited_exploratory_path_is_clean_capability_only() -> None:
+    groups = [
+        {"group_id": f"g-{concept}-{i}", "image_id": f"i-{concept}-{i}"}
+        for concept in ("cat", "cow") for i in range(3)
+    ]
+    rows = [
+        {"concept": concept, "group_id": f"g-{concept}-{i}",
+         "image_id": f"i-{concept}-{i}", "modality": modality, "pass": i < 2}
+        for concept in ("cat", "cow") for i in range(3) for modality in MODALITIES
+    ]
+    recruitment = recruit_all_modality_capable_groups(
+        groups, rows, concepts=("cat", "cow"), n_per_concept=2
+    )
+    assert recruitment["complete"] is True
+    assert recruitment["eligible_counts"] == {"cat": 2, "cow": 2}
+    assert recruitment["causal_outcomes_used_for_selection"] is False
+
+    source = {"family": "animal_sound", "audit_digest": "sha256:source",
+              "verdict": "PROPERTY_AUDIT_NO_GO"}
+    linkage = {"verdict": "AUDIO_METADATA_LINKAGE_GO",
+               "audit_digest": "sha256:link"}
+    report = recruited_exploratory_verdict(
+        [], source_audit=source, linkage_audit=linkage,
+        recruitment=recruitment, layers=(16, 17)
+    )
+    assert report["verdict"] == "RECRUITED_NEW_PROPERTY_EXPLORATORY_NO_GO"
+    assert report["source_aggregate_verdict_unchanged"] is True
+    assert report["is_confirmation"] is False
 
 # ----------------------------------------------------- the corrected record
 

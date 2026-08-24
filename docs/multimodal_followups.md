@@ -163,6 +163,26 @@ thresholds, tests, Holm correction, recruitment rule and exclusion digest —
 before any confirmation photograph is opened. **B3** refuses to run without it,
 recomputes the exclusion universe and refuses if it differs from the frozen one.
 
+### Post-audit clean-capability rescue
+
+The later identity-explicit rerun improved the clean capability cells but still
+returned `PROPERTY_AUDIT_NO_GO`: cow spoken audio scored 35/48 against the
+unchanged 36/48 requirement. That aggregate result remains unchanged.
+
+Stage **B01** performs a CPU-only metadata linkage audit on the failed cow-audio
+rows. It verifies that each row resolves uniquely to an explicitly synchronized
+SpokenCOCO group, that caption and recording identifiers are present, that the
+audio path has one owner, and that the local recording and source metadata files
+exist. It does not independently transcribe the waveform.
+
+If that audit passes, Stage **B1R** selects the first eight cat and cow groups
+that the untouched model answered correctly in text, image and spoken audio.
+Selection uses no intervention outcome. It then runs the exact alpha=1 pooled
+J-lens exchange over L16-L40 in both directions with zero, random and unrelated
+controls. Because this stage was designed after the aggregate audit failed, its
+result is exploratory. A GO can motivate a frozen fresh-population confirmation;
+it is not itself a property-generalization claim.
+
 ## Experiment C — prospective asymmetry replication
 
 The identical leg-count protocol run backwards on fresh cat media, under a

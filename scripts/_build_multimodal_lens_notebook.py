@@ -222,6 +222,8 @@ RUN_STAGE5A_BAND_LOCALIZATION = False
 RUN_STAGE5B00_PROPERTY_PROMPT_SCREEN = False
 RUN_STAGE5B0_PROPERTY_AUDIT = False
 RUN_STAGE5B1_NEW_PROPERTY_DEVELOPMENT = False
+RUN_STAGE5B01_AUDIO_LINKAGE_AUDIT = False
+RUN_STAGE5B1R_RECRUITED_EXPLORATORY = False
 RUN_STAGE5B2_FREEZE_NEW_PROPERTY_DESIGN = False
 RUN_STAGE5B3_NEW_PROPERTY_CONFIRMATION = False
 RUN_STAGE5C_ASYMMETRY_REPLICATION = False
@@ -230,6 +232,7 @@ RUN_ARTIFACT_EXCLUSION_AUDIT = False
 CONFIRM_LOCALIZATION_BUDGET = False
 CONFIRM_PROPERTY_PROMPT_SCREEN_BUDGET = False
 CONFIRM_NEW_PROPERTY_DEVELOPMENT_BUDGET = False
+CONFIRM_RECRUITED_EXPLORATORY_BUDGET = False
 CONFIRM_NEW_PROPERTY_CONFIRMATION_BUDGET = False
 CONFIRM_ASYMMETRY_BUDGET = False
 
@@ -266,6 +269,11 @@ EXTRA_SPENT_REPORT_PATHS = (
     # but every later capability or causal population must exclude all 192.
     "/content/drive/MyDrive/jacobian-lens-gemma/runs/mmnewproperty/"
     "mmnewpropertydev_real_bd1b87fe613b/new_property_audit_report.json",
+    # The identity-explicit cat/cow audit opened 48 new photographs per
+    # concept. Its aggregate verdict remains NO_GO, but all opened media are
+    # spent regardless of the recruited exploratory analysis below.
+    "/content/drive/MyDrive/jacobian-lens-gemma/runs/mmnewproperty/"
+    "mmnewpropertydev_real_6ee23e7e61ce/new_property_audit_report.json",
 )
 
 # Experiment A. The band grid and its analysis rule live in
@@ -312,6 +320,23 @@ EXPECTED_PROPERTY_PROMPT_SCREEN_SOURCE_FILE_SHA256 = (
 EXPECTED_PROPERTY_PROMPT_SCREEN_SOURCE_AUDIT_DIGEST = (
     "sha256:f0341821643aec918525617d50659ad04b35aecd9ace3bc9dcc08dde9a0c565c"
 )
+# The fresh identity-explicit capability audit. It remains a scientific
+# PROPERTY_AUDIT_NO_GO. Stages 5B01/5B1R read it by exact file-byte checksum;
+# they never rewrite or relabel it.
+RECRUITED_EXPLORATORY_SOURCE_RUN_DIR = (
+    "/content/drive/MyDrive/jacobian-lens-gemma/runs/mmnewproperty/"
+    "mmnewpropertydev_real_6ee23e7e61ce"
+)
+EXPECTED_RECRUITED_SOURCE_FILE_SHA256 = (
+    "sha256:490636eb864251541407407ea1109826212e35390281228b2cf8eb0936a986a4"
+)
+EXPECTED_RECRUITED_SOURCE_AUDIT_DIGEST = (
+    "sha256:52833e841ceb76fb96fa7425913c79fdd22c84eef4f66400a214240101e6ed1b"
+)
+RECRUITED_EXPLORATORY_CONCEPTS = ("cat", "cow")
+RECRUITED_EXPLORATORY_DIRECTIONS = (("cat", "cow"), ("cow", "cat"))
+RECRUITED_EXPLORATORY_IMAGES_PER_DIRECTION = 8
+RECRUITED_EXPLORATORY_SEED = "post-audit-clean-capable-rescue-20260824-v1"
 PROPERTY_PROMPT_SCREEN_CONCEPTS = ("cat", "cow")
 NEW_PROPERTY_CONCEPTS = ("bird", "cat", "cow", "dog")
 NEW_PROPERTY_DEV_DIRECTIONS = (
@@ -415,6 +440,7 @@ FOLLOWUP_STAGES = {
     "5B00_property_prompt_screen": RUN_STAGE5B00_PROPERTY_PROMPT_SCREEN,
     "5B0_property_audit": RUN_STAGE5B0_PROPERTY_AUDIT,
     "5B1_new_property_development": RUN_STAGE5B1_NEW_PROPERTY_DEVELOPMENT,
+    "5B1R_recruited_exploratory": RUN_STAGE5B1R_RECRUITED_EXPLORATORY,
     "5B2_freeze": RUN_STAGE5B2_FREEZE_NEW_PROPERTY_DESIGN,
     "5B3_new_property_confirmation": RUN_STAGE5B3_NEW_PROPERTY_CONFIRMATION,
     "5C_asymmetry_replication": RUN_STAGE5C_ASYMMETRY_REPLICATION,
@@ -442,6 +468,7 @@ MODEL_STAGE = any((
     RUN_STAGE5B00_PROPERTY_PROMPT_SCREEN,
     RUN_STAGE5B0_PROPERTY_AUDIT,
     RUN_STAGE5B1_NEW_PROPERTY_DEVELOPMENT,
+    RUN_STAGE5B1R_RECRUITED_EXPLORATORY,
     RUN_STAGE5B3_NEW_PROPERTY_CONFIRMATION,
     RUN_STAGE5C_ASYMMETRY_REPLICATION,
 ))
@@ -488,6 +515,11 @@ NEW_PROPERTY_DEV_ENABLED = bool(
     RUN_STAGE5B1_NEW_PROPERTY_DEVELOPMENT and MODEL_ENABLED
     and CONFIRM_NEW_PROPERTY_DEVELOPMENT_BUDGET
 )
+AUDIO_LINKAGE_AUDIT_ENABLED = bool(RUN_STAGE5B01_AUDIO_LINKAGE_AUDIT)
+RECRUITED_EXPLORATORY_ENABLED = bool(
+    RUN_STAGE5B1R_RECRUITED_EXPLORATORY and MODEL_ENABLED
+    and CONFIRM_RECRUITED_EXPLORATORY_BUDGET
+)
 NEW_PROPERTY_FREEZE_ENABLED = bool(RUN_STAGE5B2_FREEZE_NEW_PROPERTY_DESIGN)
 NEW_PROPERTY_CONFIRM_ENABLED = bool(
     RUN_STAGE5B3_NEW_PROPERTY_CONFIRMATION and MODEL_ENABLED
@@ -500,6 +532,7 @@ for _name, _requested, _enabled in (
     ("STAGE 5A LOCALIZATION", RUN_STAGE5A_BAND_LOCALIZATION, LOCALIZATION_ENABLED),
     ("STAGE 5B00 PROPERTY PROMPT SCREEN", RUN_STAGE5B00_PROPERTY_PROMPT_SCREEN, PROPERTY_PROMPT_SCREEN_ENABLED),
     ("STAGE 5B1 NEW-PROPERTY DEVELOPMENT", RUN_STAGE5B1_NEW_PROPERTY_DEVELOPMENT, NEW_PROPERTY_DEV_ENABLED),
+    ("STAGE 5B1R RECRUITED EXPLORATORY", RUN_STAGE5B1R_RECRUITED_EXPLORATORY, RECRUITED_EXPLORATORY_ENABLED),
     ("STAGE 5B3 NEW-PROPERTY CONFIRMATION", RUN_STAGE5B3_NEW_PROPERTY_CONFIRMATION, NEW_PROPERTY_CONFIRM_ENABLED),
     ("STAGE 5C ASYMMETRY REPLICATION", RUN_STAGE5C_ASYMMETRY_REPLICATION, ASYMMETRY_ENABLED),
 ):
@@ -676,6 +709,27 @@ print("  patched forwards          ", NEW_PROPERTY_DEV_BUDGET["patched_forwards"
 print("  TOTAL NEW MODEL FORWARDS  ", NEW_PROPERTY_DEV_BUDGET["total_forwards"])
 print("  lens fits / backward      ", NEW_PROPERTY_DEV_BUDGET["lens_fits"], "/",
       NEW_PROPERTY_DEV_BUDGET["backward_passes"])
+print()
+RECRUITED_EXPLORATORY_BUDGET = followup_budget(
+    stage="5B1R",
+    n_candidates=0,
+    n_recruited=RECRUITED_EXPLORATORY_IMAGES_PER_DIRECTION,
+    max_new_tokens=NEW_PROPERTY_MAX_NEW_TOKENS,
+    n_directions=len(RECRUITED_EXPLORATORY_DIRECTIONS),
+)
+print("STAGE 5B01/5B1R METADATA AUDIT + RECRUITED EXPLORATORY BUDGET")
+print("  metadata audit            CPU, 0 model forwards")
+print("  source capability rows    reused; no clean regeneration")
+print("  recruited photographs     ", RECRUITED_EXPLORATORY_IMAGES_PER_DIRECTION,
+      "per source concept")
+print("  generated conditions      ",
+      RECRUITED_EXPLORATORY_IMAGES_PER_DIRECTION
+      * len(RECRUITED_EXPLORATORY_DIRECTIONS) * 3 * 4)
+print("  maximum token forwards    ",
+      RECRUITED_EXPLORATORY_BUDGET["patched_forwards"])
+print("  lens fits / backward      0 / 0")
+print("  resume                    one checksum-valid condition JSON")
+print("  label                     outcome-informed exploratory; not confirmation")
 print()
 NEW_PROPERTY_CONFIRM_BUDGET = followup_budget(
     stage="5B3",
@@ -3880,6 +3934,320 @@ if REAL_MODE and (PROPERTY_AUDIT_ENABLED or NEW_PROPERTY_DEV_ENABLED):
             print("NO_GO: confirmation stays closed. Nothing is re-thresholded.")
 elif RUN_STAGE5B0_PROPERTY_AUDIT or RUN_STAGE5B1_NEW_PROPERTY_DEVELOPMENT:
     print("Stage 5B0/5B1 requested but blocked by the model or development budget.")
+'''
+)
+
+markdown(
+    r"""
+## 14B. Stages 5B01 and 5B1R: audit the failed audio linkage, then test the clean-capable subset
+
+The completed identity-explicit audit remains `PROPERTY_AUDIT_NO_GO`: cow
+spoken audio scored 35/48 and missed the frozen 36/48 gate. Stage 5B01 is a
+CPU-only, read-only check that those failed rows point to uniquely joined local
+SpokenCOCO recordings and source metadata. It does not claim to transcribe the
+waveforms.
+
+If and only if that audit passes, Stage 5B1R reuses the completed clean answers
+to select the first eight cat and cow photographs that the untouched model
+answered correctly in all three modalities. It then runs the exact alpha=1
+L16-L40 coordinate exchange in both directions with zero, random, and
+unrelated controls. This stage was designed after the aggregate failure, so it
+is exploratory even if it passes. A favorable result must be frozen and
+repeated on new media before it becomes a generalization claim.
+"""
+)
+code(
+    r'''
+AUDIO_LINKAGE_REPORT = None
+RECRUITED_EXPLORATORY_REPORT = None
+if REAL_MODE and (AUDIO_LINKAGE_AUDIT_ENABLED or RECRUITED_EXPLORATORY_ENABLED):
+    from jlens.mmpilot.multimodal_followup import (
+        PROPERTY_FAMILIES, audio_metadata_linkage_audit,
+        generation_trial_row, load_file_by_sha256, property_prompt,
+        recruit_all_modality_capable_groups, recruited_exploratory_verdict,
+    )
+
+    _rescue_source_root = Path(RECRUITED_EXPLORATORY_SOURCE_RUN_DIR)
+    _rescue_source_path = _rescue_source_root / "new_property_audit_report.json"
+    _rescue_source = load_file_by_sha256(
+        _rescue_source_path,
+        expected_file_sha256=EXPECTED_RECRUITED_SOURCE_FILE_SHA256,
+        label="identity-explicit animal-sound audit",
+    )
+    if _rescue_source.get("audit_digest") != EXPECTED_RECRUITED_SOURCE_AUDIT_DIGEST:
+        raise RuntimeError("the recruited-exploratory source audit digest changed")
+    if _rescue_source.get("verdict") != "PROPERTY_AUDIT_NO_GO":
+        raise RuntimeError("the source aggregate result is not the pinned NO_GO")
+    if _rescue_source.get("prompt_id") != "identity_explicit_v1":
+        raise RuntimeError("the source did not use the selected identity-explicit prompt")
+
+    _source_capability_rows = [
+        dict(row) for row in _rescue_source.get("capability_rows") or []
+        if row.get("concept") in RECRUITED_EXPLORATORY_CONCEPTS
+    ]
+    _group_index = {str(group["group_id"]): group for group in GROUPS}
+    _ordered_group_ids = list(dict.fromkeys(
+        str(row["group_id"]) for row in _source_capability_rows
+    ))
+    _missing_group_ids = [
+        group_id for group_id in _ordered_group_ids if group_id not in _group_index
+    ]
+    if _missing_group_ids:
+        raise RuntimeError(
+            "the cached synchronized manifest is missing source groups "
+            + repr(_missing_group_ids[:10])
+        )
+    _source_groups = [_group_index[group_id] for group_id in _ordered_group_ids]
+
+    _alignment_config = {
+        "study": "multimodal_new_property_audio_metadata_linkage_audit.v1",
+        "source_file_sha256": EXPECTED_RECRUITED_SOURCE_FILE_SHA256,
+        "source_audit_digest": EXPECTED_RECRUITED_SOURCE_AUDIT_DIGEST,
+        "manifest_checksum": MANIFEST_CHECKSUM,
+        "concept": "cow",
+        "failed_only": True,
+        "model_forwards": 0,
+        "backward_passes": 0,
+        "commit": COMMIT,
+    }
+    _alignment_digest = payload_checksum(_alignment_config)
+    AUDIO_LINKAGE_RUN_DIR = (
+        RUNS_ROOT / "mmnewpropertyalign" /
+        f"mmnewpropertyalign_real_{_alignment_digest.split(':')[1][:12]}"
+    )
+    AUDIO_LINKAGE_RUN_DIR.mkdir(parents=True, exist_ok=True)
+    AUDIO_LINKAGE_REPORT = audio_metadata_linkage_audit(
+        GROUPS, _source_capability_rows, concept="cow", failed_only=True,
+        require_local_files=True,
+    )
+    AUDIO_LINKAGE_REPORT = {
+        **AUDIO_LINKAGE_REPORT,
+        "scientific_config": _alignment_config,
+        "source_report_path": str(_rescue_source_path),
+        "source_aggregate_verdict": "PROPERTY_AUDIT_NO_GO",
+        "source_aggregate_verdict_unchanged": True,
+    }
+    AUDIO_LINKAGE_REPORT["report_checksum"] = payload_checksum({
+        key: value for key, value in AUDIO_LINKAGE_REPORT.items()
+        if key != "report_checksum"
+    })
+    _alignment_path = AUDIO_LINKAGE_RUN_DIR / "new_property_audio_alignment_report.json"
+    _alignment_path.write_text(
+        json.dumps(AUDIO_LINKAGE_REPORT, indent=2, default=str)
+    )
+    print("=" * 96)
+    print("AUDIO METADATA LINKAGE —", AUDIO_LINKAGE_REPORT["verdict"])
+    print("=" * 96)
+    print("failed cow-audio rows audited", AUDIO_LINKAGE_REPORT["n_rows_audited"])
+    print("metadata linkage verified   ",
+          AUDIO_LINKAGE_REPORT["metadata_linkage_verified"])
+    print("waveform transcribed        ",
+          AUDIO_LINKAGE_REPORT["waveform_content_independently_transcribed"])
+    print("model forwards / fits       0 / 0")
+    print("source verdict unchanged    ",
+          AUDIO_LINKAGE_REPORT["source_aggregate_verdict_unchanged"])
+    print("report                      ", _alignment_path)
+    print("checksum                    ", AUDIO_LINKAGE_REPORT["report_checksum"])
+
+    if RECRUITED_EXPLORATORY_ENABLED:
+        if AUDIO_LINKAGE_REPORT["verdict"] != "AUDIO_METADATA_LINKAGE_GO":
+            raise RuntimeError(
+                "recruited causal spending refused: audio metadata linkage did not pass"
+            )
+        from jlens.lens import JacobianLens
+        from jlens.mmpilot.coordinate_swap import (
+            random_two_direction_basis, resolve_concept_token,
+        )
+        from jlens.mmpilot.multimodal_lens import (
+            build_swap_bases_for_lens, load_broad_pooled_development_source,
+        )
+        from jlens.mmpilot.store import RunFingerprint, UnitStore, safe_key
+        from jlens.mmpilot.workspace_replication import unrestricted_greedy_swap_trial
+
+        _recruitment = recruit_all_modality_capable_groups(
+            _source_groups, _source_capability_rows,
+            concepts=RECRUITED_EXPLORATORY_CONCEPTS,
+            n_per_concept=RECRUITED_EXPLORATORY_IMAGES_PER_DIRECTION,
+        )
+        if not _recruitment["complete"]:
+            raise RuntimeError(
+                "not enough all-modality clean-capable groups for the frozen "
+                f"exploratory size: {_recruitment['eligible_counts']}"
+            )
+        _source_pin = load_broad_pooled_development_source(
+            BROAD_DEVELOPMENT_RUN_DIR,
+            expected_report_checksum=EXPECTED_BROAD_DEVELOPMENT_REPORT_CHECKSUM,
+            expected_population_digest=EXPECTED_BROAD_DEVELOPMENT_POPULATION_DIGEST,
+            expected_lens_checksum=EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+            expected_direction=CONFIRMATION_DIRECTION,
+        )
+        _rescue_config = {
+            "study": "multimodal_new_property_recruited_exploratory.v1",
+            "source_file_sha256": EXPECTED_RECRUITED_SOURCE_FILE_SHA256,
+            "source_audit_digest": EXPECTED_RECRUITED_SOURCE_AUDIT_DIGEST,
+            "audio_linkage_digest": AUDIO_LINKAGE_REPORT["audit_digest"],
+            "recruitment_digest": _recruitment["selection_digest"],
+            "model_repo_id": MODEL_REPO_ID,
+            "model_revision": MODEL_REVISION,
+            "audio_protocol_fingerprint": AUDIO_PROTOCOL_FINGERPRINT,
+            "manifest_checksum": MANIFEST_CHECKSUM,
+            "lens_checksum": EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+            "lens_refitted": False,
+            "layers": list(BROAD_POOLED_BAND),
+            "alpha": 1.0,
+            "positions": "every original prompt position",
+            "prompt_id": "identity_explicit_v1",
+            "directions": [list(pair) for pair in RECRUITED_EXPLORATORY_DIRECTIONS],
+            "conditions": ["exact", "zero", "random", "unrelated"],
+            "images_per_direction": RECRUITED_EXPLORATORY_IMAGES_PER_DIRECTION,
+            "seed": RECRUITED_EXPLORATORY_SEED,
+            "outcome_informed_stage_design": True,
+            "is_confirmation": False,
+            "commit": COMMIT,
+        }
+        _rescue_digest = payload_checksum(_rescue_config)
+        RECRUITED_EXPLORATORY_RUN_DIR = (
+            RUNS_ROOT / "mmnewpropertyrescue" /
+            f"mmnewpropertyrescue_real_{_rescue_digest.split(':')[1][:12]}"
+        )
+        RECRUITED_EXPLORATORY_RUN_DIR.mkdir(parents=True, exist_ok=True)
+        (RECRUITED_EXPLORATORY_RUN_DIR / "scientific_config.json").write_text(
+            json.dumps(_rescue_config, indent=2)
+        )
+        (RECRUITED_EXPLORATORY_RUN_DIR / "recruitment.json").write_text(
+            json.dumps({
+                key: value for key, value in _recruitment.items()
+                if key != "groups"
+            }, indent=2)
+        )
+        _fingerprint = RunFingerprint(
+            mode="real", model_repo_id=MODEL_REPO_ID,
+            model_revision=MODEL_REVISION, processor_revision=MODEL_REVISION,
+            layers=tuple(BROAD_POOLED_BAND),
+            lens_checksum=EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+            manifest_checksum=MANIFEST_CHECKSUM,
+            split_id=_recruitment["selection_digest"],
+            intervention_config={
+                "alpha": 1.0,
+                "directions": [list(pair) for pair in RECRUITED_EXPLORATORY_DIRECTIONS],
+                "conditions": ["exact", "zero", "random", "unrelated"],
+                "positions": "all_original_prompt_positions",
+                "max_new_tokens": NEW_PROPERTY_MAX_NEW_TOKENS,
+            },
+            extra={"study_digest": _rescue_digest},
+        )
+        _rescue_store = UnitStore(RECRUITED_EXPLORATORY_RUN_DIR, _fingerprint)
+        print("recruited exploratory run state", _rescue_store.open())
+
+        _lens = JacobianLens.load(_source_pin["lens_path"])
+        _tokens = {
+            name: resolve_concept_token(BACKEND.encode_candidate, name)
+            for name in (*RECRUITED_EXPLORATORY_CONCEPTS, *BROAD_POOLED_CONTROLS)
+        }
+        _unrelated_bases = build_swap_bases_for_lens(
+            _lens, BACKEND.unembedding_weight(), layers=BROAD_POOLED_BAND,
+            source=_tokens[BROAD_POOLED_CONTROLS[0]],
+            target=_tokens[BROAD_POOLED_CONTROLS[1]],
+        )
+        _property = PROPERTY_FAMILIES["animal_sound"]
+        _rescue_rows = []
+        for _src, _tgt in RECRUITED_EXPLORATORY_DIRECTIONS:
+            _target_answer = _property.answer_for(_tgt)
+            _exact_bases = build_swap_bases_for_lens(
+                _lens, BACKEND.unembedding_weight(), layers=BROAD_POOLED_BAND,
+                source=_tokens[_src], target=_tokens[_tgt],
+            )
+            _random_bases = {
+                layer: random_two_direction_basis(
+                    basis, seed=20260824 + layer
+                )
+                for layer, basis in _exact_bases.items()
+            }
+            _conditions = (
+                ("exact", 1.0, _exact_bases),
+                ("zero", 0.0, _exact_bases),
+                ("random", 1.0, _random_bases),
+                ("unrelated", 1.0, _unrelated_bases),
+            )
+            for _group in _recruitment["groups"][_src]:
+                for _modality in ("text", "image", "spoken_audio"):
+                    for _condition, _alpha, _bases in _conditions:
+                        _key = safe_key(
+                            "recruited", _src, _tgt, _group["group_id"],
+                            _modality, _condition,
+                        )
+                        _stored = _rescue_store.load("intervention", _key)
+                        if _stored is None:
+                            _inputs = build_group_inputs(
+                                _group, _modality,
+                                property_prompt(
+                                    "identity_explicit_v1", _modality,
+                                    _group["caption"],
+                                ),
+                            )
+                            _trial = unrestricted_greedy_swap_trial(
+                                BACKEND, _inputs, bases=_bases, alpha=_alpha,
+                                answer=_target_answer.answer,
+                                max_new_tokens=NEW_PROPERTY_MAX_NEW_TOKENS,
+                            )
+                            _stored = generation_trial_row(
+                                _trial, group=_group, modality=_modality,
+                                condition=_condition, direction=(_src, _tgt),
+                                answer=_target_answer, layers=BROAD_POOLED_BAND,
+                            )
+                            _rescue_store.save("intervention", _key, _stored)
+                        _rescue_rows.append(_stored)
+                        if len(_rescue_rows) == 1 or len(_rescue_rows) % 48 == 0:
+                            print("recruited exploratory trials", len(_rescue_rows),
+                                  "of", 192)
+
+        RECRUITED_EXPLORATORY_REPORT = recruited_exploratory_verdict(
+            _rescue_rows, source_audit=_rescue_source,
+            linkage_audit=AUDIO_LINKAGE_REPORT, recruitment=_recruitment,
+            layers=BROAD_POOLED_BAND,
+            min_success_rate=NEW_PROPERTY_DEV_MIN_SUCCESS_RATE,
+            min_control_margin=NEW_PROPERTY_DEV_MIN_CONTROL_MARGIN,
+        )
+        RECRUITED_EXPLORATORY_REPORT = {
+            **RECRUITED_EXPLORATORY_REPORT,
+            "scientific_config": _rescue_config,
+            "recruitment": {
+                key: value for key, value in _recruitment.items()
+                if key != "groups"
+            },
+            "rows": _rescue_rows,
+        }
+        RECRUITED_EXPLORATORY_REPORT["report_checksum"] = payload_checksum({
+            key: value for key, value in RECRUITED_EXPLORATORY_REPORT.items()
+            if key != "report_checksum"
+        })
+        _rescue_store.save(
+            "metric", "recruited_new_property_exploratory",
+            RECRUITED_EXPLORATORY_REPORT,
+        )
+        _rescue_path = (
+            RECRUITED_EXPLORATORY_RUN_DIR /
+            "recruited_new_property_exploratory_report.json"
+        )
+        _rescue_path.write_text(
+            json.dumps(RECRUITED_EXPLORATORY_REPORT, indent=2, default=str)
+        )
+        print("=" * 96)
+        print("RECRUITED NEW-PROPERTY EXPLORATORY —",
+              RECRUITED_EXPLORATORY_REPORT["verdict"])
+        print("=" * 96)
+        print("eligible clean-capable groups", _recruitment["eligible_counts"])
+        print("passing directions           ",
+              RECRUITED_EXPLORATORY_REPORT["passing_directions"])
+        print("failure modes                ",
+              RECRUITED_EXPLORATORY_REPORT["failure_modes"])
+        print("source aggregate verdict     PROPERTY_AUDIT_NO_GO (unchanged)")
+        print("label                        exploratory; not confirmation")
+        print("report                       ", _rescue_path)
+        print("checksum                     ",
+              RECRUITED_EXPLORATORY_REPORT["report_checksum"])
+elif RUN_STAGE5B01_AUDIO_LINKAGE_AUDIT or RUN_STAGE5B1R_RECRUITED_EXPLORATORY:
+    print("Stage 5B01/5B1R requested but its required gate is disabled.")
 '''
 )
 

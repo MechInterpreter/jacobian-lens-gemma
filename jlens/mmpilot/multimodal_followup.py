@@ -49,6 +49,7 @@ reused; :func:`assert_lens_reused_not_refitted` is the guard.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
@@ -71,6 +72,10 @@ NEW_PROPERTY_FREEZE_VERSION = "mmpilot.multimodal_new_property_frozen_design.v1"
 NEW_PROPERTY_CONFIRMATION_VERSION = "mmpilot.multimodal_new_property_confirmation.v1"
 ASYMMETRY_VERSION = "mmpilot.multimodal_asymmetry_replication.v1"
 EXCLUSION_AUDIT_VERSION = "mmpilot.multimodal_population_exclusion_audit.v1"
+AUDIO_LINKAGE_AUDIT_VERSION = "mmpilot.multimodal_audio_metadata_linkage_audit.v1"
+RECRUITED_EXPLORATORY_VERSION = (
+    "mmpilot.multimodal_new_property_recruited_exploratory.v1"
+)
 
 #: The validated contiguous band. Only the **pooled** lens spans it: the broad
 #: study fitted the pooled early shard L16-L32 and combined it with the pooled
@@ -518,6 +523,31 @@ def load_verified_report(
     return _verified_payload(
         Path(path), expected_checksum=str(expected_checksum), label=str(label)
     )
+
+
+def load_file_by_sha256(
+    path: str | Path, *, expected_file_sha256: str, label: str
+) -> dict:
+    """Read a JSON artifact pinned by its exact file bytes.
+
+    Some early development reports predate the convention of embedding a
+    ``report_checksum``.  This verifier does not weaken their pin: it hashes
+    the complete file and refuses any byte change before parsing it.
+    """
+
+    resolved = Path(path)
+    if not resolved.is_file():
+        raise MultimodalFollowupRefused(f"missing {label}: {resolved}")
+    actual = "sha256:" + hashlib.sha256(resolved.read_bytes()).hexdigest()
+    if actual != str(expected_file_sha256):
+        raise MultimodalFollowupRefused(
+            f"{label} file checksum is {actual}, expected {expected_file_sha256}"
+        )
+    try:
+        payload = json.loads(resolved.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise MultimodalFollowupRefused(f"could not parse {label}: {resolved}") from exc
+    return payload
 
 
 def load_spent_confirmation_population(
@@ -1746,6 +1776,191 @@ def followup_budget(
     }
 
 
+def audio_metadata_linkage_audit(
+    groups: Sequence[Mapping],
+    capability_rows: Sequence[Mapping],
+    *,
+    concept: str = "cow",
+    failed_only: bool = True,
+    require_local_files: bool = True,
+) -> dict:
+    """Audit the recorded caption-to-audio join behind failed capability rows.
+
+    This is deliberately a metadata audit, not automatic speech recognition.
+    It proves that each audited row resolves to one explicitly synchronized
+    manifest record, that paths have one owner, and (for a real local run) that
+    the recording and source-metadata files exist.  It does *not* claim to have
+    independently decoded the waveform, which remains an interpretation
+    boundary in the returned record.
+    """
+
+    group_index: dict[str, list[Mapping]] = {}
+    audio_owners: dict[str, set[tuple[str, str]]] = {}
+    for group in groups:
+        group_id = str(group.get("group_id") or "")
+        group_index.setdefault(group_id, []).append(group)
+        audio_path = str(group.get("audio_path") or "")
+        if audio_path:
+            audio_owners.setdefault(audio_path, set()).add(
+                (str(group.get("image_id") or ""), str(group.get("caption") or ""))
+            )
+
+    selected = [
+        row
+        for row in capability_rows
+        if str(row.get("concept")) == str(concept)
+        and str(row.get("modality")) == "spoken_audio"
+        and (not failed_only or not bool(row.get("pass")))
+    ]
+    records: list[dict] = []
+    for row in sorted(selected, key=lambda item: str(item.get("group_id"))):
+        group_id = str(row.get("group_id") or "")
+        matches = group_index.get(group_id, [])
+        group = matches[0] if len(matches) == 1 else {}
+        audio_path = str(group.get("audio_path") or "")
+        source_file = str(group.get("source_file") or "")
+        checks = {
+            "exactly_one_manifest_record": len(matches) == 1,
+            "image_id_matches_capability_row": bool(group)
+            and str(group.get("image_id")) == str(row.get("image_id")),
+            "explicit_synchronization_method": str(
+                group.get("synchronization_method") or ""
+            )
+            in {"explicit_metadata_fields", "original_manifest_explicit_fields"},
+            "media_marked_valid": str(group.get("media_validation_status") or "")
+            == "valid",
+            "caption_present": bool(str(group.get("caption") or "").strip()),
+            "audio_path_has_one_owner": bool(audio_path)
+            and len(audio_owners.get(audio_path, set())) == 1,
+            "audio_record_id_present": bool(group.get("audio_record_id")),
+            "source_metadata_checksum_present": str(
+                group.get("source_metadata_checksum") or ""
+            ).startswith("sha256:"),
+        }
+        if require_local_files:
+            checks["audio_file_exists"] = bool(audio_path) and Path(audio_path).is_file()
+            checks["source_metadata_file_exists"] = bool(source_file) and Path(
+                source_file
+            ).is_file()
+        record = {
+            "concept": str(concept),
+            "group_id": group_id,
+            "image_id": str(group.get("image_id") or row.get("image_id") or ""),
+            "generated": str(row.get("generated") or ""),
+            "audio_path": audio_path,
+            "audio_record_id": str(group.get("audio_record_id") or ""),
+            "caption_id": str(group.get("caption_id") or ""),
+            "caption": str(group.get("caption") or ""),
+            "source_file": source_file,
+            "source_metadata_checksum": str(
+                group.get("source_metadata_checksum") or ""
+            ),
+            "checks": checks,
+            "passed": bool(checks) and all(checks.values()),
+        }
+        records.append(record)
+
+    payload = {
+        "version": AUDIO_LINKAGE_AUDIT_VERSION,
+        "concept": str(concept),
+        "failed_only": bool(failed_only),
+        "n_rows_audited": len(records),
+        "records": records,
+        "metadata_linkage_verified": bool(records)
+        and all(record["passed"] for record in records),
+        "waveform_content_independently_transcribed": False,
+        "interpretation_boundary": (
+            "GO proves the stored SpokenCOCO metadata linkage and local file "
+            "identity checks. It does not independently transcribe the waveform "
+            "or prove that the speaker read the caption correctly."
+        ),
+        "causal_outcomes_used": False,
+        "model_forwards": 0,
+        "backward_passes": 0,
+    }
+    payload["verdict"] = (
+        "AUDIO_METADATA_LINKAGE_GO"
+        if payload["metadata_linkage_verified"]
+        else "AUDIO_METADATA_LINKAGE_NO_GO"
+    )
+    return {**payload, "audit_digest": payload_checksum(payload)}
+
+
+def recruit_all_modality_capable_groups(
+    groups: Sequence[Mapping],
+    capability_rows: Sequence[Mapping],
+    *,
+    concepts: Sequence[str],
+    n_per_concept: int,
+    modalities: Sequence[str] = MODALITIES,
+) -> dict:
+    """Select a deterministic clean-capable subset for exploratory rescue.
+
+    Selection uses untouched-model capability only, never an intervention
+    outcome.  It is nevertheless labelled outcome-informed because this stage
+    was designed after the aggregate capability audit missed its gate.
+    """
+
+    if int(n_per_concept) <= 0:
+        raise MultimodalFollowupRefused("n_per_concept must be positive")
+    by_group: dict[str, dict[str, Mapping]] = {}
+    for row in capability_rows:
+        if str(row.get("concept")) not in set(map(str, concepts)):
+            continue
+        group_id = str(row.get("group_id") or "")
+        modality = str(row.get("modality") or "")
+        if modality in by_group.setdefault(group_id, {}):
+            raise MultimodalFollowupRefused(
+                f"duplicate capability row for {group_id}:{modality}"
+            )
+        by_group[group_id][modality] = row
+
+    selected: dict[str, list[dict]] = {}
+    eligible_counts: dict[str, int] = {}
+    for concept in map(str, concepts):
+        eligible: list[dict] = []
+        for group in groups:
+            if str(group.get("concept") or group.get("selection_concept") or "") not in {
+                "",
+                concept,
+            }:
+                continue
+            group_id = str(group.get("group_id") or "")
+            rows = by_group.get(group_id, {})
+            if set(rows) == set(modalities) and all(
+                bool(rows[modality].get("pass")) for modality in modalities
+            ):
+                # The capability report, not a possibly absent manifest label,
+                # is authoritative about which concept recruited this group.
+                if all(str(rows[m].get("concept")) == concept for m in modalities):
+                    eligible.append(dict(group))
+        eligible_counts[concept] = len(eligible)
+        selected[concept] = eligible[: int(n_per_concept)]
+
+    complete = all(len(selected[concept]) == int(n_per_concept) for concept in selected)
+    payload = {
+        "version": RECRUITED_EXPLORATORY_VERSION,
+        "concepts": list(map(str, concepts)),
+        "modalities": list(map(str, modalities)),
+        "n_per_concept": int(n_per_concept),
+        "eligible_counts": eligible_counts,
+        "selected": {
+            concept: [
+                {"group_id": row["group_id"], "image_id": row["image_id"]}
+                for row in rows
+            ]
+            for concept, rows in selected.items()
+        },
+        "complete": complete,
+        "selection_uses_only_clean_capability": True,
+        "causal_outcomes_used_for_selection": False,
+        "outcome_informed_stage_design": True,
+        "is_confirmation": False,
+    }
+    payload["selection_digest"] = payload_checksum(payload)
+    return {**payload, "groups": selected}
+
+
 # ------------------------------------------- B1/B3/C. verdicts and freezing
 
 
@@ -2019,6 +2234,66 @@ def new_property_development_verdict(
         if control_failures
         else "NEW_PROPERTY_DEVELOPMENT_NO_GO"
     )
+    return {**payload, "report_checksum": payload_checksum(payload)}
+
+
+def recruited_exploratory_verdict(
+    rows: Sequence[Mapping],
+    *,
+    source_audit: Mapping,
+    linkage_audit: Mapping,
+    recruitment: Mapping,
+    layers: Sequence[int] = VALIDATED_BAND,
+    min_success_rate: float = 0.50,
+    min_control_margin: float = 0.25,
+) -> dict:
+    """Score the post-NO_GO clean-capability recruitment experiment."""
+
+    if source_audit.get("verdict") != "PROPERTY_AUDIT_NO_GO":
+        raise MultimodalFollowupRefused(
+            "the recruited rescue is defined only as a follow-up to the pinned NO_GO"
+        )
+    if linkage_audit.get("verdict") != "AUDIO_METADATA_LINKAGE_GO":
+        raise MultimodalFollowupRefused(
+            "the failed-audio metadata linkage audit did not pass"
+        )
+    capability_go = bool(recruitment.get("complete"))
+    base = new_property_development_verdict(
+        rows,
+        audit=source_audit,
+        layers=layers,
+        capability_go=capability_go,
+        min_success_rate=min_success_rate,
+        min_control_margin=min_control_margin,
+    )
+    passing = list(base.get("passing_directions") or [])
+    payload = {
+        **base,
+        "version": RECRUITED_EXPLORATORY_VERSION,
+        "verdict": (
+            "RECRUITED_NEW_PROPERTY_EXPLORATORY_GO"
+            if passing
+            else "RECRUITED_NEW_PROPERTY_EXPLORATORY_NO_GO"
+        ),
+        "source_aggregate_verdict": "PROPERTY_AUDIT_NO_GO",
+        "source_aggregate_verdict_unchanged": True,
+        "audio_linkage_audit_digest": linkage_audit.get("audit_digest"),
+        "recruitment_digest": recruitment.get("selection_digest"),
+        "selection_uses_only_clean_capability": True,
+        "causal_outcomes_used_for_selection": False,
+        "outcome_informed_stage_design": True,
+        "label": "exploratory",
+        "is_confirmation": False,
+        "fresh_confirmation_licensed_directly": False,
+        "claim_boundary": (
+            "This post-NO_GO development test asks whether coordinate exchange "
+            "works conditional on the model answering the property correctly in "
+            "all three modalities. A GO is promising exploratory evidence only; "
+            "the recruitment rule and direction must be frozen and repeated on "
+            "a new population before any generalization claim."
+        ),
+    }
+    payload.pop("report_checksum", None)
     return {**payload, "report_checksum": payload_checksum(payload)}
 
 
@@ -2482,6 +2757,23 @@ def stage_map() -> dict:
                 "confirms": False,
             },
             {
+                "stage": "B01",
+                "name": "failed-audio metadata linkage audit",
+                "population": "completed identity-explicit B0 artifacts",
+                "label": "read-only metadata audit",
+                "fits": 0,
+                "new_model_forwards": 0,
+                "confirms": False,
+            },
+            {
+                "stage": "B1R",
+                "name": "clean-capable recruited causal rescue",
+                "population": "spent B0 media selected on clean capability only",
+                "label": "outcome-informed exploratory",
+                "fits": 0,
+                "confirms": False,
+            },
+            {
                 "stage": "B2",
                 "name": "freeze",
                 "population": "none",
@@ -2519,6 +2811,7 @@ def stage_map() -> dict:
 
 __all__ = [
     "ANIMAL_SOUND_PROMPT_CANDIDATES",
+    "AUDIO_LINKAGE_AUDIT_VERSION",
     "ASYMMETRY_VERSION",
     "CONTROL_CONDITIONS",
     "EXCLUSION_AUDIT_VERSION",
@@ -2535,12 +2828,14 @@ __all__ = [
     "PROPERTY_AUDIT_VERSION",
     "PROPERTY_PROMPT_SCREEN_CONCEPTS",
     "PROPERTY_PROMPT_SCREEN_VERSION",
+    "RECRUITED_EXPLORATORY_VERSION",
     "PROPERTY_FAMILIES",
     "PropertyAnswer",
     "PropertyFamily",
     "REQUIRED_CONDITIONS",
     "VALIDATED_BAND",
     "artifact_exclusion_audit",
+    "audio_metadata_linkage_audit",
     "assert_controls_complete",
     "assert_design_frozen",
     "assert_lens_reused_not_refitted",
@@ -2561,6 +2856,7 @@ __all__ = [
     "generation_trial_row",
     "leg_count_property_limit",
     "load_extra_spent_image_ids",
+    "load_file_by_sha256",
     "load_localization_population",
     "load_spent_confirmation_population",
     "load_verified_report",
@@ -2571,6 +2867,8 @@ __all__ = [
     "property_prompt",
     "property_prompt_candidate",
     "property_prompt_screen_verdict",
+    "recruit_all_modality_capable_groups",
+    "recruited_exploratory_verdict",
     "resolve_dominant_answer",
     "stage_map",
     "summarize_localization",

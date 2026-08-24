@@ -216,6 +216,24 @@ class _Harness:
             "image_ids": [], "n_image_ids": 0, "checksum_verified": False,
             "digest": payload_checksum({"empty": True}),
         })
+        mp.setattr(
+            followup,
+            "audio_metadata_linkage_audit",
+            lambda *_a, **_k: {
+                "version": followup.AUDIO_LINKAGE_AUDIT_VERSION,
+                "concept": "cow",
+                "failed_only": True,
+                "n_rows_audited": 1,
+                "records": [{"passed": True}],
+                "metadata_linkage_verified": True,
+                "waveform_content_independently_transcribed": False,
+                "causal_outcomes_used": False,
+                "model_forwards": 0,
+                "backward_passes": 0,
+                "verdict": "AUDIO_METADATA_LINKAGE_GO",
+                "audit_digest": payload_checksum({"synthetic": "linkage-go"}),
+            },
+        )
 
         # media loading: return the mock world's own evidence vectors, keyed
         # off the concept encoded in the fake path
@@ -393,6 +411,7 @@ class _Harness:
                 "family": "animal_sound",
                 "verdict": "PROPERTY_AUDIT_NO_GO",
                 "audit_digest": audit_digest,
+                "prompt_id": "identity_explicit_v1",
                 "capability_rows": rows,
             }),
             encoding="utf-8",
@@ -414,6 +433,7 @@ class _Harness:
         overrides["ASYMMETRY_CANDIDATES"] = "12"
         overrides["ASYMMETRY_IMAGES"] = "3"
         overrides["BROAD_POOLED_IMAGES_PER_DIRECTION"] = "2"
+        overrides["RECRUITED_EXPLORATORY_IMAGES_PER_DIRECTION"] = "3"
 
         ns: dict = {"__name__": "__main__"}
         for source in _code_cells():
@@ -443,6 +463,9 @@ class _Harness:
                 ns["PROPERTY_PROMPT_SCREEN_SOURCE_RUN_DIR"] = str(root)
                 ns["EXPECTED_PROPERTY_PROMPT_SCREEN_SOURCE_FILE_SHA256"] = file_sha
                 ns["EXPECTED_PROPERTY_PROMPT_SCREEN_SOURCE_AUDIT_DIGEST"] = audit_digest
+                ns["RECRUITED_EXPLORATORY_SOURCE_RUN_DIR"] = str(root)
+                ns["EXPECTED_RECRUITED_SOURCE_FILE_SHA256"] = file_sha
+                ns["EXPECTED_RECRUITED_SOURCE_AUDIT_DIGEST"] = audit_digest
             exec(compile(source, "cell", "exec"), ns)
             if "EXPANDED_MANIFEST_CACHE" in source and ns.get("REAL_MODE"):
                 ns["RUNS_ROOT"] = self.runs
@@ -630,6 +653,31 @@ def test_stage_5b1_development_executes_when_the_audit_passes(
     # scoring used the resolved answer, so a bird-target direction is scorable
     directions = {row["direction"] for row in report["rows"]}
     assert directions, "no directions were scored"
+
+
+def test_stage_5b1r_recruited_exploratory_executes_real_cell(
+    tmp_path, monkeypatch
+) -> None:
+    """The post-NO_GO rescue reaches its real intervention loop and report."""
+
+    harness = _Harness(tmp_path, monkeypatch)
+    harness.script_model()
+    ns = harness.run(
+        RUN_STAGE5B01_AUDIO_LINKAGE_AUDIT=True,
+        RUN_STAGE5B1R_RECRUITED_EXPLORATORY=True,
+        CONFIRM_RECRUITED_EXPLORATORY_BUDGET=True,
+    )
+    linkage = ns["AUDIO_LINKAGE_REPORT"]
+    assert linkage["verdict"] == "AUDIO_METADATA_LINKAGE_GO"
+    report = ns["RECRUITED_EXPLORATORY_REPORT"]
+    assert report is not None
+    assert report["rows"]
+    assert report["source_aggregate_verdict_unchanged"] is True
+    assert report["selection_uses_only_clean_capability"] is True
+    assert report["causal_outcomes_used_for_selection"] is False
+    assert report["outcome_informed_stage_design"] is True
+    assert report["is_confirmation"] is False
+    assert report["lens_refitted"] is False
 
 
 def test_full_5b1_to_5b3_chain_executes(tmp_path, monkeypatch) -> None:
