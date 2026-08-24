@@ -1946,6 +1946,37 @@ def confirmation_verdict(
 
     assert_controls_complete(design["conditions"])
     assert_open_endpoint(design)
+    if not capability_go or not rows:
+        # Recruitment failed, so no intervention ran and there is nothing to
+        # pair. Report the capability verdict rather than falling through to
+        # the pairing check, which would raise a misleading "missing control"
+        # error for what is really an ordinary, expected outcome.
+        payload = {
+            "version": version,
+            "design_digest": design["design_digest"],
+            "direction": list(design["direction"]),
+            "property_family": design.get("property_family"),
+            "layers": list(design["layers"]),
+            "alpha": float(design["alpha"]),
+            "lens_refitted": False,
+            "teacher_forcing_used": False,
+            "candidate_list_supplied": False,
+            "exclusion_audit": dict(exclusion_audit),
+            "cells": [],
+            "paired_comparisons": [],
+            "gate": {
+                "design_was_frozen_first": bool(
+                    design.get("frozen_before_fresh_population_opened")
+                ),
+                "population_fresh": bool(exclusion_audit.get("disjoint")),
+                "capability_in_every_modality": False,
+            },
+            "rows": [dict(row) for row in rows],
+            "design_altered_after_outcomes": False,
+            "failure_mode": "no_trials",
+            "verdict": capability_no_go_verdict,
+        }
+        return {**payload, "report_checksum": payload_checksum(payload)}
     cells = _cell_records(
         rows,
         modalities=modalities,
