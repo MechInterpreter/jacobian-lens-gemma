@@ -131,6 +131,43 @@ def test_recruited_exploratory_path_is_clean_capability_only() -> None:
     assert report["source_aggregate_verdict_unchanged"] is True
     assert report["is_confirmation"] is False
 
+
+def test_generation_trial_row_accepts_real_by_layer_mapping_shape() -> None:
+    """Real hooks key diagnostics by layer; fixtures historically used a list."""
+
+    trial = {
+        "generated_text": " moo.",
+        "alpha": 1.0,
+        "layers_patched": [16, 17],
+        "all_prompt_positions_patched": True,
+        "n_forward_passes": 6,
+        "intervention_diagnostics": {
+            "by_layer": {
+                "16": {
+                    "max_after_to_before_activation_ratio": 1.01,
+                    "max_update_to_activation_ratio": 0.12,
+                },
+                "17": {
+                    "max_after_to_before_activation_ratio": 1.03,
+                    "max_update_to_activation_ratio": 0.18,
+                },
+            },
+            "all_hooks_fired": True,
+        },
+    }
+    row = followup.generation_trial_row(
+        trial,
+        group={"group_id": "g", "image_id": "i"},
+        modality="spoken_audio",
+        condition="exact",
+        direction=("cat", "cow"),
+        answer=followup.PROPERTY_FAMILIES["animal_sound"].answer_for("cow"),
+        layers=(16, 17),
+    )
+    assert row["success"] is True
+    assert row["max_activation_norm_ratio"] == pytest.approx(1.03)
+    assert row["max_update_to_activation_norm_ratio"] == pytest.approx(0.18)
+
 # ----------------------------------------------------- the corrected record
 
 

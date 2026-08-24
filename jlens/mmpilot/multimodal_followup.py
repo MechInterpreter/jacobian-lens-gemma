@@ -2086,7 +2086,19 @@ def generation_trial_row(
     """
 
     diagnostics = dict(trial.get("intervention_diagnostics") or {})
-    by_layer = list(diagnostics.get("by_layer") or [])
+    raw_by_layer = diagnostics.get("by_layer") or []
+    if isinstance(raw_by_layer, Mapping):
+        by_layer = [
+            row for _layer, row in sorted(
+                raw_by_layer.items(), key=lambda item: int(item[0])
+            )
+        ]
+    else:
+        by_layer = list(raw_by_layer)
+    if not all(isinstance(row, Mapping) for row in by_layer):
+        raise MultimodalFollowupRefused(
+            "intervention_diagnostics.by_layer must contain mapping records"
+        )
 
     def _worst(key: str, default: float) -> float:
         values = [
