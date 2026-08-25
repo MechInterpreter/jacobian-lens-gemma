@@ -274,6 +274,89 @@ def test_catdog_full_chain_6a_through_6e(tmp_path, monkeypatch) -> None:
     assert confirmed_image_ids.isdisjoint(dev_ids)
 
 
+def test_stage6c2_localizes_direct_answer_only_on_the_spent_source(
+    tmp_path, monkeypatch
+) -> None:
+    """The real notebook path pins a 0/8 source and never scores exact swaps."""
+
+    common = {
+        "CATDOG_N_DEV_CANDIDATES_PER_CONCEPT": 8,
+        "CATDOG_N_CONFIRM_CANDIDATES_PER_CONCEPT": 10,
+        "CATDOG_DEV_IMAGES_PER_DIRECTION": 8,
+        "CATDOG_CONFIRM_IMAGES": 8,
+    }
+    failed = _CatDogHarness(
+        tmp_path,
+        monkeypatch,
+        exact_never_moves=True,
+        direct_answer_never_moves=True,
+    )
+    failed.script_model()
+    ns_a = failed.run(RUN_STAGE6A_EVIDENCE_QUALITY_INDEX=True, **common)
+    ns_b = failed.run(
+        RUN_STAGE6B_POPULATION_FREEZE=True,
+        CATDOG_EVIDENCE_INDEX_RUN_DIR=str(ns_a["CATDOG_EVIDENCE_INDEX_RUN_DIR"]),
+        EXPECTED_CATDOG_EVIDENCE_INDEX_CHECKSUM=ns_a["CATDOG_EVIDENCE_INDEX"][
+            "index_checksum"
+        ],
+        **common,
+    )
+    ns_c = failed.run(
+        RUN_STAGE6C_CATDOG_DEVELOPMENT=True,
+        CONFIRM_CATDOG_DEVELOPMENT_BUDGET=True,
+        CATDOG_POPULATION_FREEZE_RUN_DIR=str(ns_b["CATDOG_POPULATION_FREEZE_RUN_DIR"]),
+        EXPECTED_CATDOG_POPULATION_FREEZE_DIGEST=ns_b["CATDOG_POPULATION_FREEZE"][
+            "freeze_digest"
+        ],
+        **common,
+    )
+    source = ns_c["CATDOG_DEVELOPMENT_REPORT"]
+    assert source["directions"][0]["instrument_state"] == "INCONCLUSIVE"
+    assert all(
+        row["success"] is False
+        for row in source["rows"]
+        if row["condition"] == "direct_answer"
+    )
+    source_path = (
+        Path(ns_c["CATDOG_DEVELOPMENT_RUN_DIR"]) / "catdog_development_report.json"
+    )
+    before = source_path.read_bytes()
+
+    # A second synthetic session represents a path where the positive control
+    # has leverage.  It reuses the first session's spent identities and source
+    # report but not its model-output function.
+    #
+    # Leverage is restricted to the narrow windows: the full-band control must
+    # still reproduce the pinned source's 0/8, or the two runs disagree about
+    # the very configuration one is diagnosing and no selection from this grid
+    # would be trustworthy.
+    localized = _CatDogHarness(
+        tmp_path, monkeypatch, direct_answer_only_on_narrow_bands=True
+    )
+    localized.script_model()
+    ns_loc = localized.run(
+        RUN_STAGE6C2_CATDOG_PATH_LOCALIZATION=True,
+        CONFIRM_CATDOG_PATH_LOCALIZATION_BUDGET=True,
+        CATDOG_INCONCLUSIVE_DEVELOPMENT_RUN_DIR=str(
+            ns_c["CATDOG_DEVELOPMENT_RUN_DIR"]
+        ),
+        EXPECTED_CATDOG_INCONCLUSIVE_DEVELOPMENT_CHECKSUM=source[
+            "report_checksum"
+        ],
+        **common,
+    )
+    report = ns_loc["CATDOG_PATH_LOCALIZATION_REPORT"]
+    assert report["control_band_reproduces_source_null"] is True
+    assert report["verdict"] == "CATDOG_DIRECT_ANSWER_PATH_LOCALIZATION_GO"
+    # the selection is a narrow window, never the full band it just reproduced
+    assert len(report["selected_path"]["band"]) == 8
+    assert report["selected_path"] is not None
+    assert report["selection_uses_exact_exchange_outcomes"] is False
+    assert report["can_establish_catdog_causal_transfer"] is False
+    assert {row["condition"] for row in report["rows"]} == {"direct_answer"}
+    assert source_path.read_bytes() == before
+
+
 def test_catdog_stage6d_refuses_to_freeze_when_direct_answer_control_failed(
     tmp_path, monkeypatch
 ) -> None:
@@ -414,20 +497,22 @@ def _catdog_model_load_cells() -> list[str]:
     ]
 
 
-def test_notebook_bootstrap_checks_out_the_branch_that_contains_stage6c1() -> None:
+def test_notebook_bootstrap_checks_out_the_active_research_branch() -> None:
     from test_multimodal_followup_realpath import _code_cells
 
     bootstrap = next(cell for cell in _code_cells() if "REPO_URL" in cell)
-    assert 'BRANCH = "codex/cumulative-direct-answer-fix"' in bootstrap
+    assert 'BRANCH = "experiment/spokencoco-jspace-pilot"' in bootstrap
     assert 'startswith("jlens.")' in bootstrap
 
 
 def test_stage6_model_load_cells_exist_and_call_build_real_backend() -> None:
     cells = _catdog_model_load_cells()
-    assert len(cells) == 2, "expected exactly one Stage 6C and one Stage 6E load cell"
+    assert len(cells) == 3, (
+        "expected exactly one Stage 6C, one Stage 6C2, and one Stage 6E load cell"
+    )
 
 
-@pytest.mark.parametrize("cell_index", [0, 1])
+@pytest.mark.parametrize("cell_index", [0, 1, 2])
 def test_stage6_preflight_runs_strictly_before_the_model_load(cell_index: int) -> None:
     source = _catdog_model_load_cells()[cell_index]
     preflight_at = source.index("preflight_fp32_or_refuse(")
@@ -438,7 +523,7 @@ def test_stage6_preflight_runs_strictly_before_the_model_load(cell_index: int) -
     )
 
 
-@pytest.mark.parametrize("cell_index", [0, 1])
+@pytest.mark.parametrize("cell_index", [0, 1, 2])
 def test_stage6_requests_float32_and_never_names_bfloat16(cell_index: int) -> None:
     source = _catdog_model_load_cells()[cell_index]
     assert "dtype=torch.float32" in source

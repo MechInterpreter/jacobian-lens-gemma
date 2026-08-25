@@ -81,6 +81,10 @@ _CLEAN_DEFECTS: dict = {
     "controls_move": False,
     "exact_never_moves": False,
     "direct_answer_never_moves": False,
+    # Models the case Stage 6C2 exists to find: the answer has leverage
+    # in some narrow layer window but not across the whole validated
+    # band, so the full-band control still reproduces the pinned 0/8.
+    "direct_answer_only_on_narrow_bands": False,
     "correction_changes_outcome": False,
 }
 
@@ -579,6 +583,8 @@ class _Harness:
                 ),
             })
             moved = not defects["direct_answer_never_moves"]
+            if defects["direct_answer_only_on_narrow_bands"] and len(bases) >= 25:
+                moved = False
             stats = _synthetic_direct_answer_stats(
                 sorted(map(int, bases)),
                 n_passes=1,
@@ -799,6 +805,7 @@ class _Harness:
                 # "build_real_backend" substitution. Setting both here is a
                 # no-op for every other stage's cells.
                 ns["CATDOG_MODEL_LOADED_DTYPE"] = "float32"
+                ns["CATDOG_PATH_MODEL_LOADED_DTYPE"] = "float32"
                 ns["CATDOG_CONFIRM_MODEL_LOADED"] = True
                 continue
             if "PROPERTY_PROMPT_SCREEN_REPORT = None" in source:

@@ -113,7 +113,7 @@ from pathlib import Path
 
 IN_COLAB = "google.colab" in sys.modules
 REPO_URL = "https://github.com/MechInterpreter/jacobian-lens-gemma.git"
-BRANCH = "codex/cumulative-direct-answer-fix"
+BRANCH = "experiment/spokencoco-jspace-pilot"
 REPO_DIR = Path(
     os.environ.get("JLENS_REPO_DIR")
     or ("/content/jacobian-lens-gemma" if IN_COLAB else Path.cwd())
@@ -285,6 +285,10 @@ RUN_ARTIFACT_EXCLUSION_AUDIT = False
 RUN_STAGE6A_EVIDENCE_QUALITY_INDEX = False
 RUN_STAGE6B_POPULATION_FREEZE = False
 RUN_STAGE6C_CATDOG_DEVELOPMENT = False
+# Stage 6C2 is instrument development on the eight photographs already spent
+# by the completed, inconclusive Stage 6C run.  It scores the direct-answer
+# positive control only; no exact cat->dog output can select a path.
+RUN_STAGE6C2_CATDOG_PATH_LOCALIZATION = False
 RUN_STAGE6C1_CATDOG_INSTRUMENT_AMENDMENT = False
 RUN_STAGE6D_CATDOG_FREEZE = False
 RUN_STAGE6E_CATDOG_CONFIRMATION = False
@@ -324,6 +328,16 @@ EXPECTED_CATDOG_POPULATION_FREEZE_DIGEST = None
 CATDOG_DEVELOPMENT_RUN_DIR = None
 EXPECTED_CATDOG_DEVELOPMENT_CHECKSUM = None
 CATDOG_FROZEN_DESIGN_PATH = None
+# The completed fp32 Stage 6C result that licenses Stage 6C2.  It is opened
+# read-only and checksum-pinned; the localization writes to a different run.
+CATDOG_INCONCLUSIVE_DEVELOPMENT_RUN_DIR = (
+    "/content/drive/MyDrive/jacobian-lens-gemma/runs/mmcatdogdev/"
+    "mmcatdogdev_real_ffb335e737aa"
+)
+EXPECTED_CATDOG_INCONCLUSIVE_DEVELOPMENT_CHECKSUM = (
+    "sha256:1d6bd80da1fc6eadf47984d0bf0cc930e756963b71ba6de81ea5b77fc015f4b8"
+)
+CATDOG_PATH_LOCALIZATION_MIN_SUCCESS_RATE = 0.50
 # The completed Stage 6C run with the per-layer-only positive-control match.
 # Stage 6C1 opens this report read-only, verifies the checksum, and writes one
 # amendment beside it. It never rewrites the report or any unit.
@@ -342,6 +356,7 @@ CONFIRM_CORRECTED_EXPLORATORY_BUDGET = False
 CONFIRM_NEW_PROPERTY_CONFIRMATION_BUDGET = False
 CONFIRM_ASYMMETRY_BUDGET = False
 CONFIRM_CATDOG_DEVELOPMENT_BUDGET = False
+CONFIRM_CATDOG_PATH_LOCALIZATION_BUDGET = False
 CONFIRM_CATDOG_CONFIRMATION_BUDGET = False
 
 # The completed Stage 3D confirmation, read only to spend its media. All 64
@@ -614,6 +629,7 @@ FOLLOWUP_STAGES = {
     "6A_catdog_evidence_index": RUN_STAGE6A_EVIDENCE_QUALITY_INDEX,
     "6B_catdog_population_freeze": RUN_STAGE6B_POPULATION_FREEZE,
     "6C_catdog_development": RUN_STAGE6C_CATDOG_DEVELOPMENT,
+    "6C2_catdog_path_localization": RUN_STAGE6C2_CATDOG_PATH_LOCALIZATION,
     "6C1_catdog_instrument_amendment": RUN_STAGE6C1_CATDOG_INSTRUMENT_AMENDMENT,
     "6D_catdog_freeze": RUN_STAGE6D_CATDOG_FREEZE,
     "6E_catdog_confirmation": RUN_STAGE6E_CATDOG_CONFIRMATION,
@@ -5972,7 +5988,9 @@ if REAL_MODE:
     # Mutual exclusivity across every follow-up stage, Stage 6 included, is
     # already enforced once by FOLLOWUP_STAGES's own sum check in section 1.
     _catdog_model_stage = (
-        RUN_STAGE6C_CATDOG_DEVELOPMENT or RUN_STAGE6E_CATDOG_CONFIRMATION
+        RUN_STAGE6C_CATDOG_DEVELOPMENT
+        or RUN_STAGE6C2_CATDOG_PATH_LOCALIZATION
+        or RUN_STAGE6E_CATDOG_CONFIRMATION
     )
     CATDOG_MODEL_ENABLED = bool(_catdog_model_stage and CONFIRM_MODEL_LOAD)
     CATDOG_DEVELOPMENT_ENABLED = bool(
@@ -5983,12 +6001,23 @@ if REAL_MODE:
         RUN_STAGE6E_CATDOG_CONFIRMATION and CATDOG_MODEL_ENABLED
         and CONFIRM_CATDOG_CONFIRMATION_BUDGET
     )
+    CATDOG_PATH_LOCALIZATION_ENABLED = bool(
+        RUN_STAGE6C2_CATDOG_PATH_LOCALIZATION and CATDOG_MODEL_ENABLED
+        and CONFIRM_CATDOG_PATH_LOCALIZATION_BUDGET
+    )
     if RUN_STAGE6C_CATDOG_DEVELOPMENT and not CATDOG_DEVELOPMENT_ENABLED:
         print("STAGE 6C BLOCKED: confirm CONFIRM_MODEL_LOAD and "
               "CONFIRM_CATDOG_DEVELOPMENT_BUDGET after reading the printed budget")
     if RUN_STAGE6E_CATDOG_CONFIRMATION and not CATDOG_CONFIRMATION_ENABLED:
         print("STAGE 6E BLOCKED: confirm CONFIRM_MODEL_LOAD and "
               "CONFIRM_CATDOG_CONFIRMATION_BUDGET after reading the printed budget")
+    if (
+        RUN_STAGE6C2_CATDOG_PATH_LOCALIZATION
+        and not CATDOG_PATH_LOCALIZATION_ENABLED
+    ):
+        print("STAGE 6C2 BLOCKED: confirm CONFIRM_MODEL_LOAD and "
+              "CONFIRM_CATDOG_PATH_LOCALIZATION_BUDGET after reading the "
+              "printed budget")
 
     _catdog_est = estimate_fp32_inference_memory(
         workspace_fraction=CATDOG_FP32_WORKSPACE_FRACTION,
@@ -6020,6 +6049,16 @@ if REAL_MODE:
     print("  direct-answer calibration  ",
           CATDOG_DEV_IMAGES_PER_DIRECTION * 3,
           "extra outcome-blind forwards (one per development control trial)")
+    from jlens.mmpilot.catdog_localization import frozen_grid_record
+    _catdog_path_grid = frozen_grid_record()
+    _catdog_path_conditions = CATDOG_DEV_IMAGES_PER_DIRECTION * sum(
+        len(_path["applicable_modalities"])
+        for _path in _catdog_path_grid["paths"]
+    )
+    print("  Stage 6C2 localization     ", _catdog_path_conditions,
+          "direct-answer conditions; <=",
+          _catdog_path_conditions * (CATDOG_MAX_NEW_TOKENS + 1),
+          "forwards; no exact-swap outcome is scored")
     print("  zero fitting, zero backward passes in every Stage 6 cell")
 '''
 )
@@ -6526,6 +6565,343 @@ if REAL_MODE and RUN_STAGE6C_CATDOG_DEVELOPMENT and CATDOG_MODEL_LOADED_DTYPE is
     print("checksum ", CATDOG_DEVELOPMENT_REPORT["report_checksum"])
 elif RUN_STAGE6C_CATDOG_DEVELOPMENT:
     print("Stage 6C requested but blocked; confirm its printed budget.")
+'''
+)
+
+markdown(
+    r"""
+### Stage 6C2 -- outcome-blind direct-answer path localization (spent data)
+
+The completed fp32 Stage 6C run is checksum-pinned and opened read-only.  Its
+exact exchange and its cumulatively matched direct-answer control both scored
+0/8 in text, image and spoken audio on L16-L40/all prompt positions, so that
+path was **inconclusive**, not a scientific null.
+
+This repair uses only the already-spent eight cat photographs and scores only
+the direct ``bark`` positive control over a small grid frozen in
+`jlens.mmpilot.catdog_localization`.  The exact cat-to-dog generations are
+never rerun, loaded into the localization table, or used for selection.  A GO
+here is instrument development only: the selected path must next face the real
+alpha=1 exchange on different development photographs before confirmation.
+Every condition is an atomic resume unit; no lens is fitted.
+"""
+)
+code(
+    r'''
+CATDOG_PATH_LOCALIZATION_SOURCE = None
+CATDOG_PATH_LOCALIZATION_REPORT = None
+CATDOG_PATH_MODEL_LOADED_DTYPE = None
+if REAL_MODE and RUN_STAGE6C2_CATDOG_PATH_LOCALIZATION:
+    from jlens.mmpilot.catdog_localization import (
+        frozen_grid_record, verify_inconclusive_source_report,
+    )
+
+    _source_path = (
+        Path(CATDOG_INCONCLUSIVE_DEVELOPMENT_RUN_DIR) /
+        "catdog_development_report.json"
+    )
+    if not _source_path.is_file():
+        raise RuntimeError(f"missing completed catdog development report: {_source_path}")
+    _source_payload = json.loads(_source_path.read_text(encoding="utf-8"))
+    CATDOG_PATH_LOCALIZATION_SOURCE = verify_inconclusive_source_report(
+        _source_payload,
+        expected_checksum=EXPECTED_CATDOG_INCONCLUSIVE_DEVELOPMENT_CHECKSUM,
+        expected_model_revision=MODEL_REVISION,
+        expected_lens_checksum=EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+    )
+    CATDOG_PATH_LOCALIZATION_GRID = frozen_grid_record()
+    print("CAT->DOG PATH LOCALIZATION -- SOURCE VERIFIED")
+    print("  source report ", _source_path)
+    print("  checksum      ", CATDOG_PATH_LOCALIZATION_SOURCE["report_checksum"])
+    print("  spent groups  ", len(CATDOG_PATH_LOCALIZATION_SOURCE["group_ids"]))
+    print("  grid digest   ", CATDOG_PATH_LOCALIZATION_GRID["grid_digest"])
+    print("  bands         ", CATDOG_PATH_LOCALIZATION_GRID["bands"])
+    print("  policies      ", CATDOG_PATH_LOCALIZATION_GRID["position_rules"])
+    print("  exact outputs used for selection: False")
+elif RUN_STAGE6C2_CATDOG_PATH_LOCALIZATION:
+    print("Stage 6C2 requested but REAL_MODE is off.")
+'''
+)
+
+code(
+    r'''
+if (
+    REAL_MODE
+    and RUN_STAGE6C2_CATDOG_PATH_LOCALIZATION
+    and CATDOG_PATH_LOCALIZATION_ENABLED
+):
+    import torch
+    from jlens.mmpilot.fp32_preflight import preflight_fp32_or_refuse
+
+    CATDOG_PATH_FP32_PREFLIGHT = preflight_fp32_or_refuse(
+        workspace_fraction=CATDOG_FP32_WORKSPACE_FRACTION,
+        safety_margin=CATDOG_FP32_SAFETY_MARGIN,
+    )
+    print("fp32 preflight passed:", CATDOG_PATH_FP32_PREFLIGHT["device_name"],
+          f"{CATDOG_PATH_FP32_PREFLIGHT['free_gib']:.1f} GiB free, "
+          f"{CATDOG_PATH_FP32_PREFLIGHT['required_gib']:.1f} GiB required")
+
+    from jlens.mmpilot.real_backend import build_real_backend
+
+    _bundle = build_real_backend(
+        MODEL_REPO_ID, revision=MODEL_REVISION, allow_model_load=True,
+        resolve_audio=True, dtype=torch.float32,
+    )
+    BACKEND = _bundle.backend
+    CATDOG_PATH_MODEL_LOADED_DTYPE = _bundle.load_info.get("dtype")
+    print("model loaded in dtype", CATDOG_PATH_MODEL_LOADED_DTYPE)
+elif RUN_STAGE6C2_CATDOG_PATH_LOCALIZATION:
+    print("Stage 6C2 is pinned but blocked; confirm its printed budget.")
+'''
+)
+
+code(
+    r'''
+if (
+    REAL_MODE
+    and RUN_STAGE6C2_CATDOG_PATH_LOCALIZATION
+    and CATDOG_PATH_LOCALIZATION_ENABLED
+    and CATDOG_PATH_MODEL_LOADED_DTYPE is not None
+):
+    from jlens.lens import JacobianLens
+    from jlens.mmpilot.catdog_localization import (
+        CATDOG_PATH_POSITION_POLICIES, summarize_path_localization,
+    )
+    from jlens.mmpilot.coordinate_swap import (
+        resolve_answer_readout_token, resolve_concept_token,
+    )
+    from jlens.mmpilot.multimodal_followup import (
+        PROPERTY_FAMILIES, direct_answer_trial_row, property_prompt,
+    )
+    from jlens.mmpilot.multimodal_instrument import (
+        INSTRUMENT_VERSION, MODEL_DTYPE_REALIZATION, POST_CAST_TOLERANCE,
+    )
+    from jlens.mmpilot.multimodal_lens import (
+        build_swap_bases_for_lens, load_broad_pooled_development_source,
+        selected_lens_vector,
+    )
+    from jlens.mmpilot.store import RunFingerprint, UnitStore, safe_key
+    from jlens.mmpilot.workspace_replication import (
+        unrestricted_greedy_direct_answer_trial,
+    )
+
+    _source_group_ids = set(CATDOG_PATH_LOCALIZATION_SOURCE["group_ids"])
+    _group_by_id = {str(group["group_id"]): group for group in GROUPS}
+    _missing_groups = sorted(_source_group_ids - set(_group_by_id))
+    if _missing_groups:
+        raise RuntimeError(
+            "the current synchronized manifest cannot reconstruct the pinned "
+            f"spent development groups: {_missing_groups}"
+        )
+    _localization_groups = [
+        _group_by_id[group_id]
+        for group_id in CATDOG_PATH_LOCALIZATION_SOURCE["group_ids"]
+    ]
+
+    _localization_config = {
+        "study": "catdog_direct_answer_path_localization.v1",
+        "source_report_checksum": (
+            EXPECTED_CATDOG_INCONCLUSIVE_DEVELOPMENT_CHECKSUM
+        ),
+        "source_run_dir": str(CATDOG_INCONCLUSIVE_DEVELOPMENT_RUN_DIR),
+        "source_groups": list(CATDOG_PATH_LOCALIZATION_SOURCE["group_ids"]),
+        "grid": CATDOG_PATH_LOCALIZATION_GRID,
+        "minimum_success_rate": CATDOG_PATH_LOCALIZATION_MIN_SUCCESS_RATE,
+        "model_repo_id": MODEL_REPO_ID,
+        "model_revision": MODEL_REVISION,
+        "model_dtype": "float32",
+        "audio_protocol_fingerprint": AUDIO_PROTOCOL_FINGERPRINT,
+        "manifest_checksum": MANIFEST_CHECKSUM,
+        "lens_checksum": EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+        "lens_refitted": False,
+        "direction": list(CATDOG_DIRECTION),
+        "answer": CATDOG_SWAPPED_ANSWER,
+        "alpha": 1.0,
+        "conditions": ["direct_answer"],
+        "exact_exchange_outcomes_used_for_selection": False,
+        "population_status": "already_spent_development_only",
+        "instrument_version": INSTRUMENT_VERSION,
+        "post_cast_tolerance": POST_CAST_TOLERANCE,
+        "max_new_tokens": CATDOG_MAX_NEW_TOKENS,
+        "is_confirmation": False,
+        "can_establish_catdog_causal_transfer": False,
+        "commit": COMMIT,
+    }
+    _localization_digest = payload_checksum(_localization_config)
+    CATDOG_PATH_LOCALIZATION_RUN_DIR = (
+        RUNS_ROOT / "mmcatdogloc" /
+        f"mmcatdogloc_real_{_localization_digest.split(':')[1][:12]}"
+    )
+    CATDOG_PATH_LOCALIZATION_RUN_DIR.mkdir(parents=True, exist_ok=True)
+    (CATDOG_PATH_LOCALIZATION_RUN_DIR / "scientific_config.json").write_text(
+        json.dumps(_localization_config, indent=2), encoding="utf-8"
+    )
+    (CATDOG_PATH_LOCALIZATION_RUN_DIR / "frozen_path_grid.json").write_text(
+        json.dumps(CATDOG_PATH_LOCALIZATION_GRID, indent=2), encoding="utf-8"
+    )
+    _localization_store = UnitStore(
+        CATDOG_PATH_LOCALIZATION_RUN_DIR,
+        RunFingerprint(
+            mode="real", model_repo_id=MODEL_REPO_ID,
+            model_revision=MODEL_REVISION, processor_revision=MODEL_REVISION,
+            layers=tuple(BROAD_POOLED_BAND),
+            lens_checksum=EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+            manifest_checksum=MANIFEST_CHECKSUM,
+            split_id=EXPECTED_CATDOG_INCONCLUSIVE_DEVELOPMENT_CHECKSUM,
+            intervention_config={
+                "alpha": 1.0,
+                "direction": list(CATDOG_DIRECTION),
+                "condition": "direct_answer_only",
+                "dtype": "float32",
+                "grid_digest": CATDOG_PATH_LOCALIZATION_GRID["grid_digest"],
+                "max_new_tokens": CATDOG_MAX_NEW_TOKENS,
+                "instrument_version": INSTRUMENT_VERSION,
+                "post_cast_tolerance": POST_CAST_TOLERANCE,
+            },
+            extra={"study_digest": _localization_digest},
+        ),
+    )
+    print("catdog path-localization run state", _localization_store.open())
+
+    _lens = JacobianLens.load(
+        load_broad_pooled_development_source(
+            BROAD_DEVELOPMENT_RUN_DIR,
+            expected_report_checksum=EXPECTED_BROAD_DEVELOPMENT_REPORT_CHECKSUM,
+            expected_population_digest=EXPECTED_BROAD_DEVELOPMENT_POPULATION_DIGEST,
+            expected_lens_checksum=EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+            expected_direction=CONFIRMATION_DIRECTION,
+        )["lens_path"]
+    )
+    _unembed = BACKEND.unembedding_weight()
+    _src, _tgt = CATDOG_DIRECTION
+    _tokens = {
+        name: resolve_concept_token(BACKEND.encode_candidate, name)
+        for name in CATDOG_DIRECTION
+    }
+    _answer_token = resolve_answer_readout_token(
+        BACKEND.encode_candidate, CATDOG_SWAPPED_ANSWER
+    )
+    _target_answer = PROPERTY_FAMILIES[CATDOG_PROPERTY_FAMILY].answer_for(_tgt)
+
+    _bases_by_band = {}
+    _answers_by_band = {}
+    for _band_list in CATDOG_PATH_LOCALIZATION_GRID["bands"]:
+        _band = tuple(map(int, _band_list))
+        _bases_by_band[_band] = build_swap_bases_for_lens(
+            _lens, _unembed, layers=_band,
+            source=_tokens[_src], target=_tokens[_tgt],
+        )
+        _answers_by_band[_band] = {
+            layer: selected_lens_vector(
+                _lens, _unembed, layer=layer, token_id=_answer_token.token_id,
+            )
+            for layer in _band
+        }
+
+    _localization_rows = []
+    # Cells the policy leaves undefined are never run, so they are not counted.
+    _total = len(_localization_groups) * sum(
+        len(_path["applicable_modalities"])
+        for _path in CATDOG_PATH_LOCALIZATION_GRID["paths"]
+    )
+    _computed = 0
+    _reused = 0
+    for _group in _localization_groups:
+        for _modality in ("text", "image", "spoken_audio"):
+            for _band_list in CATDOG_PATH_LOCALIZATION_GRID["bands"]:
+                _band = tuple(map(int, _band_list))
+                _band_name = f"L{_band[0]}_L{_band[-1]}"
+                for _policy in CATDOG_PATH_LOCALIZATION_GRID["position_rules"]:
+                    _applied_rule = CATDOG_PATH_POSITION_POLICIES[_policy][_modality]
+                    if _applied_rule is None:
+                        # Undefined cell, not a skipped one: a text prompt has
+                        # no distinct evidence token span. Running anything
+                        # here would mean substituting a different rule under
+                        # this policy's name.
+                        continue
+                    _key = safe_key(
+                        "catdogpath", _group["group_id"], _modality,
+                        _band_name, _policy,
+                    )
+                    _stored = _localization_store.load("intervention", _key)
+                    if _stored is None:
+                        _inputs = build_group_inputs(
+                            _group, _modality,
+                            property_prompt(
+                                CATDOG_PROMPT_ID, _modality, _group["caption"]
+                            ),
+                        )
+                        _trial = unrestricted_greedy_direct_answer_trial(
+                            BACKEND, _inputs, bases=_bases_by_band[_band],
+                            answer_vectors=_answers_by_band[_band],
+                            answer=CATDOG_SWAPPED_ANSWER,
+                            max_new_tokens=CATDOG_MAX_NEW_TOKENS,
+                            position_rule=_applied_rule,
+                            realization_policy=MODEL_DTYPE_REALIZATION,
+                            alpha=1.0,
+                        )
+                        _stored = direct_answer_trial_row(
+                            _trial, group=_group, modality=_modality,
+                            direction=CATDOG_DIRECTION, answer=_target_answer,
+                            layers=_band,
+                        )
+                        _stored = {
+                            **_stored,
+                            "position_rule": _policy,
+                            "applied_position_rule": _applied_rule,
+                            "source_report_checksum": (
+                                EXPECTED_CATDOG_INCONCLUSIVE_DEVELOPMENT_CHECKSUM
+                            ),
+                            "selection_signal": "direct_answer_only",
+                        }
+                        _localization_store.save("intervention", _key, _stored)
+                        _computed += 1
+                    else:
+                        _reused += 1
+                    _localization_rows.append(_stored)
+                    if len(_localization_rows) == 1 or len(_localization_rows) % 40 == 0:
+                        print("path localization", len(_localization_rows), "of", _total,
+                              "computed", _computed, "reused", _reused)
+
+    CATDOG_PATH_LOCALIZATION_REPORT = summarize_path_localization(
+        _localization_rows,
+        source_report_checksum=EXPECTED_CATDOG_INCONCLUSIVE_DEVELOPMENT_CHECKSUM,
+        grid=CATDOG_PATH_LOCALIZATION_GRID,
+        expected_group_ids=CATDOG_PATH_LOCALIZATION_SOURCE["group_ids"],
+        minimum_success_rate=CATDOG_PATH_LOCALIZATION_MIN_SUCCESS_RATE,
+        post_cast_tolerance=POST_CAST_TOLERANCE,
+    )
+    CATDOG_PATH_LOCALIZATION_REPORT = {
+        **CATDOG_PATH_LOCALIZATION_REPORT,
+        "scientific_config": _localization_config,
+        "rows": _localization_rows,
+    }
+    CATDOG_PATH_LOCALIZATION_REPORT["report_checksum"] = payload_checksum({
+        key: value for key, value in CATDOG_PATH_LOCALIZATION_REPORT.items()
+        if key != "report_checksum"
+    })
+    _localization_store.save(
+        "metric", "catdog_path_localization", CATDOG_PATH_LOCALIZATION_REPORT
+    )
+    _localization_path = (
+        CATDOG_PATH_LOCALIZATION_RUN_DIR /
+        "catdog_direct_answer_path_localization_report.json"
+    )
+    _localization_path.write_text(
+        json.dumps(CATDOG_PATH_LOCALIZATION_REPORT, indent=2, default=str),
+        encoding="utf-8",
+    )
+    print("=" * 96)
+    print("CAT->DOG DIRECT-ANSWER PATH LOCALIZATION --",
+          CATDOG_PATH_LOCALIZATION_REPORT["verdict"])
+    print("=" * 96)
+    print("selected path", CATDOG_PATH_LOCALIZATION_REPORT["selected_path"])
+    print("scientific grade instrument development only")
+    print("exact cat->dog outcomes used for selection False")
+    print("report  ", _localization_path)
+    print("checksum", CATDOG_PATH_LOCALIZATION_REPORT["report_checksum"])
+elif RUN_STAGE6C2_CATDOG_PATH_LOCALIZATION:
+    print("Stage 6C2 requested but blocked; confirm its printed budget.")
 '''
 )
 

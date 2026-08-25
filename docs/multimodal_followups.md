@@ -192,6 +192,39 @@ would show the development failure did not replicate and would retire the
 asymmetry claim entirely. `asymmetry_replication_verdict()` reports it in those
 terms and records `cause_of_asymmetry_identified: false`.
 
+## Cat-to-dog causal-path localization after the fp32 development run
+
+The checksum-pinned fp32 cat-to-dog development run
+`mmcatdogdev_real_ffb335e737aa` returned an exact 0/8 and a cumulatively
+displacement-matched direct-answer 0/8 in every modality on L16-L40 at all
+prompt positions. Coordinate realization passed, but the failed positive
+control makes the path inconclusive rather than a scientific null.
+
+Stage 6C2 is the only permitted repair. It reuses those eight already-spent
+cat photographs and runs only the direct `bark` positive control over a
+predeclared grid: five sliding eight-layer windows stepping by four, which
+together cover every layer in L16-L40, plus the full band at all prompt
+positions as an internal control. That control must reproduce the pinned
+source's 0/8; if it does not, the two runs disagree about the configuration
+one is diagnosing and the verdict reports the disagreement instead of a
+selection.
+
+Three position policies cross that grid. `modality_evidence` is **undefined
+for text** -- a text prompt exposes no distinct evidence token span, so it is
+recorded as not-applicable rather than silently falling back to
+`all_prompt_positions`, and the all-three-modalities selection rule therefore
+never selects such a path. Those cells are reported as diagnostic information
+with the substitution visible.
+
+The original report is read-only and checksum-pinned. Exact cat-to-dog
+generations cannot enter the localization table or its deterministic selection
+rule. A localization GO is instrument development only; it is the best of
+eighteen searched paths (twelve selectable) on spent media, and the report
+carries `n_paths_searched` so that multiplicity travels with any quotation of
+the selection. It must be followed by an exact alpha-one exchange on different
+development photographs and then, if that passes, one untouched confirmation
+run. Every condition smart-saves independently and no lens is fitted.
+
 ## Engineering contract
 
 Every stage: one atomic checksum-verified JSON per unit on Drive, a
@@ -201,4 +234,4 @@ backward passes, and a printed stage map and exact pass budget before the model
 loads. Development and confirmation artifacts live in separate run
 directories. See `jlens/mmpilot/multimodal_followup.py`, its MOCK world in
 `multimodal_followup_mock.py`, and the notebook
-`notebooks/multimodal_jspace_matched_jlens_colab.ipynb` (sections 12-18).
+`notebooks/multimodal_jspace_matched_jlens_colab.ipynb` (including Stage 6C2).
