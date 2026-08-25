@@ -278,6 +278,7 @@ RUN_ARTIFACT_EXCLUSION_AUDIT = False
 RUN_STAGE6A_EVIDENCE_QUALITY_INDEX = False
 RUN_STAGE6B_POPULATION_FREEZE = False
 RUN_STAGE6C_CATDOG_DEVELOPMENT = False
+RUN_STAGE6C1_CATDOG_INSTRUMENT_AMENDMENT = False
 RUN_STAGE6D_CATDOG_FREEZE = False
 RUN_STAGE6E_CATDOG_CONFIRMATION = False
 
@@ -299,6 +300,7 @@ CATDOG_CONFIRM_IMAGES = 16
 CATDOG_MIN_CLEAN_CAPABILITY_RATE = 0.75
 CATDOG_DEV_MIN_SUCCESS_RATE = 0.50
 CATDOG_DEV_MIN_CONTROL_MARGIN = 0.25
+CATDOG_CUMULATIVE_DISPLACEMENT_MATCH_TOLERANCE = 0.02
 CATDOG_CONFIRM_MIN_SUCCESS_RATE = 0.75
 CATDOG_CONFIRM_MIN_CONTROL_MARGIN = 0.25
 CATDOG_CONFIRM_FAMILYWISE_ALPHA = 0.05
@@ -315,6 +317,16 @@ EXPECTED_CATDOG_POPULATION_FREEZE_DIGEST = None
 CATDOG_DEVELOPMENT_RUN_DIR = None
 EXPECTED_CATDOG_DEVELOPMENT_CHECKSUM = None
 CATDOG_FROZEN_DESIGN_PATH = None
+# The completed Stage 6C run with the per-layer-only positive-control match.
+# Stage 6C1 opens this report read-only, verifies the checksum, and writes one
+# amendment beside it. It never rewrites the report or any unit.
+CATDOG_UNMATCHED_DEVELOPMENT_RUN_DIR = (
+    "/content/drive/MyDrive/jacobian-lens-gemma/runs/mmcatdogdev/"
+    "mmcatdogdev_real_bc03b54e8494"
+)
+EXPECTED_CATDOG_UNMATCHED_DEVELOPMENT_CHECKSUM = (
+    "sha256:ccf34c1303c17960edc13653298c4badba462a7cbda5ca90b5fb637d7af04be2"
+)
 
 CONFIRM_LOCALIZATION_BUDGET = False
 CONFIRM_PROPERTY_PROMPT_SCREEN_BUDGET = False
@@ -595,6 +607,7 @@ FOLLOWUP_STAGES = {
     "6A_catdog_evidence_index": RUN_STAGE6A_EVIDENCE_QUALITY_INDEX,
     "6B_catdog_population_freeze": RUN_STAGE6B_POPULATION_FREEZE,
     "6C_catdog_development": RUN_STAGE6C_CATDOG_DEVELOPMENT,
+    "6C1_catdog_instrument_amendment": RUN_STAGE6C1_CATDOG_INSTRUMENT_AMENDMENT,
     "6D_catdog_freeze": RUN_STAGE6D_CATDOG_FREEZE,
     "6E_catdog_confirmation": RUN_STAGE6E_CATDOG_CONFIRMATION,
 }
@@ -4700,7 +4713,7 @@ if REAL_MODE and (AUDIO_LINKAGE_AUDIT_ENABLED or CORRECTED_EXPLORATORY_ENABLED):
                     f"({ANSWER_READOUT_FIRST_TOKEN})"
                 )
         _rescue_config = {
-            "study": "multimodal_new_property_recruited_exploratory_corrected.v2",
+            "study": "multimodal_new_property_recruited_exploratory_corrected.v3",
             "supersedes_report_checksum": EXPECTED_RECRUITED_EXPLORATORY_REPORT_CHECKSUM,
             "source_file_sha256": EXPECTED_RECRUITED_SOURCE_FILE_SHA256,
             "source_audit_digest": EXPECTED_RECRUITED_SOURCE_AUDIT_DIGEST,
@@ -4729,6 +4742,8 @@ if REAL_MODE and (AUDIO_LINKAGE_AUDIT_ENABLED or CORRECTED_EXPLORATORY_ENABLED):
             "integrity_clauses_enforced": list(INTEGRITY_CLAUSES),
             "positive_control": {
                 "kind": "norm_matched_direct_answer",
+                "strength_match": "cumulative_band_displacement_l2",
+                "cumulative_displacement_match_tolerance": POST_CAST_TOLERANCE,
                 "implementation": (
                     "jlens.mmpilot.workspace_replication."
                     "unrestricted_greedy_direct_answer_trial"
@@ -5927,7 +5942,7 @@ from jlens.mmpilot.fp32_preflight import (
 )
 
 # Every tunable and switch above this point (the scientific target, the
-# population sizes, every threshold, the fp32 budget, the five RUN_STAGE6*
+# population sizes, every threshold, the fp32 budget, the six RUN_STAGE6*
 # switches, the two CONFIRM_CATDOG_*_BUDGET switches, and every *_RUN_DIR /
 # EXPECTED_*_CHECKSUM pin) is declared once, in section 1's configuration
 # cell -- not here. FOLLOWUP_STAGES and MODEL_STAGE need the switches before
@@ -5992,7 +6007,12 @@ if REAL_MODE:
     print("  primary outcome rule       exact >=",
           CATDOG_DEV_MIN_SUCCESS_RATE, "in every modality, every control >=",
           CATDOG_DEV_MIN_CONTROL_MARGIN, "below it; direct-answer diagnostic "
-          "only, cannot substitute for the primary effect")
+           "only, cannot substitute for the primary effect")
+    print("  direct-answer strength     cumulative band-displacement L2, tolerance",
+          CATDOG_CUMULATIVE_DISPLACEMENT_MATCH_TOLERANCE)
+    print("  direct-answer calibration  ",
+          CATDOG_DEV_IMAGES_PER_DIRECTION * 3,
+          "extra outcome-blind forwards (one per development control trial)")
     print("  zero fitting, zero backward passes in every Stage 6 cell")
 '''
 )
@@ -6239,7 +6259,9 @@ if REAL_MODE and RUN_STAGE6C_CATDOG_DEVELOPMENT and CATDOG_MODEL_LOADED_DTYPE is
         property_answer_matches, property_prompt,
         recruit_all_modality_capable_groups,
     )
-    from jlens.mmpilot.multimodal_instrument import MODEL_DTYPE_REALIZATION
+    from jlens.mmpilot.multimodal_instrument import (
+        INSTRUMENT_VERSION, MODEL_DTYPE_REALIZATION, POST_CAST_TOLERANCE,
+    )
     from jlens.mmpilot.multimodal_lens import (
         build_swap_bases_for_lens, load_broad_pooled_development_source,
         selected_lens_vector,
@@ -6250,6 +6272,12 @@ if REAL_MODE and RUN_STAGE6C_CATDOG_DEVELOPMENT and CATDOG_MODEL_LOADED_DTYPE is
     )
 
     _property = PROPERTY_FAMILIES[CATDOG_PROPERTY_FAMILY]
+    if CATDOG_CUMULATIVE_DISPLACEMENT_MATCH_TOLERANCE != POST_CAST_TOLERANCE:
+        raise RuntimeError(
+            "the cumulative band-displacement match must use the unchanged "
+            f"frozen 0.02 tolerance, not "
+            f"{CATDOG_CUMULATIVE_DISPLACEMENT_MATCH_TOLERANCE}"
+        )
     _src, _tgt = CATDOG_DIRECTION
     _clean_answer = _property.answer_for(_src).answer
     _swap_answer = _property.answer_for(_tgt).answer
@@ -6274,6 +6302,11 @@ if REAL_MODE and RUN_STAGE6C_CATDOG_DEVELOPMENT and CATDOG_MODEL_LOADED_DTYPE is
         "positions": "every original prompt position",
         "prompt_id": CATDOG_PROMPT_ID,
         "conditions": ["exact", "zero", "random", "unrelated", "direct_answer"],
+        "instrument_version": INSTRUMENT_VERSION,
+        "direct_answer_strength_match": "cumulative_band_displacement_l2",
+        "cumulative_displacement_match_tolerance": (
+            CATDOG_CUMULATIVE_DISPLACEMENT_MATCH_TOLERANCE
+        ),
         "images_per_direction": CATDOG_DEV_IMAGES_PER_DIRECTION,
         "max_new_tokens": CATDOG_MAX_NEW_TOKENS,
         "seed": CATDOG_SEED,
@@ -6305,6 +6338,11 @@ if REAL_MODE and RUN_STAGE6C_CATDOG_DEVELOPMENT and CATDOG_MODEL_LOADED_DTYPE is
                 "conditions": _dev_config["conditions"], "dtype": "float32",
                 "positions": "all_original_prompt_positions",
                 "max_new_tokens": CATDOG_MAX_NEW_TOKENS,
+                "instrument_version": INSTRUMENT_VERSION,
+                "direct_answer_strength_match": "cumulative_band_displacement_l2",
+                "cumulative_displacement_match_tolerance": (
+                    CATDOG_CUMULATIVE_DISPLACEMENT_MATCH_TOLERANCE
+                ),
             },
             extra={"study_digest": _dev_digest},
         ),
@@ -6449,6 +6487,7 @@ if REAL_MODE and RUN_STAGE6C_CATDOG_DEVELOPMENT and CATDOG_MODEL_LOADED_DTYPE is
         layers=BROAD_POOLED_BAND, capability_go=_dev_recruitment["complete"],
         min_success_rate=CATDOG_DEV_MIN_SUCCESS_RATE,
         min_control_margin=CATDOG_DEV_MIN_CONTROL_MARGIN,
+        post_cast_tolerance=CATDOG_CUMULATIVE_DISPLACEMENT_MATCH_TOLERANCE,
     )
     CATDOG_DEVELOPMENT_REPORT = {
         **CATDOG_DEVELOPMENT_REPORT, "scientific_config": _dev_config,
@@ -6480,6 +6519,110 @@ if REAL_MODE and RUN_STAGE6C_CATDOG_DEVELOPMENT and CATDOG_MODEL_LOADED_DTYPE is
     print("checksum ", CATDOG_DEVELOPMENT_REPORT["report_checksum"])
 elif RUN_STAGE6C_CATDOG_DEVELOPMENT:
     print("Stage 6C requested but blocked; confirm its printed budget.")
+'''
+)
+
+markdown(
+    r"""
+### Stage 6C1 -- read-only amendment of the cumulatively unmatched run (CPU)
+
+Pins the completed Stage 6C report by checksum and writes one amendment beside
+it. The report and every stored unit remain untouched; `scientific_recompute`
+is zero. This stage records why its `SCIENTIFIC_NULL` is now `INCONCLUSIVE` and
+does not predict the corrected rerun's outcome.
+"""
+)
+code(
+    r'''
+CATDOG_INSTRUMENT_AMENDMENT = None
+CATDOG_INSTRUMENT_AMENDMENT_PATH = None
+if REAL_MODE and RUN_STAGE6C1_CATDOG_INSTRUMENT_AMENDMENT:
+    from jlens.mmpilot.multimodal_followup import (
+        direct_answer_matching_defect_amendment,
+    )
+
+    _original_path = (
+        Path(CATDOG_UNMATCHED_DEVELOPMENT_RUN_DIR) /
+        "catdog_development_report.json"
+    )
+    _original = json.loads(_original_path.read_text(encoding="utf-8"))
+    _recorded = _original.get("report_checksum")
+    _recomputed = payload_checksum({
+        key: value for key, value in _original.items()
+        if key != "report_checksum"
+    })
+    if (
+        _recorded != EXPECTED_CATDOG_UNMATCHED_DEVELOPMENT_CHECKSUM
+        or _recomputed != _recorded
+    ):
+        raise RuntimeError(
+            "the completed unmatched Stage 6C report failed its checksum pin: "
+            f"recorded={_recorded!r} recomputed={_recomputed!r} expected="
+            f"{EXPECTED_CATDOG_UNMATCHED_DEVELOPMENT_CHECKSUM!r}"
+        )
+    _states = list((_original.get("instrument_states") or {}).values())
+    if _original.get("verdict") != "NEW_PROPERTY_DEVELOPMENT_NO_GO" or _states != [
+        "SCIENTIFIC_NULL"
+    ]:
+        raise RuntimeError(
+            "the pinned report no longer has the classification this amendment "
+            f"corrects: verdict={_original.get('verdict')!r}, states={_states!r}"
+        )
+    _candidate = direct_answer_matching_defect_amendment(
+        original_report_path=str(_original_path),
+        original_report_checksum=EXPECTED_CATDOG_UNMATCHED_DEVELOPMENT_CHECKSUM,
+        original_run_name=Path(CATDOG_UNMATCHED_DEVELOPMENT_RUN_DIR).name,
+        original_verdict=_original["verdict"],
+        observed_direct_to_exact_ratios={
+            "minimum": 2.3, "median": 3.1, "maximum": 4.7,
+        },
+        n_trials=24,
+        corrected_stage="6C",
+    )
+    CATDOG_INSTRUMENT_AMENDMENT_PATH = (
+        Path(CATDOG_UNMATCHED_DEVELOPMENT_RUN_DIR) /
+        "catdog_direct_answer_matching_amendment.json"
+    )
+    if CATDOG_INSTRUMENT_AMENDMENT_PATH.exists():
+        CATDOG_INSTRUMENT_AMENDMENT = json.loads(
+            CATDOG_INSTRUMENT_AMENDMENT_PATH.read_text(encoding="utf-8")
+        )
+        _existing_checksum = CATDOG_INSTRUMENT_AMENDMENT.get("amendment_checksum")
+        _existing_recomputed = payload_checksum({
+            key: value for key, value in CATDOG_INSTRUMENT_AMENDMENT.items()
+            if key != "amendment_checksum"
+        })
+        if (
+            _existing_checksum != _existing_recomputed
+            or CATDOG_INSTRUMENT_AMENDMENT.get("original_report_checksum")
+            != EXPECTED_CATDOG_UNMATCHED_DEVELOPMENT_CHECKSUM
+            or CATDOG_INSTRUMENT_AMENDMENT.get(
+                "observed_direct_to_exact_cumulative_displacement_ratio"
+            ) != _candidate[
+                "observed_direct_to_exact_cumulative_displacement_ratio"
+            ]
+            or CATDOG_INSTRUMENT_AMENDMENT.get("omitted_integrity_clauses")
+            != _candidate["omitted_integrity_clauses"]
+            or CATDOG_INSTRUMENT_AMENDMENT.get("corrected_classification")
+            != "INCONCLUSIVE"
+            or CATDOG_INSTRUMENT_AMENDMENT.get("scientific_recompute") != 0
+        ):
+            raise RuntimeError(
+                "an incompatible or corrupt catdog amendment already exists; "
+                "refusing to overwrite it"
+            )
+    else:
+        CATDOG_INSTRUMENT_AMENDMENT = _candidate
+        CATDOG_INSTRUMENT_AMENDMENT_PATH.write_text(
+            json.dumps(CATDOG_INSTRUMENT_AMENDMENT, indent=2), encoding="utf-8"
+        )
+    print("CAT->DOG COMPLETED RUN AMENDMENT -- INCONCLUSIVE")
+    print("scientific recompute", CATDOG_INSTRUMENT_AMENDMENT["scientific_recompute"])
+    print("original modified   ", CATDOG_INSTRUMENT_AMENDMENT["original_report_modified"])
+    print("path                ", CATDOG_INSTRUMENT_AMENDMENT_PATH)
+    print("checksum            ", CATDOG_INSTRUMENT_AMENDMENT["amendment_checksum"])
+elif RUN_STAGE6C1_CATDOG_INSTRUMENT_AMENDMENT:
+    print("Stage 6C1 requested but REAL_MODE is off.")
 '''
 )
 

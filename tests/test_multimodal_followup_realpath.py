@@ -75,6 +75,7 @@ _CLEAN_DEFECTS: dict = {
     "corrected_relative_error": 0.004,
     "relative_residual_drift": 0.001,
     "direct_answer_match_error": 0.002,
+    "direct_answer_cumulative_match_error": 0.002,
     "nonfinite": False,
     "hooks_do_not_fire": False,
     "controls_move": False,
@@ -106,7 +107,22 @@ def _synthetic_swap_stats(
     """
     bad = float("nan")
     stats = {}
-    for layer in sorted(map(int, layers)):
+    expected_layers = sorted(map(int, layers))
+    accumulator = {
+        "expected_layers": expected_layers,
+        "pending": {},
+        "history": [
+            {
+                "forward_pass": index,
+                "positions": [0, 1, 2, 3],
+                "layers": expected_layers,
+                "displacement_norm_by_position": [1.0] * 4,
+                "all_finite": bool(finite),
+            }
+            for index in range(int(n_passes))
+        ],
+    }
+    for layer in expected_layers:
         record = {
             "alpha": float(alpha),
             "n_positions": 4,
@@ -130,22 +146,55 @@ def _synthetic_swap_stats(
             "positions": [0, 1, 2, 3],
             "basis": {"diagnostics": {"condition_number": 2.0, "numerical_rank": 2}},
             "swap_history": [record] * int(n_passes),
+            "_band_displacement_accumulator": accumulator,
         }
     return stats
 
 
 def _synthetic_direct_answer_stats(
-    layers, *, n_passes: int, match_error: float, policy=None
+    layers,
+    *,
+    n_passes: int,
+    match_error: float,
+    cumulative_match_error: float | None = None,
+    policy=None,
 ) -> dict:
     """The direct-answer control's hook stats, same reasoning as above."""
     stats = {}
-    for layer in sorted(map(int, layers)):
+    expected_layers = sorted(map(int, layers))
+    cumulative_error = (
+        float(match_error)
+        if cumulative_match_error is None
+        else float(cumulative_match_error)
+    )
+    band_state = {
+        "expected_layers": expected_layers,
+        "calibration_forward_passes": 1,
+        "direct_layers": [],
+        "band_history": [
+            {
+                "forward_pass": index,
+                "positions": [0, 1, 2, 3],
+                "layers": expected_layers,
+                "exact_exchange_displacement_norm_by_position": [1.0] * 4,
+                "direct_answer_displacement_norm_by_position": [
+                    1.0 + cumulative_error
+                ] * 4,
+                "relative_match_error_by_position": [cumulative_error] * 4,
+                "scale_by_position": [1.0] * 4,
+                "all_finite": True,
+            }
+            for index in range(int(n_passes))
+        ],
+    }
+    for layer in expected_layers:
         stats[layer] = {
             "layer": layer,
             "n_forward_passes": int(n_passes),
             "positions": [0, 1, 2, 3],
             "answer_vector_norm": 1.0,
             "answer_vector_checksum": "sha256:" + "0" * 64,
+            "_band_displacement_state": band_state,
             "history": [
                 {
                     "n_positions": 4,
@@ -534,6 +583,9 @@ class _Harness:
                 sorted(map(int, bases)),
                 n_passes=1,
                 match_error=float(defects["direct_answer_match_error"]),
+                cumulative_match_error=float(
+                    defects["direct_answer_cumulative_match_error"]
+                ),
                 policy=realization_policy,
             )
             return {

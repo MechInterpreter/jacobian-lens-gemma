@@ -24,6 +24,7 @@ from jlens.mmpilot.coordinate_swap import (
 from jlens.mmpilot.multimodal_followup import (
     MultimodalFollowupRefused,
     corrected_exploratory_verdict,
+    direct_answer_matching_defect_amendment,
     direct_answer_trial_row,
     generation_trial_row,
     instrument_defect_amendment,
@@ -222,11 +223,27 @@ def test_the_direct_answer_arm_is_gated_on_its_own_realization_field() -> None:
     row.pop("max_coordinate_update_error")
     row.pop("max_orthogonal_residual_drift")
     row["max_relative_norm_match_error"] = 0.002
+    row["max_relative_cumulative_band_displacement_match_error"] = 0.002
     assert trial_integrity(row, layers=_BAND)["passed"] is True
     row["max_relative_norm_match_error"] = 0.021
     assert "post_cast_coordinate_error_within_tolerance" in trial_integrity(
         row, layers=_BAND
     )["failed_clauses"]
+
+
+def test_per_layer_matched_but_cumulatively_unmatched_control_fails() -> None:
+    """Regression for the exact hole in the completed Stage 6C run."""
+    row = _clean_row(condition="direct_answer", alpha=1.0)
+    row.pop("all_layers_are_exact_alpha_one_exchange_before_cast")
+    row.pop("max_coordinate_update_error")
+    row.pop("max_orthogonal_residual_drift")
+    row["max_relative_norm_match_error"] = 1e-7
+    row["max_relative_cumulative_band_displacement_match_error"] = 2.1
+    result = trial_integrity(row, layers=_BAND)
+    assert result["passed"] is False
+    assert result["failed_clauses"] == [
+        "cumulative_band_displacement_norm_matched"
+    ]
 
 
 # ----------------------------------------------------------- the state machine
@@ -597,6 +614,43 @@ def test_the_instrument_amendment_recomputes_nothing() -> None:
     assert recomputed == amendment["amendment_checksum"]
 
 
+def test_catdog_matching_amendment_pins_the_completed_run_and_recomputes_nothing() -> None:
+    amendment = direct_answer_matching_defect_amendment(
+        original_report_path=(
+            "/content/drive/MyDrive/jacobian-lens-gemma/runs/mmcatdogdev/"
+            "mmcatdogdev_real_bc03b54e8494/catdog_development_report.json"
+        ),
+        original_report_checksum=(
+            "sha256:ccf34c1303c17960edc13653298c4badba462a7cbda5ca90b5fb637d7af04be2"
+        ),
+        original_run_name="mmcatdogdev_real_bc03b54e8494",
+        original_verdict="NEW_PROPERTY_DEVELOPMENT_NO_GO",
+        observed_direct_to_exact_ratios={
+            "minimum": 2.3,
+            "median": 3.1,
+            "maximum": 4.7,
+        },
+        n_trials=24,
+        corrected_stage="6C",
+        written_utc="2026-08-25T00:00:00+00:00",
+    )
+    assert amendment["scientific_recompute"] == 0
+    assert amendment["original_report_modified"] is False
+    assert amendment["original_units_modified"] is False
+    assert amendment["corrected_classification"] == "INCONCLUSIVE"
+    assert amendment["original_null_is_readable_as_a_scientific_null"] is False
+    assert amendment["omitted_integrity_clauses"] == [
+        "cumulative_band_displacement_norm_matched"
+    ]
+    assert amendment["observed_direct_to_exact_cumulative_displacement_ratio"][
+        "median"
+    ] == 3.1
+    recomputed = payload_checksum(
+        {key: value for key, value in amendment.items() if key != "amendment_checksum"}
+    )
+    assert recomputed == amendment["amendment_checksum"]
+
+
 def test_an_amendment_that_names_nothing_is_refused() -> None:
     with pytest.raises(MultimodalFollowupRefused):
         instrument_defect_amendment(
@@ -709,6 +763,7 @@ def _corrected_rows(*, exact_moves: bool, direct_moves: bool) -> list[dict]:
                 control.pop("max_coordinate_update_error")
                 control.pop("max_orthogonal_residual_drift")
                 control["max_relative_norm_match_error"] = 0.001
+                control["max_relative_cumulative_band_displacement_match_error"] = 0.001
                 control["max_activation_norm_ratio"] = 1.0
                 rows.append({
                     **control,
@@ -962,6 +1017,9 @@ def test_the_direct_answer_row_is_never_counted_as_a_coordinate_exchange() -> No
                 "all_finite": True,
                 "all_model_dtype_realizations_converged": True,
                 "max_relative_norm_match_error": 0.001,
+                "max_exact_exchange_cumulative_band_displacement_norm": 3.0,
+                "max_direct_answer_cumulative_band_displacement_norm": 3.0,
+                "max_relative_cumulative_band_displacement_match_error": 0.001,
                 "model_dtype_realization_policy": MODEL_DTYPE_REALIZATION.to_dict(),
             },
         },

@@ -98,7 +98,7 @@ __all__ = [
     "trial_integrity",
 ]
 
-INSTRUMENT_VERSION = "mmpilot.multimodal_swap_instrument_integrity.v1"
+INSTRUMENT_VERSION = "mmpilot.multimodal_swap_instrument_integrity.v2"
 
 #: The one tolerance, imported rather than restated. A second literal is how a
 #: gate quietly loosens; see
@@ -121,6 +121,7 @@ INTEGRITY_CLAUSES: tuple[str, ...] = (
     "model_dtype_realization_converged",
     "post_cast_coordinate_error_within_tolerance",
     "post_cast_residual_drift_within_tolerance",
+    "cumulative_band_displacement_norm_matched",
     "activation_norm_ratio_within_limit",
     "update_to_activation_ratio_within_limit",
     "no_teacher_forcing",
@@ -178,8 +179,9 @@ def trial_integrity(
             :func:`jlens.mmpilot.multimodal_followup.generation_trial_row` or
             :func:`jlens.mmpilot.multimodal_followup.direct_answer_trial_row`.
         layers: The exact layer list the trial was supposed to patch.
-        tolerance: Post-cast relative tolerance for both the coordinate error
-            and the orthogonal residual drift. Defaults to the frozen 0.02.
+        tolerance: Relative tolerance for the post-cast coordinate error,
+            orthogonal residual drift, and cumulative direct-answer strength
+            match. Defaults to the frozen 0.02.
 
     Returns:
         ``{"passed": bool, "clauses": {...}, "failed_clauses": [...],
@@ -265,6 +267,11 @@ def trial_integrity(
         )
         not_applicable.append("post_cast_residual_drift_within_tolerance")
         clauses["post_cast_residual_drift_within_tolerance"] = True
+        bound_clause(
+            "cumulative_band_displacement_norm_matched",
+            "max_relative_cumulative_band_displacement_match_error",
+            tolerance,
+        )
     else:
         bound_clause(
             "post_cast_coordinate_error_within_tolerance",
@@ -276,6 +283,8 @@ def trial_integrity(
             "max_orthogonal_residual_drift",
             tolerance,
         )
+        not_applicable.append("cumulative_band_displacement_norm_matched")
+        clauses["cumulative_band_displacement_norm_matched"] = True
 
     bound_clause(
         "activation_norm_ratio_within_limit",

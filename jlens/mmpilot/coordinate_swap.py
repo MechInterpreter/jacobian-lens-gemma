@@ -1188,6 +1188,7 @@ def coordinate_swap_layer(
     realization_policy: ModelDtypeRealizationPolicy | None = None,
     require_frozen: bool = True,
     record_coordinates: bool = True,
+    band_displacement_accumulator: dict | None = None,
 ):
     """Patch one layer's block output at every selected position.
 
@@ -1256,6 +1257,57 @@ def coordinate_swap_layer(
         new_hidden = hidden.clone()
         new_hidden[batch_row, positions] = patched.to(hidden.dtype)
 
+        if band_displacement_accumulator is not None:
+            pass_index = int(stats["n_forward_passes"])
+            pending = band_displacement_accumulator.setdefault("pending", {})
+            entry = pending.get(pass_index)
+            realized_update = (
+                new_hidden[batch_row, positions].detach().float()
+                - selected.detach().float()
+            )
+            expected_layers = list(
+                map(int, band_displacement_accumulator["expected_layers"])
+            )
+            if entry is None:
+                if layer != expected_layers[0]:
+                    raise CoordinateSwapError(
+                        "cumulative band-displacement audit did not begin at "
+                        f"the first layer: saw {layer}, expected {expected_layers[0]}"
+                    )
+                entry = {
+                    "positions": list(positions),
+                    "layers": [],
+                    "update_sum": torch.zeros_like(realized_update),
+                }
+                pending[pass_index] = entry
+            if list(entry["positions"]) != list(positions):
+                raise CoordinateSwapError(
+                    "cumulative band-displacement audit saw different positions "
+                    f"inside one forward pass at layer {layer}"
+                )
+            expected_layer = expected_layers[len(entry["layers"])]
+            if layer != expected_layer:
+                raise CoordinateSwapError(
+                    "cumulative band-displacement audit saw layers out of order: "
+                    f"saw {layer}, expected {expected_layer}"
+                )
+            entry["layers"].append(layer)
+            entry["update_sum"] = entry["update_sum"] + realized_update
+            if len(entry["layers"]) == len(expected_layers):
+                norms = entry["update_sum"].norm(dim=-1)
+                band_displacement_accumulator.setdefault("history", []).append(
+                    {
+                        "forward_pass": pass_index,
+                        "positions": list(positions),
+                        "layers": list(entry["layers"]),
+                        "displacement_norm_by_position": [
+                            float(value) for value in norms.detach().cpu()
+                        ],
+                        "all_finite": bool(torch.isfinite(norms).all()),
+                    }
+                )
+                del pending[pass_index]
+
         stats["n_forward_passes"] += 1
         stats["seq_len"] = int(seq_len)
         stats["positions"] = list(positions)
@@ -1306,6 +1358,11 @@ def coordinate_swap_band(
     if not bases:
         raise CoordinateSwapError("a coordinate-swap band needs at least one layer")
     stats: dict[int, dict] = {}
+    band_displacement_accumulator = {
+        "expected_layers": sorted(map(int, bases)),
+        "pending": {},
+        "history": [],
+    }
     with ExitStack() as stack:
         for layer in sorted(bases):
             stats[int(layer)] = stack.enter_context(
@@ -1321,7 +1378,11 @@ def coordinate_swap_band(
                     realization_policy=realization_policy,
                     require_frozen=require_frozen,
                     record_coordinates=record_coordinates,
+                    band_displacement_accumulator=band_displacement_accumulator,
                 )
+            )
+            stats[int(layer)]["_band_displacement_accumulator"] = (
+                band_displacement_accumulator
             )
         yield stats
 

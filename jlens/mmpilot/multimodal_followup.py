@@ -77,7 +77,7 @@ FOLLOWUP_VERSION = "mmpilot.multimodal_followup.v1"
 LOCALIZATION_VERSION = "mmpilot.multimodal_band_localization_exploratory.v1"
 PROPERTY_AUDIT_VERSION = "mmpilot.multimodal_property_audit.v1"
 PROPERTY_PROMPT_SCREEN_VERSION = "mmpilot.multimodal_property_prompt_screen.v1"
-NEW_PROPERTY_DEVELOPMENT_VERSION = "mmpilot.multimodal_new_property_development.v1"
+NEW_PROPERTY_DEVELOPMENT_VERSION = "mmpilot.multimodal_new_property_development.v2"
 NEW_PROPERTY_FREEZE_VERSION = "mmpilot.multimodal_new_property_frozen_design.v1"
 NEW_PROPERTY_CONFIRMATION_VERSION = "mmpilot.multimodal_new_property_confirmation.v1"
 ASYMMETRY_VERSION = "mmpilot.multimodal_asymmetry_replication.v1"
@@ -94,10 +94,13 @@ RECRUITED_EXPLORATORY_VERSION = (
 #: concepts, directions, band, alpha, positions, modalities, population,
 #: controls and thresholds.
 CORRECTED_EXPLORATORY_VERSION = (
-    "mmpilot.multimodal_new_property_recruited_exploratory_corrected.v2"
+    "mmpilot.multimodal_new_property_recruited_exploratory_corrected.v3"
 )
 INSTRUMENT_AMENDMENT_VERSION = (
     "mmpilot.multimodal_swap_instrument_amendment.v1"
+)
+DIRECT_ANSWER_MATCHING_AMENDMENT_VERSION = (
+    "mmpilot.multimodal_direct_answer_matching_amendment.v1"
 )
 LEGACY_CONFIRMATION_AUDIT_VERSION = (
     "mmpilot.multimodal_legacy_confirmation_realization_audit.v1"
@@ -107,8 +110,9 @@ LEGACY_CONFIRMATION_AUDIT_VERSION = (
 #: promote it. It is a diagnostic of causal leverage on this path, never a
 #: measurement of coordinate exchange.
 DIRECT_ANSWER_CONTROL_ROLE = (
-    "norm-matched direct-answer positive control: diagnoses whether any "
-    "intervention of the exchange's magnitude on this band and these positions "
+    "cumulative-band-displacement-matched direct-answer positive control: "
+    "diagnoses whether any intervention of the exchange's magnitude on this "
+    "band and these positions "
     "can move the requested answer. A pass licenses reading a failed exchange "
     "as a scientific null. It can never turn a failed exchange into a GO."
 )
@@ -2301,6 +2305,9 @@ def generation_trial_row(
         "max_update_to_activation_norm_ratio": _worst(
             "max_update_to_activation_ratio", 0.0
         ),
+        "max_cumulative_band_displacement_norm": _measured(
+            "max_cumulative_band_displacement_norm"
+        ),
         "max_orthogonal_residual_drift": _measured(
             "max_post_cast_relative_residual_drift"
         ),
@@ -2353,9 +2360,10 @@ def direct_answer_trial_row(
     The control comes from
     :func:`jlens.mmpilot.workspace_replication.unrestricted_greedy_direct_answer_trial`
     -- the repository's existing implementation, which adds the *answer*
-    token's lens direction with exactly the L2 norm the exact exchange would
-    have had at that layer and position. It is not additive steering invented
-    here, and it is not a coordinate swap: it is scored into its own
+    token's lens direction with a band-wide scale chosen so the vector sum of
+    its realized updates has exactly the exact exchange's cumulative L2
+    displacement at that position. It is not additive steering invented here,
+    and it is not a coordinate swap: it is scored into its own
     ``condition = "direct_answer"`` row so no aggregation can mistake it for
     one.
 
@@ -2437,6 +2445,21 @@ def direct_answer_trial_row(
             "max_update_to_activation_ratio", 0.0
         ),
         "max_relative_norm_match_error": _measured("max_relative_norm_match_error"),
+        "max_exact_exchange_cumulative_band_displacement_norm": _measured(
+            "max_exact_exchange_cumulative_band_displacement_norm"
+        ),
+        "max_direct_answer_cumulative_band_displacement_norm": _measured(
+            "max_direct_answer_cumulative_band_displacement_norm"
+        ),
+        "max_relative_cumulative_band_displacement_match_error": _measured(
+            "max_relative_cumulative_band_displacement_match_error"
+        ),
+        "min_cumulative_band_displacement_scale": _measured(
+            "min_cumulative_band_displacement_scale"
+        ),
+        "max_cumulative_band_displacement_scale": _measured(
+            "max_cumulative_band_displacement_scale"
+        ),
         "all_hooks_fired": _recorded_flag("all_hooks_fired"),
         "all_finite": _recorded_flag("all_finite"),
         "all_model_dtype_realizations_converged": _recorded_flag(
@@ -2577,6 +2600,9 @@ def new_property_development_verdict(
             "min_control_margin": float(min_control_margin),
             "max_activation_norm_ratio": float(max_activation_norm_ratio),
             "max_update_to_activation_norm_ratio": float(max_update_ratio),
+            "max_relative_cumulative_band_displacement_match_error": float(
+                post_cast_tolerance
+            ),
             "predeclared_before_outcomes": True,
         },
         "directions": per_direction,
@@ -2591,6 +2617,9 @@ def new_property_development_verdict(
         "instrument_state_vocabulary": list(INSTRUMENT_STATES),
         "integrity_clauses_enforced": list(INTEGRITY_CLAUSES),
         "post_cast_relative_tolerance": float(post_cast_tolerance),
+        "cumulative_band_displacement_match_tolerance": float(
+            post_cast_tolerance
+        ),
         "model_dtype_realization_policy": MODEL_DTYPE_REALIZATION.to_dict(),
         "model_dtype_realization_policy_digest": realization_policy_digest(),
         "direct_answer_positive_control_role": DIRECT_ANSWER_CONTROL_ROLE,
@@ -2918,6 +2947,103 @@ def instrument_defect_amendment(
             "It re-measures nothing, promotes nothing and demotes nothing "
             "numerically; it withdraws only the licence to read the recorded "
             "null as a null."
+        ),
+    }
+    return {**payload, "amendment_checksum": payload_checksum(payload)}
+
+
+def direct_answer_matching_defect_amendment(
+    *,
+    original_report_path: str,
+    original_report_checksum: str,
+    original_run_name: str,
+    original_verdict: str,
+    observed_direct_to_exact_ratios: Mapping[str, float],
+    n_trials: int,
+    corrected_stage: str,
+    written_utc: str | None = None,
+) -> dict:
+    """Withdraw a scientific-null label whose positive control was stronger.
+
+    This is a read-only classification amendment.  It binds the completed
+    report by path and checksum, records the already-measured geometry, and
+    recomputes no outcome or scientific metric.  The original report and unit
+    store remain untouched; a corrected Stage 6C run must use a fresh
+    fingerprint because its intervention changed.
+    """
+
+    missing = [
+        name
+        for name, value in (
+            ("original_report_path", original_report_path),
+            ("original_report_checksum", original_report_checksum),
+            ("original_run_name", original_run_name),
+            ("original_verdict", original_verdict),
+            ("corrected_stage", corrected_stage),
+        )
+        if not str(value or "")
+    ]
+    if missing:
+        raise MultimodalFollowupRefused(
+            f"a direct-answer matching amendment cannot name what it corrects: {missing}"
+        )
+    required_ratio_keys = {"minimum", "median", "maximum"}
+    ratios = {
+        str(key): float(value)
+        for key, value in observed_direct_to_exact_ratios.items()
+    }
+    if set(ratios) != required_ratio_keys:
+        raise MultimodalFollowupRefused(
+            "the direct-answer matching amendment requires exactly minimum, "
+            f"median and maximum ratios; got {sorted(ratios)}"
+        )
+    if int(n_trials) < 1 or not (0.0 < ratios["minimum"] <= ratios["median"] <= ratios["maximum"]):
+        raise MultimodalFollowupRefused(
+            "the observed cumulative-strength ratio summary is invalid"
+        )
+    clause = "cumulative_band_displacement_norm_matched"
+    if clause not in INTEGRITY_CLAUSES:
+        raise MultimodalFollowupRefused(
+            f"the corrected instrument does not declare {clause!r}"
+        )
+    payload = {
+        "schema": "jlens.mmpilot.multimodal_direct_answer_matching_amendment.v1",
+        "amendment_version": DIRECT_ANSWER_MATCHING_AMENDMENT_VERSION,
+        "written_utc": written_utc
+        or datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "original_report_path": str(original_report_path),
+        "original_report_checksum": str(original_report_checksum),
+        "original_run_name": str(original_run_name),
+        "original_verdict": str(original_verdict),
+        "original_verdict_is_reproduced_verbatim": True,
+        "defect": (
+            "the direct-answer positive control matched the exact exchange's "
+            "realized update norm separately at each layer, but its coherent "
+            "answer-direction steps accumulated across the band while the "
+            "exchange directions partially cancelled; cumulative intervention "
+            "strength was therefore not matched"
+        ),
+        "omitted_integrity_clauses": [clause],
+        "observed_direct_to_exact_cumulative_displacement_ratio": ratios,
+        "n_trials": int(n_trials),
+        "all_observed_trials_had_stronger_direct_answer_control": (
+            ratios["minimum"] > 1.0
+        ),
+        "corrected_classification": "INCONCLUSIVE",
+        "original_null_is_readable_as_a_scientific_null": False,
+        "corrected_stage": str(corrected_stage),
+        "corrected_run_requires_fresh_fingerprint": True,
+        "scientific_recompute": 0,
+        "scientific_numbers_unchanged": True,
+        "original_report_modified": False,
+        "original_units_modified": False,
+        "original_run_modified": False,
+        "verdict_changed_by_prose": False,
+        "boundary": (
+            "This amendment records an intervention-strength matching defect. "
+            "It changes no stored result and makes no claim about what the "
+            "cumulatively matched rerun will produce; it withdraws only the "
+            "licence to read the recorded SCIENTIFIC_NULL as a scientific null."
         ),
     }
     return {**payload, "amendment_checksum": payload_checksum(payload)}
@@ -3781,6 +3907,7 @@ def stage_map() -> dict:
 __all__ = [
     "CORRECTED_EXPLORATORY_VERSION",
     "DIRECT_ANSWER_CONTROL_ROLE",
+    "DIRECT_ANSWER_MATCHING_AMENDMENT_VERSION",
     "INSTRUMENT_AMENDMENT_VERSION",
     "LEGACY_CONFIRMATION_AUDIT_VERSION",
     "ANIMAL_SOUND_PROMPT_CANDIDATES",
@@ -3825,6 +3952,7 @@ __all__ = [
     "exclusion_universe",
     "corrected_exploratory_verdict",
     "direct_answer_trial_row",
+    "direct_answer_matching_defect_amendment",
     "failure_mode",
     "followup_budget",
     "freeze_new_property_design",

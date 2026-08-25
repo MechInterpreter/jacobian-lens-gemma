@@ -82,7 +82,7 @@ _NEGATION_MARKERS = frozenset({"not", "no", "non", "never", "except", "outside"}
 LOADING_VERSION = "mmpilot.clean_source_loading.v1"
 LOCALIZATION_VERSION = "mmpilot.loading_only_localization.v2"
 CONFIRMATION_VERSION = "mmpilot.fresh_multimodal_confirmation.v2"
-TEXT_DIAGNOSTIC_VERSION = "mmpilot.paper_first_text_swap_diagnostic.v2"
+TEXT_DIAGNOSTIC_VERSION = "mmpilot.paper_first_text_swap_diagnostic.v3"
 TEXT_DIAGNOSTIC_CONDITIONS = (
     "exact_alpha1",
     "zero",
@@ -1224,6 +1224,26 @@ def summarize_swap_diagnostics(
         raise WorkspaceReplicationRefused(
             "swap diagnostics require at least one completed generation pass"
         )
+    first_stats = next(iter(stats.values()), {})
+    band_accumulator = first_stats.get("_band_displacement_accumulator") or {}
+    band_history = [
+        dict(record) for record in band_accumulator.get("history") or ()
+    ]
+    band_norms = [
+        float(value)
+        for record in band_history
+        for value in record.get("displacement_norm_by_position") or ()
+    ]
+    cumulative_complete = (
+        bool(band_history)
+        and not bool(band_accumulator.get("pending"))
+        and len(band_history) == expected_passes
+        and all(
+            list(map(int, record.get("layers") or ()))
+            == list(map(int, band_accumulator.get("expected_layers") or ()))
+            for record in band_history
+        )
+    )
     payload = {
         "version": TEXT_DIAGNOSTIC_VERSION,
         "by_layer": by_layer,
@@ -1261,6 +1281,14 @@ def summarize_swap_diagnostics(
         and bool(residual_drifts)
         and max(relative_errors) <= TEXT_POST_CAST_MAX_RELATIVE_ERROR
         and max(residual_drifts) <= TEXT_POST_CAST_MAX_RELATIVE_ERROR,
+        "cumulative_band_displacement_definition": (
+            "L2 norm of the vector sum of realized residual-stream updates "
+            "across every patched layer, computed separately per prompt "
+            "position and forward pass"
+        ),
+        "cumulative_band_displacement_by_forward_pass": band_history,
+        "all_cumulative_band_displacements_complete": cumulative_complete,
+        "max_cumulative_band_displacement_norm": max(band_norms, default=None),
     }
     return {**payload, "diagnostic_checksum": payload_checksum(payload)}
 
@@ -1277,26 +1305,93 @@ def _norm_matched_direct_answer_band(
     realization_policy: ModelDtypeRealizationPolicy | None = None,
     alpha: float = 1.0,
 ):
-    """Add the answer direction with each position's exact-swap update norm.
+    """Add the answer direction at the exact swap's cumulative band strength.
 
-    This is a positive control, not a coordinate swap.  Its update has the
-    same post-cast L2 norm as the exchange would have had **at ``alpha``** at
-    that layer and position, so a failure cannot be dismissed as comparing
-    interventions of unrelated intensity.
+    The control first runs one outcome-blind calibration forward with the
+    exact exchange on the same untouched prompt.  It sums the *realized update
+    vectors* across the whole band, separately at every patched position.  The
+    direct-answer steps are then scaled together so the L2 norm of their vector
+    sum equals that exact cumulative displacement.
 
-    ``alpha`` must be the same strength the swap arm uses.  It was previously
-    pinned to 1.0, which silently unmatched the control whenever the swap ran
-    at any other strength -- an alpha=2 run then compared a doubled swap
-    against an alpha=1 control and its pass rate measured nothing.
+    Matching each layer independently is insufficient: coherent answer-vector
+    steps can accumulate while layer-specific exchange directions cancel.  The
+    old implementation therefore produced a much stronger positive control
+    despite reporting a near-zero per-layer norm error.
     """
 
     if set(map(int, bases)) != set(map(int, answer_vectors)):
         raise WorkspaceReplicationRefused(
             "direct-answer vectors must cover exactly the coordinate-swap band"
         )
+    layers = sorted(map(int, bases))
     stats: dict[int, dict] = {}
+    unit_answers: dict[int, torch.Tensor] = {}
+    state: dict = {
+        "mode": "idle",
+        "expected_layers": layers,
+        "calibration_layers": [],
+        "calibration_positions": None,
+        "calibration_exact_sum": None,
+        "calibration_exact_norms": {},
+        "calibration_forward_passes": 0,
+        "band_history": [],
+        "direct_layers": [],
+        "direct_sum": None,
+    }
+
+    def finish_calibration() -> None:
+        if state["mode"] != "calibrate":
+            raise WorkspaceReplicationRefused(
+                "direct-answer cumulative calibration was not active"
+            )
+        if state["calibration_layers"] != layers:
+            raise WorkspaceReplicationRefused(
+                "direct-answer cumulative calibration did not traverse the "
+                f"whole band: {state['calibration_layers']} != {layers}"
+            )
+        exact_sum = state["calibration_exact_sum"]
+        if not torch.is_tensor(exact_sum):
+            raise WorkspaceReplicationRefused(
+                "direct-answer cumulative calibration recorded no exact updates"
+            )
+        planned = torch.zeros_like(exact_sum)
+        for layer in layers:
+            exact_norm = state["calibration_exact_norms"].get(layer)
+            if not torch.is_tensor(exact_norm):
+                raise WorkspaceReplicationRefused(
+                    f"direct-answer calibration has no exact norm for layer {layer}"
+                )
+            direction = unit_answers[layer].to(
+                device=planned.device, dtype=torch.float32
+            )
+            planned = planned + exact_norm[:, None] * direction
+        exact_cumulative_norm = exact_sum.norm(dim=-1)
+        planned_cumulative_norm = planned.norm(dim=-1)
+        impossible = (exact_cumulative_norm > 0.0) & (
+            planned_cumulative_norm <= 1e-12
+        )
+        if bool(impossible.any()):
+            raise WorkspaceReplicationRefused(
+                "direct-answer cumulative match is undefined because the "
+                "planned answer-direction steps cancel to zero"
+            )
+        scale = torch.where(
+            planned_cumulative_norm > 1e-12,
+            exact_cumulative_norm / planned_cumulative_norm,
+            torch.zeros_like(planned_cumulative_norm),
+        )
+        if not bool(torch.isfinite(scale).all()):
+            raise WorkspaceReplicationRefused(
+                "non-finite scale in direct-answer cumulative calibration"
+            )
+        state["exact_cumulative_norm"] = exact_cumulative_norm
+        state["planned_direct_cumulative_norm"] = planned_cumulative_norm
+        state["scale_by_position"] = scale
+        state["calibration_forward_passes"] += 1
+        state["mode"] = "intervene"
+
     with ExitStack() as stack:
-        for layer in sorted(map(int, bases)):
+        for layer in layers:
             basis = bases[layer]
             trainable = [
                 name
@@ -1319,6 +1414,7 @@ def _norm_matched_direct_answer_band(
                     f"zero direct-answer vector at layer {layer}"
                 )
             unit_answer = answer / norm
+            unit_answers[layer] = unit_answer
             row = {
                 "layer": layer,
                 "n_forward_passes": 0,
@@ -1326,6 +1422,7 @@ def _norm_matched_direct_answer_band(
                 "history": [],
                 "answer_vector_norm": norm,
                 "answer_vector_checksum": tensor_checksum(answer),
+                "_band_displacement_state": state,
             }
             stats[layer] = row
 
@@ -1345,15 +1442,68 @@ def _norm_matched_direct_answer_band(
                         evidence_span=evidence_span,
                     )
                     selected = hidden[0, positions]
-                    exact_after_cast, _ = swap_coordinates(
-                        selected,
-                        layer_basis.V,
-                        alpha=float(alpha),
-                        realization_policy=realization_policy,
+                    if state["mode"] == "calibrate":
+                        exact_after_cast, _ = swap_coordinates(
+                            selected,
+                            layer_basis.V,
+                            alpha=float(alpha),
+                            realization_policy=realization_policy,
+                        )
+                        if list(positions) != list(
+                            state["calibration_positions"] or positions
+                        ):
+                            raise WorkspaceReplicationRefused(
+                                "direct-answer calibration changed patched positions "
+                                f"inside the band at layer {layer_index}"
+                            )
+                        if state["calibration_positions"] is None:
+                            state["calibration_positions"] = list(positions)
+                        expected_layer = layers[len(state["calibration_layers"])]
+                        if layer_index != expected_layer:
+                            raise WorkspaceReplicationRefused(
+                                "direct-answer calibration hooks fired out of order: "
+                                f"saw {layer_index}, expected {expected_layer}"
+                            )
+                        exact_patched = exact_after_cast.to(hidden.dtype)
+                        realized_exact = (
+                            exact_patched.detach().float()
+                            - selected.detach().float()
+                        )
+                        if state["calibration_exact_sum"] is None:
+                            state["calibration_exact_sum"] = torch.zeros_like(
+                                realized_exact
+                            )
+                        state["calibration_exact_sum"] = (
+                            state["calibration_exact_sum"] + realized_exact
+                        )
+                        state["calibration_exact_norms"][layer_index] = (
+                            realized_exact.norm(dim=-1)
+                        )
+                        state["calibration_layers"].append(layer_index)
+                        new_hidden = hidden.clone()
+                        new_hidden[0, positions] = exact_patched
+                        if is_tensor:
+                            return new_hidden
+                        return (new_hidden, *tuple(output)[1:])
+
+                    if state["mode"] != "intervene":
+                        raise WorkspaceReplicationRefused(
+                            "direct-answer hooks fired before cumulative calibration"
+                        )
+                    if list(positions) != list(state["calibration_positions"] or ()):
+                        raise WorkspaceReplicationRefused(
+                            "direct-answer generation patched different positions "
+                            "than its exact-exchange calibration"
+                        )
+                    base_norm = state["calibration_exact_norms"].get(layer_index)
+                    scale = state.get("scale_by_position")
+                    if not torch.is_tensor(base_norm) or not torch.is_tensor(scale):
+                        raise WorkspaceReplicationRefused(
+                            "direct-answer cumulative calibration is incomplete"
+                        )
+                    matched_norm = base_norm.to(selected.device) * scale.to(
+                        selected.device
                     )
-                    matched_norm = (
-                        exact_after_cast.detach().float() - selected.detach().float()
-                    ).norm(dim=-1)
                     direction = layer_unit_answer.to(
                         device=hidden.device, dtype=torch.float32
                     )
@@ -1388,6 +1538,19 @@ def _norm_matched_direct_answer_band(
                         )
                     new_hidden = hidden.clone()
                     new_hidden[0, positions] = patched
+                    realized_direct = (
+                        patched.detach().float() - selected.detach().float()
+                    )
+                    if not state["direct_layers"]:
+                        state["direct_sum"] = torch.zeros_like(realized_direct)
+                    expected_layer = layers[len(state["direct_layers"])]
+                    if layer_index != expected_layer:
+                        raise WorkspaceReplicationRefused(
+                            "direct-answer hooks fired out of order: "
+                            f"saw {layer_index}, expected {expected_layer}"
+                        )
+                    state["direct_sum"] = state["direct_sum"] + realized_direct
+                    state["direct_layers"].append(layer_index)
                     layer_row["n_forward_passes"] += 1
                     layer_row["positions"] = list(positions)
                     layer_row["history"].append(
@@ -1423,6 +1586,42 @@ def _norm_matched_direct_answer_band(
                             ),
                         }
                     )
+                    if len(state["direct_layers"]) == len(layers):
+                        direct_norm = state["direct_sum"].norm(dim=-1)
+                        exact_norm = state["exact_cumulative_norm"].to(
+                            direct_norm.device
+                        )
+                        relative_error = (
+                            (direct_norm - exact_norm).abs()
+                            / exact_norm.clamp_min(1.0)
+                        )
+                        state["band_history"].append(
+                            {
+                                "forward_pass": len(state["band_history"]),
+                                "positions": list(positions),
+                                "layers": list(state["direct_layers"]),
+                                "exact_exchange_displacement_norm_by_position": [
+                                    float(value) for value in exact_norm.detach().cpu()
+                                ],
+                                "direct_answer_displacement_norm_by_position": [
+                                    float(value) for value in direct_norm.detach().cpu()
+                                ],
+                                "relative_match_error_by_position": [
+                                    float(value)
+                                    for value in relative_error.detach().cpu()
+                                ],
+                                "scale_by_position": [
+                                    float(value)
+                                    for value in state["scale_by_position"].detach().cpu()
+                                ],
+                                "all_finite": bool(
+                                    torch.isfinite(direct_norm).all()
+                                    and torch.isfinite(relative_error).all()
+                                ),
+                            }
+                        )
+                        state["direct_layers"] = []
+                        state["direct_sum"] = None
                     if is_tensor:
                         return new_hidden
                     return (new_hidden, *tuple(output)[1:])
@@ -1433,7 +1632,8 @@ def _norm_matched_direct_answer_band(
                 make_hook(layer, basis, unit_answer, row)
             )
             stack.callback(handle.remove)
-        yield stats
+        state["finish_calibration"] = finish_calibration
+        yield stats, state
 
 
 def summarize_direct_answer_diagnostics(
@@ -1501,14 +1701,51 @@ def summarize_direct_answer_diagnostics(
                 default=None,
             ),
         }
+    first_stats = next(iter(stats.values()), {})
+    band_state = first_stats.get("_band_displacement_state") or {}
+    band_history = [dict(record) for record in band_state.get("band_history") or ()]
+    exact_band_norms = [
+        float(value)
+        for record in band_history
+        for value in record.get("exact_exchange_displacement_norm_by_position") or ()
+    ]
+    direct_band_norms = [
+        float(value)
+        for record in band_history
+        for value in record.get("direct_answer_displacement_norm_by_position") or ()
+    ]
+    cumulative_errors = [
+        float(value)
+        for record in band_history
+        for value in record.get("relative_match_error_by_position") or ()
+    ]
+    cumulative_scales = [
+        float(value)
+        for record in band_history
+        for value in record.get("scale_by_position") or ()
+    ]
+    cumulative_complete = (
+        bool(band_history)
+        and len(band_history) == expected_passes
+        and not bool(band_state.get("direct_layers"))
+        and all(
+            list(map(int, record.get("layers") or ()))
+            == list(map(int, band_state.get("expected_layers") or ()))
+            for record in band_history
+        )
+    )
     payload = {
         "version": TEXT_DIAGNOSTIC_VERSION,
-        "control": "direct_answer_norm_matched_to_exact_swap_per_position",
+        "control": (
+            "direct_answer_norm_matched_to_exact_swap_cumulative_band_"
+            "displacement_per_position"
+        ),
         "by_layer": by_layer,
         "model_dtype_realization_version": MODEL_DTYPE_REALIZATION_VERSION,
         "model_dtype_realization_policy": realization_policy,
         "model_dtype_realization_policy_supplied": realization_policy is not None,
         "all_hooks_fired": bool(by_layer)
+        and int(band_state.get("calibration_forward_passes") or 0) == 1
         and all(
             row["n_forward_passes"] == expected_passes
             and row["n_records"] == expected_passes
@@ -1516,7 +1753,9 @@ def summarize_direct_answer_diagnostics(
         ),
         "expected_forward_passes": expected_passes,
         "all_finite": bool(by_layer)
-        and all(row["all_finite"] for row in by_layer.values()),
+        and all(row["all_finite"] for row in by_layer.values())
+        and bool(band_history)
+        and all(bool(record.get("all_finite")) for record in band_history),
         "all_model_dtype_realizations_converged": bool(by_layer)
         and all(
             row["all_model_dtype_realizations_converged"]
@@ -1545,6 +1784,30 @@ def summarize_direct_answer_diagnostics(
             ),
             default=0,
         ),
+        "calibration_forward_passes": int(
+            band_state.get("calibration_forward_passes") or 0
+        ),
+        "cumulative_band_displacement_definition": (
+            "L2 norm of the vector sum of realized residual-stream updates "
+            "across every patched layer, computed separately per prompt position"
+        ),
+        "cumulative_band_displacement_by_forward_pass": band_history,
+        "all_cumulative_band_displacements_complete": cumulative_complete,
+        "max_exact_exchange_cumulative_band_displacement_norm": max(
+            exact_band_norms, default=None
+        ),
+        "max_direct_answer_cumulative_band_displacement_norm": max(
+            direct_band_norms, default=None
+        ),
+        "max_relative_cumulative_band_displacement_match_error": max(
+            cumulative_errors, default=None
+        ),
+        "min_cumulative_band_displacement_scale": min(
+            cumulative_scales, default=None
+        ),
+        "max_cumulative_band_displacement_scale": max(
+            cumulative_scales, default=None
+        ),
     }
     return {**payload, "diagnostic_checksum": payload_checksum(payload)}
 
@@ -1572,7 +1835,13 @@ def unrestricted_greedy_direct_answer_trial(
         evidence_span=getattr(inputs, "modality_token_range", None),
         realization_policy=realization_policy,
         alpha=float(alpha),
-    ) as stats:
+    ) as (stats, state):
+        # Calibration is outcome-independent: it runs the exact exchange once
+        # on the untouched prompt, discards those logits, and exposes only the
+        # realized cumulative displacement geometry to the positive control.
+        state["mode"] = "calibrate"
+        backend.forward_logits(dict(inputs.tensors))
+        state["finish_calibration"]()
         generated = unrestricted_greedy_completion(
             backend,
             inputs,
@@ -1598,6 +1867,9 @@ def unrestricted_greedy_direct_answer_trial(
             str(layer): int(stats[layer].get("n_forward_passes") or 0)
             for layer in sorted(stats)
         },
+        "calibration_forward_passes": int(
+            state.get("calibration_forward_passes") or 0
+        ),
         "intervention_diagnostics": summarize_direct_answer_diagnostics(
             stats, expected_forward_passes=int(generated["n_forward_passes"])
         ),

@@ -402,6 +402,76 @@ def test_norm_matched_direct_answer_control_uses_same_hook_budget() -> None:
     assert diagnostic["all_hooks_fired"] is True
     assert diagnostic["all_finite"] is True
     assert diagnostic["by_layer"]["0"]["max_relative_norm_match_error"] < 1e-6
+    assert diagnostic["max_relative_cumulative_band_displacement_match_error"] < 1e-6
+
+
+class _TwoLayerCancellationBackend(_GenerationBackend):
+    def __init__(self) -> None:
+        self.blocks = nn.ModuleList([nn.Identity(), nn.Identity()])
+
+    def forward_logits(self, tensors):
+        seq_len = int(tensors["input_ids"].shape[1])
+        hidden = torch.zeros((1, seq_len, 3), dtype=torch.float32)
+        hidden[..., 0] = 2.0
+        for block in self.blocks:
+            hidden = block(hidden)
+        logits = torch.zeros((1, seq_len, 4), dtype=torch.float32)
+        logits[0, -1, 1] = 10.0
+        return logits
+
+
+def test_direct_answer_matches_vector_sum_across_the_band_not_each_layer() -> None:
+    """Coherent control steps are downscaled when exact steps partly cancel."""
+    first = ConceptToken("first", 10, " first", " {}")
+    second = ConceptToken("second", 11, " second", " {}")
+    third = ConceptToken("third", 12, " third", " {}")
+    bases = {
+        0: build_swap_basis_from_vectors(
+            torch.tensor([1.0, 0.0, 0.0]),
+            torch.tensor([0.0, 1.0, 0.0]),
+            layer=0,
+            source=first,
+            target=second,
+        ),
+        1: build_swap_basis_from_vectors(
+            torch.tensor([0.0, 1.0, 0.0]),
+            torch.tensor([0.0, 0.0, 1.0]),
+            layer=1,
+            source=second,
+            target=third,
+        ),
+    }
+    backend = _TwoLayerCancellationBackend()
+    direct = unrestricted_greedy_direct_answer_trial(
+        backend,
+        _generation_inputs(),
+        bases=bases,
+        answer_vectors={
+            0: torch.tensor([0.0, 0.0, 1.0]),
+            1: torch.tensor([0.0, 0.0, 1.0]),
+        },
+        answer="8",
+        max_new_tokens=1,
+    )["intervention_diagnostics"]
+    exact = unrestricted_greedy_swap_trial(
+        backend,
+        _generation_inputs(),
+        bases=bases,
+        alpha=1.0,
+        answer="8",
+        max_new_tokens=1,
+    )["intervention_diagnostics"]
+
+    expected = 8.0**0.5
+    assert direct["max_exact_exchange_cumulative_band_displacement_norm"] == pytest.approx(
+        expected
+    )
+    assert direct["max_direct_answer_cumulative_band_displacement_norm"] == pytest.approx(
+        expected
+    )
+    assert direct["max_cumulative_band_displacement_scale"] == pytest.approx(0.5)
+    assert direct["max_relative_cumulative_band_displacement_match_error"] < 1e-6
+    assert exact["max_cumulative_band_displacement_norm"] == pytest.approx(expected)
 
 
 def test_capture_loading_is_observation_only_and_marks_evidence_positions() -> None:

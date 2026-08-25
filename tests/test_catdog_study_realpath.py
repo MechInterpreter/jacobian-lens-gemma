@@ -203,12 +203,33 @@ def test_catdog_full_chain_6a_through_6e(tmp_path, monkeypatch) -> None:
     assert development is not None
     assert ns_c["CATDOG_MODEL_LOADED_DTYPE"] == "float32"
     assert development["verdict"] == "NEW_PROPERTY_DEVELOPMENT_GO"
+    assert development["scientific_config"]["direct_answer_strength_match"] == (
+        "cumulative_band_displacement_l2"
+    )
+    assert development["scientific_config"][
+        "cumulative_displacement_match_tolerance"
+    ] == 0.02
     assert "cat->dog" in development["passing_directions"]
     row = development["directions"][0]
     assert row["direction"] == "cat->dog"
     assert row["instrument_state"] == "EFFECT_GO"
     control = row["direct_answer_positive_control"]
     assert control["passed"] is True
+    direct_rows = [
+        item for item in development["rows"] if item["condition"] == "direct_answer"
+    ]
+    exact_rows = [item for item in development["rows"] if item["condition"] == "exact"]
+    assert direct_rows and exact_rows
+    assert all(
+        item["max_exact_exchange_cumulative_band_displacement_norm"] is not None
+        and item["max_direct_answer_cumulative_band_displacement_norm"] is not None
+        and item["max_relative_cumulative_band_displacement_match_error"] <= 0.02
+        for item in direct_rows
+    )
+    assert all(
+        item["max_cumulative_band_displacement_norm"] is not None
+        for item in exact_rows
+    )
     dev_run_dir = str(ns_c["CATDOG_DEVELOPMENT_RUN_DIR"])
     dev_checksum = development["report_checksum"]
 
@@ -303,6 +324,51 @@ def test_catdog_stage6d_refuses_to_freeze_when_direct_answer_control_failed(
         )
 
 
+def test_stage6c_cumulatively_unmatched_positive_control_cannot_license_a_null(
+    tmp_path, monkeypatch
+) -> None:
+    """Per-layer matching alone must fail on the actual Stage 6C verdict path."""
+    harness = _CatDogHarness(
+        tmp_path,
+        monkeypatch,
+        exact_never_moves=True,
+        direct_answer_match_error=1e-7,
+        direct_answer_cumulative_match_error=2.1,
+    )
+    harness.script_model()
+    common = {
+        "CATDOG_N_DEV_CANDIDATES_PER_CONCEPT": 6,
+        "CATDOG_N_CONFIRM_CANDIDATES_PER_CONCEPT": 10,
+        "CATDOG_DEV_IMAGES_PER_DIRECTION": 3,
+        "CATDOG_CONFIRM_IMAGES": 8,
+    }
+    ns_a = harness.run(RUN_STAGE6A_EVIDENCE_QUALITY_INDEX=True, **common)
+    ns_b = harness.run(
+        RUN_STAGE6B_POPULATION_FREEZE=True,
+        CATDOG_EVIDENCE_INDEX_RUN_DIR=str(ns_a["CATDOG_EVIDENCE_INDEX_RUN_DIR"]),
+        EXPECTED_CATDOG_EVIDENCE_INDEX_CHECKSUM=ns_a["CATDOG_EVIDENCE_INDEX"][
+            "index_checksum"
+        ],
+        **common,
+    )
+    ns_c = harness.run(
+        RUN_STAGE6C_CATDOG_DEVELOPMENT=True,
+        CONFIRM_CATDOG_DEVELOPMENT_BUDGET=True,
+        CATDOG_POPULATION_FREEZE_RUN_DIR=str(ns_b["CATDOG_POPULATION_FREEZE_RUN_DIR"]),
+        EXPECTED_CATDOG_POPULATION_FREEZE_DIGEST=ns_b["CATDOG_POPULATION_FREEZE"][
+            "freeze_digest"
+        ],
+        **common,
+    )
+    direction = ns_c["CATDOG_DEVELOPMENT_REPORT"]["directions"][0]
+    assert direction["instrument_state"] == "INSTRUMENT_FAILURE"
+    assert direction["instrument_state"] != "SCIENTIFIC_NULL"
+    integrity = direction["direct_answer_positive_control"]["integrity"]
+    assert integrity["failed_clause_counts"] == {
+        "cumulative_band_displacement_norm_matched": 9
+    }
+
+
 def test_catdog_stage6b_refuses_a_too_small_pool(tmp_path, monkeypatch) -> None:
     """Fewer clean-evidence photos than dev+confirm need: a clean refusal."""
     harness = _CatDogHarness(tmp_path, monkeypatch, n_per_concept=5)
@@ -370,3 +436,20 @@ def test_stage6_requests_float32_and_never_names_bfloat16(cell_index: int) -> No
     assert "dtype=torch.float32" in source
     assert "bfloat16" not in source
     assert "fallback" not in source.lower()
+
+
+def test_stage6c1_amendment_pins_the_completed_report_and_only_writes_beside_it() -> None:
+    from test_multimodal_followup_realpath import _code_cells
+
+    source = next(
+        cell for cell in _code_cells()
+        if "direct_answer_matching_defect_amendment(" in cell
+        and "RUN_STAGE6C1_CATDOG_INSTRUMENT_AMENDMENT" in cell
+    )
+    assert (
+        "sha256:ccf34c1303c17960edc13653298c4badba462a7cbda5ca90b5fb637d7af04be2"
+        in "".join(_code_cells())
+    )
+    assert "catdog_direct_answer_matching_amendment.json" in source
+    assert "catdog_development_report.json\").write_text" not in source
+    assert "refusing to overwrite it" in source
