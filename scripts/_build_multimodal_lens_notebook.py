@@ -113,7 +113,7 @@ from pathlib import Path
 
 IN_COLAB = "google.colab" in sys.modules
 REPO_URL = "https://github.com/MechInterpreter/jacobian-lens-gemma.git"
-BRANCH = "experiment/spokencoco-jspace-pilot"
+BRANCH = "codex/cumulative-direct-answer-fix"
 REPO_DIR = Path(
     os.environ.get("JLENS_REPO_DIR")
     or ("/content/jacobian-lens-gemma" if IN_COLAB else Path.cwd())
@@ -134,6 +134,13 @@ if IN_COLAB:
          "transformers==5.13.1", "accelerate", "soundfile", "datasets", "pillow"],
         check=True,
     )
+
+# A Colab runtime may have imported jlens before this cell was rerun. Remove
+# those stale module objects after checkout so later cells import the code from
+# BRANCH rather than retaining an older branch in sys.modules.
+for _module_name in tuple(sys.modules):
+    if _module_name == "jlens" or _module_name.startswith("jlens."):
+        sys.modules.pop(_module_name, None)
 
 os.chdir(REPO_DIR)
 if str(REPO_DIR) not in sys.path:

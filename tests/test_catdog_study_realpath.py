@@ -414,6 +414,14 @@ def _catdog_model_load_cells() -> list[str]:
     ]
 
 
+def test_notebook_bootstrap_checks_out_the_branch_that_contains_stage6c1() -> None:
+    from test_multimodal_followup_realpath import _code_cells
+
+    bootstrap = next(cell for cell in _code_cells() if "REPO_URL" in cell)
+    assert 'BRANCH = "codex/cumulative-direct-answer-fix"' in bootstrap
+    assert 'startswith("jlens.")' in bootstrap
+
+
 def test_stage6_model_load_cells_exist_and_call_build_real_backend() -> None:
     cells = _catdog_model_load_cells()
     assert len(cells) == 2, "expected exactly one Stage 6C and one Stage 6E load cell"
