@@ -740,6 +740,14 @@ class _Harness:
                 ns["BACKEND"] = self.backend
                 ns["BUNDLE"] = None
                 ns["AUDIO_RECORD"] = {"protocol_fingerprint": "fake"}
+                # The cat->dog study's own model-load cells (Stage 6C/6E) set
+                # a flag their next cell checks before proceeding, since that
+                # split is what lets a fp32-specific load sit in its own cell
+                # while the rest of the stage still runs under this same
+                # "build_real_backend" substitution. Setting both here is a
+                # no-op for every other stage's cells.
+                ns["CATDOG_MODEL_LOADED_DTYPE"] = "float32"
+                ns["CATDOG_CONFIRM_MODEL_LOADED"] = True
                 continue
             if "PROPERTY_PROMPT_SCREEN_REPORT = None" in source:
                 root, file_sha, audit_digest = self._prepare_prompt_screen_source(ns)
@@ -755,7 +763,19 @@ class _Harness:
             if "EXPANDED_MANIFEST_CACHE" in source and ns.get("REAL_MODE"):
                 ns["RUNS_ROOT"] = self.runs
                 ns["EXPANDED_MANIFEST_CACHE"] = self.manifest
-                ns["IMAGE_MEDIA_ROOT"] = Path("/fake")
+                # A caller that pinned a real IMAGE_MEDIA_ROOT via after_config
+                # (the cat->dog study reads raw COCO annotation files under it
+                # in Stage 6A, so it needs a real directory, not this
+                # placeholder) gets that value applied here -- the cell just
+                # ran and unconditionally set its own hardcoded Drive path, so
+                # merely *skipping* this assignment would leave that hardcoded
+                # value in place instead of the override. Every other caller
+                # gets the placeholder exactly as before.
+                ns["IMAGE_MEDIA_ROOT"] = (
+                    Path(after_config["IMAGE_MEDIA_ROOT"])
+                    if "IMAGE_MEDIA_ROOT" in after_config
+                    else Path("/fake")
+                )
         return ns
 
 

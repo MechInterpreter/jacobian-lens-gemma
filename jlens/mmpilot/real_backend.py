@@ -138,6 +138,7 @@ def build_real_backend(
     expect_d_model: int = EXPECT_D_MODEL,
     expect_vocab_size: int = EXPECT_VOCAB,
     resolve_audio: bool = False,
+    dtype: torch.dtype = torch.bfloat16,
 ) -> RealBackendBundle:
     """Load, audit, and wrap the real Gemma 4 checkpoint.
 
@@ -152,6 +153,14 @@ def build_real_backend(
             blocked. Every completed run so far was text-and-image; turning this
             on changes what the backend will accept, so it is stated at the call
             site rather than inferred from the checkpoint having an audio tower.
+        dtype: Model weight dtype. Defaults to ``torch.bfloat16`` (the
+            checkpoint's native dtype and every study before the cat->dog
+            animal-sound one). Passing ``torch.float32`` here is the whole of
+            what "run in fp32" means; there is no bf16 fallback anywhere in
+            this function if an fp32 load fails or does not fit — a caller
+            that wants fp32 must clear
+            :func:`jlens.mmpilot.fp32_preflight.preflight_fp32_or_refuse`
+            first and pass the same dtype it checked.
 
     Raises:
         RuntimeError: From ``load_gemma4`` when ``allow_model_load`` is False.
@@ -165,7 +174,7 @@ def build_real_backend(
     lens_model, load_info = load_gemma4(
         repo_id,
         revision=revision,
-        dtype=torch.bfloat16,
+        dtype=dtype,
         device_map=device if device != "cpu" else None,
         allow_model_load=allow_model_load,
         token=token,

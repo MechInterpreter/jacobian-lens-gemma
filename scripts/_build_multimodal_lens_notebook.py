@@ -270,12 +270,60 @@ RUN_STAGE5B3_NEW_PROPERTY_CONFIRMATION = False
 RUN_STAGE5C_ASYMMETRY_REPLICATION = False
 RUN_ARTIFACT_EXCLUSION_AUDIT = False
 
+# Stage 6A-6E: the frozen, evidence-quality-gated, fp32 cat->dog animal-sound
+# study. See section 19 for the full design; declared here (rather than in
+# that section's own cell) because FOLLOWUP_STAGES and MODEL_STAGE below need
+# every switch name to exist before any cell runs, and a later cell that
+# redeclared these would silently reset whatever this cell's user just set.
+RUN_STAGE6A_EVIDENCE_QUALITY_INDEX = False
+RUN_STAGE6B_POPULATION_FREEZE = False
+RUN_STAGE6C_CATDOG_DEVELOPMENT = False
+RUN_STAGE6D_CATDOG_FREEZE = False
+RUN_STAGE6E_CATDOG_CONFIRMATION = False
+
+# The frozen cat->dog scientific target and every tunable it uses. Declared
+# here, not in section 19's own cell, for the same reason the switches above
+# are: a later cell that redeclared these would silently discard whatever
+# this cell's user just set, exactly the bug that made the switches need to
+# move up here too.
+CATDOG_PROPERTY_FAMILY = "animal_sound"
+CATDOG_PROMPT_ID = "identity_explicit_v1"
+CATDOG_DIRECTION = ("cat", "dog")          # the single primary direction
+CATDOG_CLEAN_ANSWER = "meow"               # cat's untouched answer
+CATDOG_SWAPPED_ANSWER = "bark"             # dog's answer; the exchange target
+CATDOG_MAX_NEW_TOKENS = 6
+CATDOG_N_DEV_CANDIDATES_PER_CONCEPT = 24
+CATDOG_N_CONFIRM_CANDIDATES_PER_CONCEPT = 96
+CATDOG_DEV_IMAGES_PER_DIRECTION = 8
+CATDOG_CONFIRM_IMAGES = 16
+CATDOG_MIN_CLEAN_CAPABILITY_RATE = 0.75
+CATDOG_DEV_MIN_SUCCESS_RATE = 0.50
+CATDOG_DEV_MIN_CONTROL_MARGIN = 0.25
+CATDOG_CONFIRM_MIN_SUCCESS_RATE = 0.75
+CATDOG_CONFIRM_MIN_CONTROL_MARGIN = 0.25
+CATDOG_CONFIRM_FAMILYWISE_ALPHA = 0.05
+CATDOG_SEED = "catdog-frozen-animal-sound-fp32-20260825-v1"
+CATDOG_FP32_WORKSPACE_FRACTION = 0.30
+CATDOG_FP32_SAFETY_MARGIN = 1.15
+# Filled in across sessions, exactly like every other stage's *_RUN_DIR /
+# EXPECTED_*_CHECKSUM pair: each Stage 6 sub-stage pins the previous one's
+# checksum-verified artifact rather than sharing in-memory state.
+CATDOG_EVIDENCE_INDEX_RUN_DIR = None
+EXPECTED_CATDOG_EVIDENCE_INDEX_CHECKSUM = None
+CATDOG_POPULATION_FREEZE_RUN_DIR = None
+EXPECTED_CATDOG_POPULATION_FREEZE_DIGEST = None
+CATDOG_DEVELOPMENT_RUN_DIR = None
+EXPECTED_CATDOG_DEVELOPMENT_CHECKSUM = None
+CATDOG_FROZEN_DESIGN_PATH = None
+
 CONFIRM_LOCALIZATION_BUDGET = False
 CONFIRM_PROPERTY_PROMPT_SCREEN_BUDGET = False
 CONFIRM_NEW_PROPERTY_DEVELOPMENT_BUDGET = False
 CONFIRM_CORRECTED_EXPLORATORY_BUDGET = False
 CONFIRM_NEW_PROPERTY_CONFIRMATION_BUDGET = False
 CONFIRM_ASYMMETRY_BUDGET = False
+CONFIRM_CATDOG_DEVELOPMENT_BUDGET = False
+CONFIRM_CATDOG_CONFIRMATION_BUDGET = False
 
 # The completed Stage 3D confirmation, read only to spend its media. All 64
 # candidate photographs were opened during capability screening, so all 64 are
@@ -544,6 +592,11 @@ FOLLOWUP_STAGES = {
     "5B2_freeze": RUN_STAGE5B2_FREEZE_NEW_PROPERTY_DESIGN,
     "5B3_new_property_confirmation": RUN_STAGE5B3_NEW_PROPERTY_CONFIRMATION,
     "5C_asymmetry_replication": RUN_STAGE5C_ASYMMETRY_REPLICATION,
+    "6A_catdog_evidence_index": RUN_STAGE6A_EVIDENCE_QUALITY_INDEX,
+    "6B_catdog_population_freeze": RUN_STAGE6B_POPULATION_FREEZE,
+    "6C_catdog_development": RUN_STAGE6C_CATDOG_DEVELOPMENT,
+    "6D_catdog_freeze": RUN_STAGE6D_CATDOG_FREEZE,
+    "6E_catdog_confirmation": RUN_STAGE6E_CATDOG_CONFIRMATION,
 }
 if sum(1 for value in FOLLOWUP_STAGES.values() if value) > 1:
     raise RuntimeError(
@@ -5811,6 +5864,1016 @@ if not REAL_MODE:
     print("MOCK RESULTS ARE NOT SCIENTIFIC RESULTS.")
 '''
 )
+
+markdown(
+    r"""
+## 19. Stages 6A-6E — a frozen, evidence-gated cat->dog animal-sound study (fp32)
+
+The cat/cow animal-sound branch surfaced two problems independent of the
+coordinate-swap instrument itself: cow's spoken-audio capability narrowly
+missed its own frozen gate, and manual inspection of its 16 recruited
+photographs found four of eight cow images compromised -- a distant speck, a
+promotional statue, and two frames with an unlabeled competing animal a
+caption named but COCO's own object detector missed. Stage 3DA additionally
+showed the *previous* instrument's "every trial must converge" gate was too
+strict for bf16: the leg-count replay's exact arm converged only 24/48 times
+even though those converged trials showed a 92% effect. This section is a
+clean restart that fixes both problems at once rather than patching either.
+
+**What changed, concretely:**
+
+* **fp32, not bf16.** Stage 3DA's own diagnostics showed the float64-to-model
+  cast is where essentially all realization error comes from (the pre-cast
+  solve error was ~4e-12; the bf16 post-cast error ran up to 0.45). fp32's
+  24-bit mantissa should make that error negligible. There is no bf16
+  fallback anywhere below: `jlens.mmpilot.fp32_preflight` estimates the load
+  and refuses cleanly, before any weight is loaded, if the GPU cannot hold it.
+* **cat->dog, not cat->cow.** Frozen as the single primary direction before
+  any causal outcome opens. `dog` was already a declared, admissible
+  `animal_sound` concept (`bark`/`barks`/`woof`), and its evidence pool is
+  larger than cow's.
+* **A frozen evidence-quality gate**
+  (`jlens.mmpilot.evidence_quality`), built entirely from raw COCO instance
+  and caption files -- not the lossy category-name-only projection the
+  earlier pipeline used -- and applied *before* any capability screening. See
+  that module's docstring for the four real compromised photographs it is
+  modeled on.
+* **Disjoint development and confirmation populations, frozen and persisted
+  before the model loads at all** (Stage 6B), not merely excluded
+  after the fact from whatever is left.
+
+**Stages, in order (one per session, matching every earlier follow-up):**
+
+| stage | runtime | spends a causal outcome? |
+|---|---|---|
+| 6A | CPU | no -- reads raw COCO files only |
+| 6B | CPU | no -- freezes populations from 6A's output |
+| 6C | fp32 GPU | yes -- capability audit + development (exact, controls, direct-answer) |
+| 6D | CPU | no -- freezes the confirmation design from 6C's GO |
+| 6E | fp32 GPU | yes -- fresh confirmation |
+
+The earlier cat/cow reports (`RECRUITED_NEW_PROPERTY_EXPLORATORY_NO_GO` and its
+Stage 5B1A amendment, `CORRECTED_RECRUITED_EXPLORATORY_INSTRUMENT_FAILURE`)
+are **not** touched, rewritten, or reused by anything below.
+"""
+)
+code(
+    r'''
+from jlens.mmpilot.evidence_quality import (
+    DEFAULT_THRESHOLDS as CATDOG_EVIDENCE_THRESHOLDS,
+)
+from jlens.mmpilot.fp32_preflight import (
+    estimate_fp32_inference_memory, GEMMA4_E4B_APPROX_PARAM_COUNT,
+)
+
+# Every tunable and switch above this point (the scientific target, the
+# population sizes, every threshold, the fp32 budget, the five RUN_STAGE6*
+# switches, the two CONFIRM_CATDOG_*_BUDGET switches, and every *_RUN_DIR /
+# EXPECTED_*_CHECKSUM pin) is declared once, in section 1's configuration
+# cell -- not here. FOLLOWUP_STAGES and MODEL_STAGE need the switches before
+# this cell ever runs, and a redeclaration in this cell would silently
+# discard whatever the config cell's user just set for any of them.
+#
+# Only the raw COCO annotation paths are computed here: they derive from
+# IMAGE_MEDIA_ROOT, which section 3 does not set until after section 1 runs.
+CATDOG_COCO_ANNOTATIONS_ROOT = IMAGE_MEDIA_ROOT / "annotations"
+CATDOG_COCO_INSTANCES_PATHS = (
+    CATDOG_COCO_ANNOTATIONS_ROOT / "instances_train2014.json",
+    CATDOG_COCO_ANNOTATIONS_ROOT / "instances_val2014.json",
+)
+CATDOG_COCO_CAPTIONS_PATHS = (
+    CATDOG_COCO_ANNOTATIONS_ROOT / "captions_train2014.json",
+    CATDOG_COCO_ANNOTATIONS_ROOT / "captions_val2014.json",
+)
+
+if REAL_MODE:
+    # Mutual exclusivity across every follow-up stage, Stage 6 included, is
+    # already enforced once by FOLLOWUP_STAGES's own sum check in section 1.
+    _catdog_model_stage = (
+        RUN_STAGE6C_CATDOG_DEVELOPMENT or RUN_STAGE6E_CATDOG_CONFIRMATION
+    )
+    CATDOG_MODEL_ENABLED = bool(_catdog_model_stage and CONFIRM_MODEL_LOAD)
+    CATDOG_DEVELOPMENT_ENABLED = bool(
+        RUN_STAGE6C_CATDOG_DEVELOPMENT and CATDOG_MODEL_ENABLED
+        and CONFIRM_CATDOG_DEVELOPMENT_BUDGET
+    )
+    CATDOG_CONFIRMATION_ENABLED = bool(
+        RUN_STAGE6E_CATDOG_CONFIRMATION and CATDOG_MODEL_ENABLED
+        and CONFIRM_CATDOG_CONFIRMATION_BUDGET
+    )
+    if RUN_STAGE6C_CATDOG_DEVELOPMENT and not CATDOG_DEVELOPMENT_ENABLED:
+        print("STAGE 6C BLOCKED: confirm CONFIRM_MODEL_LOAD and "
+              "CONFIRM_CATDOG_DEVELOPMENT_BUDGET after reading the printed budget")
+    if RUN_STAGE6E_CATDOG_CONFIRMATION and not CATDOG_CONFIRMATION_ENABLED:
+        print("STAGE 6E BLOCKED: confirm CONFIRM_MODEL_LOAD and "
+              "CONFIRM_CATDOG_CONFIRMATION_BUDGET after reading the printed budget")
+
+    _catdog_est = estimate_fp32_inference_memory(
+        workspace_fraction=CATDOG_FP32_WORKSPACE_FRACTION,
+        safety_margin=CATDOG_FP32_SAFETY_MARGIN,
+    )
+    print("STAGE 6 CAT->DOG FROZEN STUDY -- CONFIGURATION")
+    print("  direction                 ", "->".join(CATDOG_DIRECTION),
+          f"({CATDOG_CLEAN_ANSWER} -> {CATDOG_SWAPPED_ANSWER})")
+    print("  property / prompt         ", CATDOG_PROPERTY_FAMILY, CATDOG_PROMPT_ID)
+    print("  layers / alpha            ", list(BROAD_POOLED_BAND), 1.0)
+    print("  model dtype               fp32 (no bf16 fallback)")
+    print("  fp32 estimate             ",
+          f"{_catdog_est.raw_total_gib:.1f} GiB raw, "
+          f"{_catdog_est.required_gib:.1f} GiB required with "
+          f"{CATDOG_FP32_SAFETY_MARGIN:.2f}x safety margin")
+    print("  params (bf16-checkpoint-derived)", f"{GEMMA4_E4B_APPROX_PARAM_COUNT:,}")
+    print("  evidence-quality thresholds", CATDOG_EVIDENCE_THRESHOLDS.to_dict())
+    print("  dev / confirm candidates  ",
+          CATDOG_N_DEV_CANDIDATES_PER_CONCEPT, "/",
+          CATDOG_N_CONFIRM_CANDIDATES_PER_CONCEPT, "per concept")
+    print("  dev / confirm recruited   ",
+          CATDOG_DEV_IMAGES_PER_DIRECTION, "/", CATDOG_CONFIRM_IMAGES)
+    print("  primary outcome rule       exact >=",
+          CATDOG_DEV_MIN_SUCCESS_RATE, "in every modality, every control >=",
+          CATDOG_DEV_MIN_CONTROL_MARGIN, "below it; direct-answer diagnostic "
+          "only, cannot substitute for the primary effect")
+    print("  zero fitting, zero backward passes in every Stage 6 cell")
+'''
+)
+
+markdown(
+    r"""
+### Stage 6A -- the frozen evidence-quality index (CPU only, no model)
+
+Reads the raw ``instances_{split}.json`` / ``captions_{split}.json`` files
+directly (bbox area and every caption, not the lossy category-name
+projection) and scores every image whose only detected animal is a cat or a
+dog against the five frozen criteria in
+`jlens.mmpilot.evidence_quality`. Nothing here is informed by any model
+output, causal or otherwise.
+"""
+)
+code(
+    r'''
+CATDOG_EVIDENCE_INDEX = None
+if REAL_MODE and RUN_STAGE6A_EVIDENCE_QUALITY_INDEX:
+    from jlens.mmpilot.evidence_quality import build_clean_evidence_index
+
+    for _path in (*CATDOG_COCO_INSTANCES_PATHS, *CATDOG_COCO_CAPTIONS_PATHS):
+        if not Path(_path).is_file():
+            raise RuntimeError(f"missing raw COCO annotation file: {_path}")
+
+    CATDOG_EVIDENCE_INDEX = build_clean_evidence_index(
+        CATDOG_COCO_INSTANCES_PATHS, CATDOG_COCO_CAPTIONS_PATHS,
+        targets=CATDOG_DIRECTION, thresholds=CATDOG_EVIDENCE_THRESHOLDS,
+    )
+    _index_config = {
+        "study": "catdog_evidence_quality_index.v1",
+        "targets": list(CATDOG_DIRECTION),
+        "thresholds_digest": CATDOG_EVIDENCE_THRESHOLDS.digest,
+        "commit": COMMIT,
+    }
+    _index_digest = payload_checksum(_index_config)
+    CATDOG_EVIDENCE_INDEX_RUN_DIR = (
+        RUNS_ROOT / "mmcatdogevidence" /
+        f"mmcatdogevidence_real_{_index_digest.split(':')[1][:12]}"
+    )
+    CATDOG_EVIDENCE_INDEX_RUN_DIR.mkdir(parents=True, exist_ok=True)
+    _index_path = CATDOG_EVIDENCE_INDEX_RUN_DIR / "catdog_evidence_quality_index.json"
+    _index_path.write_text(
+        json.dumps({**CATDOG_EVIDENCE_INDEX, "scientific_config": _index_config},
+                   indent=2, default=str)
+    )
+    print("=" * 96)
+    print("CAT->DOG EVIDENCE QUALITY INDEX")
+    print("=" * 96)
+    print("candidates scored  ", CATDOG_EVIDENCE_INDEX["n_candidates_scored"])
+    print("approved            ", CATDOG_EVIDENCE_INDEX["n_approved"])
+    print("rejected, by cause  ", CATDOG_EVIDENCE_INDEX["rejected_counts"])
+    print("report              ", _index_path)
+    print("checksum            ", CATDOG_EVIDENCE_INDEX["index_checksum"])
+elif RUN_STAGE6A_EVIDENCE_QUALITY_INDEX:
+    print("Stage 6A requested but REAL_MODE is off.")
+'''
+)
+
+markdown(
+    r"""
+### Stage 6B -- freeze disjoint development and confirmation populations (CPU only, before any model load)
+
+Intersects Stage 6A's approved photographs with the synchronized manifest
+(requiring image, caption, *and* audio all present), then partitions them by
+seeded stable hash into disjoint development and confirmation pools.
+Disjointness is verified and persisted, not assumed. Nothing below this cell
+has seen a model output yet.
+"""
+)
+code(
+    r'''
+CATDOG_POPULATION_FREEZE = None
+if REAL_MODE and RUN_STAGE6B_POPULATION_FREEZE:
+    from jlens.mmpilot.evidence_quality import (
+        filter_synchronized_groups, freeze_disjoint_populations,
+    )
+
+    if CATDOG_EVIDENCE_INDEX_RUN_DIR is None or EXPECTED_CATDOG_EVIDENCE_INDEX_CHECKSUM is None:
+        raise RuntimeError(
+            "Stage 6B requires CATDOG_EVIDENCE_INDEX_RUN_DIR and its expected "
+            "checksum; run Stage 6A first, in a prior session"
+        )
+    _index_path = (
+        Path(CATDOG_EVIDENCE_INDEX_RUN_DIR) / "catdog_evidence_quality_index.json"
+    )
+    _index_payload = json.loads(_index_path.read_text(encoding="utf-8"))
+    _recorded = _index_payload.get("index_checksum")
+    _recomputed = payload_checksum({
+        k: v for k, v in _index_payload.items()
+        if k not in ("index_checksum", "scientific_config")
+    })
+    if _recorded != EXPECTED_CATDOG_EVIDENCE_INDEX_CHECKSUM or _recomputed != _recorded:
+        raise RuntimeError(
+            f"evidence index checksum mismatch: recorded={_recorded!r} "
+            f"recomputed={_recomputed!r} expected="
+            f"{EXPECTED_CATDOG_EVIDENCE_INDEX_CHECKSUM!r}"
+        )
+
+    if EXCLUSION_UNIVERSE is None:
+        raise RuntimeError(
+            "Stage 6B needs EXCLUSION_UNIVERSE (Section 12) so any cat "
+            "photograph already spent by the cat/cow study is excluded here "
+            "too; ensure RUN_STAGE6B_POPULATION_FREEZE is set before Section "
+            "12 runs, or rerun Section 12 first"
+        )
+    _already_spent = {str(v) for v in EXCLUSION_UNIVERSE["excluded_image_ids"]}
+    _clean_groups_by_concept = {}
+    for _concept in CATDOG_DIRECTION:
+        _synced = filter_synchronized_groups(_index_payload, GROUPS, target=_concept)
+        _fresh = [g for g in _synced if str(g["image_id"]) not in _already_spent]
+        print("synchronized clean-evidence groups for", _concept, ":", len(_synced),
+              "->", len(_fresh), "after excluding", len(_synced) - len(_fresh),
+              "already spent by prior studies")
+        _clean_groups_by_concept[_concept] = _fresh
+
+    CATDOG_POPULATION_FREEZE = freeze_disjoint_populations(
+        _clean_groups_by_concept,
+        n_dev_per_concept=CATDOG_N_DEV_CANDIDATES_PER_CONCEPT,
+        n_confirm_per_concept=CATDOG_N_CONFIRM_CANDIDATES_PER_CONCEPT,
+        seed=CATDOG_SEED,
+    )
+    _freeze_config = {
+        "study": "catdog_disjoint_population_freeze.v1",
+        "evidence_index_checksum": EXPECTED_CATDOG_EVIDENCE_INDEX_CHECKSUM,
+        "manifest_checksum": MANIFEST_CHECKSUM,
+        "seed": CATDOG_SEED,
+        "commit": COMMIT,
+    }
+    _freeze_run_digest = payload_checksum(_freeze_config)
+    CATDOG_POPULATION_FREEZE_RUN_DIR = (
+        RUNS_ROOT / "mmcatdogfreeze" /
+        f"mmcatdogfreeze_real_{_freeze_run_digest.split(':')[1][:12]}"
+    )
+    CATDOG_POPULATION_FREEZE_RUN_DIR.mkdir(parents=True, exist_ok=True)
+    _freeze_path = (
+        CATDOG_POPULATION_FREEZE_RUN_DIR / "catdog_population_freeze.json"
+    )
+    _freeze_path.write_text(
+        json.dumps({**CATDOG_POPULATION_FREEZE, "scientific_config": _freeze_config},
+                   indent=2, default=str)
+    )
+    print("=" * 96)
+    print("CAT->DOG DISJOINT POPULATION FREEZE")
+    print("=" * 96)
+    print("development photographs  ", CATDOG_POPULATION_FREEZE["n_development"])
+    print("confirmation photographs ", CATDOG_POPULATION_FREEZE["n_confirmation"])
+    print("disjoint                 ", CATDOG_POPULATION_FREEZE["disjoint"])
+    print("frozen before model load ",
+          CATDOG_POPULATION_FREEZE["frozen_before_model_load"])
+    print("report                   ", _freeze_path)
+    print("checksum                 ", CATDOG_POPULATION_FREEZE["freeze_digest"])
+elif RUN_STAGE6B_POPULATION_FREEZE:
+    print("Stage 6B requested but REAL_MODE is off.")
+'''
+)
+
+markdown(
+    r"""
+### Stage 6C -- fp32 preflight, capability audit, and development
+
+The fp32 preflight runs **before** `build_real_backend` is ever called.
+Capability screening uses `recruit_all_modality_capable_groups`'s existing
+rule (the untouched model must answer correctly in text, image *and* spoken
+audio, for the same photograph) restricted to the pre-frozen development pool
+only. Recruitment never sees a causal outcome. Development then runs the
+exact cat->dog exchange plus all three controls plus the norm-matched
+direct-answer "bark" positive control, entirely in fp32, saving one
+checksum-valid unit per completed condition.
+"""
+)
+code(
+    r'''
+CATDOG_DEVELOPMENT_REPORT = None
+CATDOG_MODEL_LOADED_DTYPE = None
+if REAL_MODE and RUN_STAGE6C_CATDOG_DEVELOPMENT:
+    if CATDOG_POPULATION_FREEZE_RUN_DIR is None or EXPECTED_CATDOG_POPULATION_FREEZE_DIGEST is None:
+        raise RuntimeError(
+            "Stage 6C requires CATDOG_POPULATION_FREEZE_RUN_DIR and its "
+            "expected digest; run Stage 6B first, in a prior session"
+        )
+    _freeze_path = (
+        Path(CATDOG_POPULATION_FREEZE_RUN_DIR) / "catdog_population_freeze.json"
+    )
+    _freeze_payload = json.loads(_freeze_path.read_text(encoding="utf-8"))
+    _recorded = _freeze_payload.get("freeze_digest")
+    _recomputed = payload_checksum({
+        k: v for k, v in _freeze_payload.items()
+        if k not in ("freeze_digest", "scientific_config", "development", "confirmation")
+    })
+    if _recorded != EXPECTED_CATDOG_POPULATION_FREEZE_DIGEST or _recomputed != _recorded:
+        raise RuntimeError(
+            f"population freeze digest mismatch: recorded={_recorded!r} "
+            f"recomputed={_recomputed!r} expected="
+            f"{EXPECTED_CATDOG_POPULATION_FREEZE_DIGEST!r}"
+        )
+    if not _freeze_payload.get("disjoint"):
+        raise RuntimeError("the frozen populations are not disjoint; refusing")
+
+    import torch
+
+    from jlens.mmpilot.fp32_preflight import preflight_fp32_or_refuse
+
+    CATDOG_FP32_PREFLIGHT = preflight_fp32_or_refuse(
+        workspace_fraction=CATDOG_FP32_WORKSPACE_FRACTION,
+        safety_margin=CATDOG_FP32_SAFETY_MARGIN,
+    )
+    print("fp32 preflight passed:", CATDOG_FP32_PREFLIGHT["device_name"],
+          f"{CATDOG_FP32_PREFLIGHT['free_gib']:.1f} GiB free, "
+          f"{CATDOG_FP32_PREFLIGHT['required_gib']:.1f} GiB required")
+
+    from jlens.mmpilot.real_backend import build_real_backend
+
+    _bundle = build_real_backend(
+        MODEL_REPO_ID, revision=MODEL_REVISION, allow_model_load=True,
+        resolve_audio=True, dtype=torch.float32,
+    )
+    BACKEND = _bundle.backend
+    CATDOG_MODEL_LOADED_DTYPE = _bundle.load_info.get("dtype")
+    print("model loaded in dtype   ", CATDOG_MODEL_LOADED_DTYPE)
+elif RUN_STAGE6C_CATDOG_DEVELOPMENT:
+    print("Stage 6C requested but REAL_MODE is off.")
+'''
+)
+
+code(
+    r'''
+if REAL_MODE and RUN_STAGE6C_CATDOG_DEVELOPMENT and CATDOG_MODEL_LOADED_DTYPE is not None:
+    _freeze_path = (
+        Path(CATDOG_POPULATION_FREEZE_RUN_DIR) / "catdog_population_freeze.json"
+    )
+    _freeze_payload = json.loads(_freeze_path.read_text(encoding="utf-8"))
+    _dev_pool = _freeze_payload["development"]
+
+    from jlens.lens import JacobianLens
+    from jlens.mmpilot.coordinate_swap import (
+        random_two_direction_basis, resolve_answer_readout_token,
+        resolve_concept_token,
+    )
+    from jlens.mmpilot.multimodal_followup import (
+        PROPERTY_FAMILIES, direct_answer_trial_row,
+        generation_trial_row, new_property_development_verdict,
+        property_answer_matches, property_prompt,
+        recruit_all_modality_capable_groups,
+    )
+    from jlens.mmpilot.multimodal_instrument import MODEL_DTYPE_REALIZATION
+    from jlens.mmpilot.multimodal_lens import (
+        build_swap_bases_for_lens, load_broad_pooled_development_source,
+        selected_lens_vector,
+    )
+    from jlens.mmpilot.store import RunFingerprint, UnitStore, safe_key
+    from jlens.mmpilot.workspace_replication import (
+        unrestricted_greedy_direct_answer_trial, unrestricted_greedy_swap_trial,
+    )
+
+    _property = PROPERTY_FAMILIES[CATDOG_PROPERTY_FAMILY]
+    _src, _tgt = CATDOG_DIRECTION
+    _clean_answer = _property.answer_for(_src).answer
+    _swap_answer = _property.answer_for(_tgt).answer
+    if _clean_answer != CATDOG_CLEAN_ANSWER or _swap_answer != CATDOG_SWAPPED_ANSWER:
+        raise RuntimeError(
+            f"declared answers ({_clean_answer!r} -> {_swap_answer!r}) do not "
+            f"match the frozen scientific target ({CATDOG_CLEAN_ANSWER!r} -> "
+            f"{CATDOG_SWAPPED_ANSWER!r})"
+        )
+
+    _dev_config = {
+        "study": "catdog_frozen_animal_sound_development.v1",
+        "population_freeze_digest": EXPECTED_CATDOG_POPULATION_FREEZE_DIGEST,
+        "model_repo_id": MODEL_REPO_ID, "model_revision": MODEL_REVISION,
+        "model_dtype": "float32",
+        "audio_protocol_fingerprint": AUDIO_PROTOCOL_FINGERPRINT,
+        "manifest_checksum": MANIFEST_CHECKSUM,
+        "lens_checksum": EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+        "lens_refitted": False,
+        "direction": list(CATDOG_DIRECTION), "alpha": 1.0,
+        "layers": list(BROAD_POOLED_BAND),
+        "positions": "every original prompt position",
+        "prompt_id": CATDOG_PROMPT_ID,
+        "conditions": ["exact", "zero", "random", "unrelated", "direct_answer"],
+        "images_per_direction": CATDOG_DEV_IMAGES_PER_DIRECTION,
+        "max_new_tokens": CATDOG_MAX_NEW_TOKENS,
+        "seed": CATDOG_SEED,
+        "model_dtype_realization_policy_digest": (
+            payload_checksum(MODEL_DTYPE_REALIZATION.to_dict())
+        ),
+        "outcome_informed_stage_design": False,
+        "is_confirmation": False,
+        "commit": COMMIT,
+    }
+    _dev_digest = payload_checksum(_dev_config)
+    CATDOG_DEVELOPMENT_RUN_DIR = (
+        RUNS_ROOT / "mmcatdogdev" / f"mmcatdogdev_real_{_dev_digest.split(':')[1][:12]}"
+    )
+    CATDOG_DEVELOPMENT_RUN_DIR.mkdir(parents=True, exist_ok=True)
+    (CATDOG_DEVELOPMENT_RUN_DIR / "scientific_config.json").write_text(
+        json.dumps(_dev_config, indent=2)
+    )
+    _dev_store = UnitStore(
+        CATDOG_DEVELOPMENT_RUN_DIR,
+        RunFingerprint(
+            mode="real", model_repo_id=MODEL_REPO_ID, model_revision=MODEL_REVISION,
+            processor_revision=MODEL_REVISION, layers=tuple(BROAD_POOLED_BAND),
+            lens_checksum=EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+            manifest_checksum=MANIFEST_CHECKSUM,
+            split_id=EXPECTED_CATDOG_POPULATION_FREEZE_DIGEST,
+            intervention_config={
+                "alpha": 1.0, "direction": list(CATDOG_DIRECTION),
+                "conditions": _dev_config["conditions"], "dtype": "float32",
+                "positions": "all_original_prompt_positions",
+                "max_new_tokens": CATDOG_MAX_NEW_TOKENS,
+            },
+            extra={"study_digest": _dev_digest},
+        ),
+    )
+    print("catdog development run state", _dev_store.open())
+
+    # --- capability: clean, untouched model only, restricted to the frozen
+    # development pool. Recruitment never inspects a causal outcome.
+    _dev_capability = []
+    for _concept in CATDOG_DIRECTION:
+        for _group in _dev_pool[_concept]:
+            for _modality in ("text", "image", "spoken_audio"):
+                _key = safe_key("catdogcap", _group["group_id"], _modality)
+                _row = _dev_store.load("capability", _key)
+                if _row is None:
+                    _answer = _property.answer_for(_concept)
+                    _inputs = build_group_inputs(
+                        _group, _modality,
+                        property_prompt(CATDOG_PROMPT_ID, _modality, _group["caption"]),
+                    )
+                    from jlens.mmpilot.workspace_replication import (
+                        unrestricted_greedy_completion,
+                    )
+                    _completion = unrestricted_greedy_completion(
+                        BACKEND, _inputs, answer=_answer.answer,
+                        max_new_tokens=CATDOG_MAX_NEW_TOKENS,
+                    )
+                    _row = {
+                        "concept": _concept, "group_id": _group["group_id"],
+                        "image_id": _group["image_id"], "modality": _modality,
+                        "generated": _completion["generated_text"],
+                        "pass": bool(property_answer_matches(
+                            _completion["generated_text"], _answer
+                        )),
+                    }
+                    _dev_store.save("capability", _key, _row)
+                _dev_capability.append(_row)
+
+    _dev_recruitment = recruit_all_modality_capable_groups(
+        [g for _c in CATDOG_DIRECTION for g in _dev_pool[_c]], _dev_capability,
+        concepts=CATDOG_DIRECTION, n_per_concept=CATDOG_DEV_IMAGES_PER_DIRECTION,
+    )
+    print("dev eligible clean-capable groups", _dev_recruitment["eligible_counts"])
+    if not _dev_recruitment["complete"]:
+        raise RuntimeError(
+            "not enough all-modality clean-capable development photographs: "
+            f"{_dev_recruitment['eligible_counts']}"
+        )
+
+    _lens = JacobianLens.load(
+        load_broad_pooled_development_source(
+            BROAD_DEVELOPMENT_RUN_DIR,
+            expected_report_checksum=EXPECTED_BROAD_DEVELOPMENT_REPORT_CHECKSUM,
+            expected_population_digest=EXPECTED_BROAD_DEVELOPMENT_POPULATION_DIGEST,
+            expected_lens_checksum=EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+            expected_direction=CONFIRMATION_DIRECTION,
+        )["lens_path"]
+    )
+    _unembed = BACKEND.unembedding_weight()
+    _tokens = {
+        name: resolve_concept_token(BACKEND.encode_candidate, name)
+        for name in (*CATDOG_DIRECTION, *BROAD_POOLED_CONTROLS)
+    }
+    _exact_bases = build_swap_bases_for_lens(
+        _lens, _unembed, layers=BROAD_POOLED_BAND,
+        source=_tokens[_src], target=_tokens[_tgt],
+    )
+    _random_bases = {
+        layer: random_two_direction_basis(basis, seed=20260825 + layer)
+        for layer, basis in _exact_bases.items()
+    }
+    _unrelated_bases = build_swap_bases_for_lens(
+        _lens, _unembed, layers=BROAD_POOLED_BAND,
+        source=_tokens[BROAD_POOLED_CONTROLS[0]], target=_tokens[BROAD_POOLED_CONTROLS[1]],
+    )
+    _answer_token = resolve_answer_readout_token(BACKEND.encode_candidate, _swap_answer)
+    if _answer_token.variant.startswith("first:"):
+        print(f"direct-answer control for {_tgt!r} ({_swap_answer!r}) is not "
+              f"single-token; using its first token {_answer_token.token_id}")
+    _answer_vectors = {
+        int(layer): selected_lens_vector(
+            _lens, _unembed, layer=int(layer), token_id=_answer_token.token_id,
+        )
+        for layer in BROAD_POOLED_BAND
+    }
+
+    _conditions = (
+        ("exact", 1.0, _exact_bases), ("zero", 0.0, _exact_bases),
+        ("random", 1.0, _random_bases), ("unrelated", 1.0, _unrelated_bases),
+        ("direct_answer", 1.0, _exact_bases),
+    )
+    _dev_rows = []
+    _n_dev_conditions = CATDOG_DEV_IMAGES_PER_DIRECTION * 3 * len(_conditions)
+    for _group in _dev_recruitment["groups"][_src]:
+        for _modality in ("text", "image", "spoken_audio"):
+            for _condition, _alpha, _bases in _conditions:
+                _key = safe_key(
+                    "catdogdev", _src, _tgt, _group["group_id"], _modality, _condition,
+                )
+                _stored = _dev_store.load("intervention", _key)
+                if _stored is None:
+                    _inputs = build_group_inputs(
+                        _group, _modality,
+                        property_prompt(CATDOG_PROMPT_ID, _modality, _group["caption"]),
+                    )
+                    if _condition == "direct_answer":
+                        _trial = unrestricted_greedy_direct_answer_trial(
+                            BACKEND, _inputs, bases=_bases,
+                            answer_vectors=_answer_vectors, answer=_swap_answer,
+                            max_new_tokens=CATDOG_MAX_NEW_TOKENS,
+                            realization_policy=MODEL_DTYPE_REALIZATION, alpha=1.0,
+                        )
+                        _stored = direct_answer_trial_row(
+                            _trial, group=_group, modality=_modality,
+                            direction=(_src, _tgt),
+                            answer=_property.answer_for(_tgt),
+                            layers=BROAD_POOLED_BAND,
+                        )
+                    else:
+                        _trial = unrestricted_greedy_swap_trial(
+                            BACKEND, _inputs, bases=_bases, alpha=_alpha,
+                            answer=_swap_answer, max_new_tokens=CATDOG_MAX_NEW_TOKENS,
+                            realization_policy=MODEL_DTYPE_REALIZATION,
+                        )
+                        _stored = generation_trial_row(
+                            _trial, group=_group, modality=_modality,
+                            condition=_condition, direction=(_src, _tgt),
+                            answer=_property.answer_for(_tgt), layers=BROAD_POOLED_BAND,
+                        )
+                    _dev_store.save("intervention", _key, _stored)
+                _dev_rows.append(_stored)
+                if len(_dev_rows) % 40 == 0:
+                    print("development conditions", len(_dev_rows), "of", _n_dev_conditions)
+
+    # Freshness against every prior study (including the cat/cow photos
+    # already spent) was already established in Stage 6B, which intersected
+    # the evidence-quality-approved pool against EXCLUSION_UNIVERSE before
+    # freezing development and confirmation apart from each other.
+    CATDOG_DEVELOPMENT_REPORT = new_property_development_verdict(
+        _dev_rows,
+        audit={"family": CATDOG_PROPERTY_FAMILY, "audit_digest": _dev_digest},
+        layers=BROAD_POOLED_BAND, capability_go=_dev_recruitment["complete"],
+        min_success_rate=CATDOG_DEV_MIN_SUCCESS_RATE,
+        min_control_margin=CATDOG_DEV_MIN_CONTROL_MARGIN,
+    )
+    CATDOG_DEVELOPMENT_REPORT = {
+        **CATDOG_DEVELOPMENT_REPORT, "scientific_config": _dev_config,
+        "recruitment": {k: v for k, v in _dev_recruitment.items() if k != "groups"},
+        "rows": _dev_rows,
+    }
+    CATDOG_DEVELOPMENT_REPORT["report_checksum"] = payload_checksum({
+        k: v for k, v in CATDOG_DEVELOPMENT_REPORT.items() if k != "report_checksum"
+    })
+    _dev_store.save("metric", "catdog_development", CATDOG_DEVELOPMENT_REPORT)
+    _dev_path = CATDOG_DEVELOPMENT_RUN_DIR / "catdog_development_report.json"
+    _dev_path.write_text(json.dumps(CATDOG_DEVELOPMENT_REPORT, indent=2, default=str))
+    print("=" * 96)
+    print("CAT->DOG DEVELOPMENT --", CATDOG_DEVELOPMENT_REPORT["verdict"])
+    print("=" * 96)
+    for _row in CATDOG_DEVELOPMENT_REPORT["directions"]:
+        print(f"  {_row['direction']:<12}", _row["instrument_state"],
+              "passed" if _row["passed"] else "not passed")
+        for _cell in _row["cells"]:
+            print(f"    {_cell['modality']:<13}",
+                  f"exact {_cell['exact_successes']}/{_cell['n']}",
+                  "controls", {k: v["successes"] for k, v in _cell["controls"].items()},
+                  "integrity", _cell["integrity_pass"])
+        _control = _row["direct_answer_positive_control"]
+        print("    direct-answer control",
+              {k: f"{v['successes']}/{v['n']}" for k, v in _control["by_modality"].items()},
+              "passed", _control["passed"])
+    print("report   ", _dev_path)
+    print("checksum ", CATDOG_DEVELOPMENT_REPORT["report_checksum"])
+elif RUN_STAGE6C_CATDOG_DEVELOPMENT:
+    print("Stage 6C requested but blocked; confirm its printed budget.")
+'''
+)
+
+markdown(
+    r"""
+### Stage 6D -- freeze the confirmation design (CPU only)
+
+Refuses unless Stage 6C returned `NEW_PROPERTY_DEVELOPMENT_GO` for
+`cat->dog` specifically.
+"""
+)
+code(
+    r'''
+CATDOG_FROZEN_DESIGN = None
+if REAL_MODE and RUN_STAGE6D_CATDOG_FREEZE:
+    from jlens.mmpilot.multimodal_followup import freeze_new_property_design
+
+    if EXCLUSION_UNIVERSE is None:
+        raise RuntimeError(
+            "Stage 6D needs EXCLUSION_UNIVERSE (Section 12); ensure "
+            "RUN_STAGE6D_CATDOG_FREEZE is set before Section 12 runs"
+        )
+
+    if CATDOG_DEVELOPMENT_RUN_DIR is None or EXPECTED_CATDOG_DEVELOPMENT_CHECKSUM is None:
+        raise RuntimeError(
+            "Stage 6D requires CATDOG_DEVELOPMENT_RUN_DIR and its expected "
+            "checksum; run Stage 6C first, in a prior session"
+        )
+    _dev_path = Path(CATDOG_DEVELOPMENT_RUN_DIR) / "catdog_development_report.json"
+    _dev_payload = json.loads(_dev_path.read_text(encoding="utf-8"))
+    _recorded = _dev_payload.get("report_checksum")
+    _recomputed = payload_checksum({
+        k: v for k, v in _dev_payload.items() if k != "report_checksum"
+    })
+    if _recorded != EXPECTED_CATDOG_DEVELOPMENT_CHECKSUM or _recomputed != _recorded:
+        raise RuntimeError(
+            f"development report checksum mismatch: recorded={_recorded!r} "
+            f"recomputed={_recomputed!r} expected="
+            f"{EXPECTED_CATDOG_DEVELOPMENT_CHECKSUM!r}"
+        )
+    # The direct-answer positive control is diagnostic everywhere else in this
+    # codebase -- it can license reading a failed exchange as a null but can
+    # never itself gate a GO. This study's frozen design asks more of it: the
+    # control must actually have worked, on every modality, for development to
+    # be trusted at all. A primary effect that passed while the diagnostic
+    # meant to sanity-check the whole causal path failed would be exactly the
+    # kind of result that needs the extra scrutiny this refusal forces before
+    # any fresh confirmation photograph is opened.
+    _cat_dog_direction_name = f"{CATDOG_DIRECTION[0]}->{CATDOG_DIRECTION[1]}"
+    _cat_dog_row = next(
+        (row for row in _dev_payload["directions"]
+         if row["direction"] == _cat_dog_direction_name),
+        None,
+    )
+    if _cat_dog_row is None:
+        raise RuntimeError(
+            f"the development report has no row for {_cat_dog_direction_name!r}"
+        )
+    if not _cat_dog_row["direct_answer_positive_control"]["passed"]:
+        raise RuntimeError(
+            "Stage 6D refuses to freeze: development's own frozen requirement "
+            "is that the norm-matched direct-answer control passes, not only "
+            "that the exact exchange does. It did not pass here: "
+            f"{_cat_dog_row['direct_answer_positive_control']['by_modality']}"
+        )
+
+    from jlens.mmpilot.multimodal_followup import (
+        PROPERTY_FAMILIES, property_prompt,
+    )
+
+    _property = PROPERTY_FAMILIES[CATDOG_PROPERTY_FAMILY]
+    _src, _tgt = CATDOG_DIRECTION
+    _audit_stub = {
+        "family": CATDOG_PROPERTY_FAMILY,
+        "audit_digest": _dev_payload["scientific_config"]["population_freeze_digest"],
+        "concepts": [
+            {"concept": _src, "answer": _property.answer_for(_src).answer,
+             "aliases": list(_property.answer_for(_src).aliases),
+             "admissible": bool(_property.answer_for(_src).admissible)},
+            {"concept": _tgt, "answer": _property.answer_for(_tgt).answer,
+             "aliases": list(_property.answer_for(_tgt).aliases),
+             "admissible": bool(_property.answer_for(_tgt).admissible)},
+        ],
+        "prompt_id": CATDOG_PROMPT_ID,
+        "question": _property.question,
+        "prompt_by_modality": {
+            modality: property_prompt(CATDOG_PROMPT_ID, modality, "{caption}")
+            for modality in ("text", "image", "spoken_audio")
+        },
+        "answer_normalization": "casefold_whitespace",
+    }
+    CATDOG_FROZEN_DESIGN = freeze_new_property_design(
+        development=_dev_payload, audit=_audit_stub, direction=CATDOG_DIRECTION,
+        lens_checksum=EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+        layers=BROAD_POOLED_BAND, alpha=1.0,
+        exclusions=EXCLUSION_UNIVERSE,
+        n_candidates=CATDOG_N_CONFIRM_CANDIDATES_PER_CONCEPT,
+        n_recruited=CATDOG_CONFIRM_IMAGES,
+        min_success_rate=CATDOG_CONFIRM_MIN_SUCCESS_RATE,
+        min_control_margin=CATDOG_CONFIRM_MIN_CONTROL_MARGIN,
+        min_clean_capability_rate=CATDOG_MIN_CLEAN_CAPABILITY_RATE,
+        familywise_alpha=CATDOG_CONFIRM_FAMILYWISE_ALPHA,
+        recruitment_rule=(
+            "clean property capability in all three modalities, from the "
+            "population frozen disjoint from development in Stage 6B"
+        ),
+        seed=CATDOG_SEED,
+    )
+    CATDOG_FROZEN_DESIGN_PATH = (
+        Path(CATDOG_DEVELOPMENT_RUN_DIR).parent / "catdog_frozen_design.json"
+    )
+    CATDOG_FROZEN_DESIGN_PATH.write_text(
+        json.dumps(CATDOG_FROZEN_DESIGN, indent=2, default=str)
+    )
+    print("=" * 96)
+    print("CAT->DOG DESIGN FROZEN")
+    print("=" * 96)
+    print("direction        ", "->".join(CATDOG_FROZEN_DESIGN["direction"]))
+    print("answer aliases   ", CATDOG_FROZEN_DESIGN["answer_aliases"])
+    print("thresholds       ", CATDOG_FROZEN_DESIGN["thresholds"])
+    print("path             ", CATDOG_FROZEN_DESIGN_PATH)
+    print("digest           ", CATDOG_FROZEN_DESIGN["design_digest"])
+elif RUN_STAGE6D_CATDOG_FREEZE:
+    print("Stage 6D requested but REAL_MODE is off.")
+'''
+)
+
+markdown(
+    r"""
+### Stage 6E -- fresh confirmation (fp32 GPU)
+
+Sources its population exclusively from Stage 6B's pre-frozen confirmation
+pool -- never a newly selected photograph, never one from development. No
+part of the frozen design changes here.
+"""
+)
+code(
+    r'''
+CATDOG_CONFIRMATION_REPORT = None
+CATDOG_CONFIRM_MODEL_LOADED = False
+if REAL_MODE and RUN_STAGE6E_CATDOG_CONFIRMATION:
+    if CATDOG_FROZEN_DESIGN_PATH is None:
+        raise RuntimeError(
+            "Stage 6E cannot open a fresh photograph before Stage 6D wrote "
+            "the frozen design; set CATDOG_FROZEN_DESIGN_PATH"
+        )
+    if CATDOG_POPULATION_FREEZE_RUN_DIR is None or EXPECTED_CATDOG_POPULATION_FREEZE_DIGEST is None:
+        raise RuntimeError("Stage 6E requires the Stage 6B population freeze pin")
+    _freeze_payload = json.loads(
+        (Path(CATDOG_POPULATION_FREEZE_RUN_DIR) / "catdog_population_freeze.json")
+        .read_text(encoding="utf-8")
+    )
+    if payload_checksum({
+        k: v for k, v in _freeze_payload.items()
+        if k not in ("freeze_digest", "scientific_config", "development", "confirmation")
+    }) != EXPECTED_CATDOG_POPULATION_FREEZE_DIGEST:
+        raise RuntimeError("population freeze digest mismatch")
+
+    import torch
+
+    from jlens.mmpilot.fp32_preflight import preflight_fp32_or_refuse
+
+    CATDOG_CONFIRM_FP32_PREFLIGHT = preflight_fp32_or_refuse(
+        workspace_fraction=CATDOG_FP32_WORKSPACE_FRACTION,
+        safety_margin=CATDOG_FP32_SAFETY_MARGIN,
+    )
+    print("fp32 preflight passed:", CATDOG_CONFIRM_FP32_PREFLIGHT["device_name"])
+
+    from jlens.mmpilot.real_backend import build_real_backend
+
+    _bundle = build_real_backend(
+        MODEL_REPO_ID, revision=MODEL_REVISION, allow_model_load=True,
+        resolve_audio=True, dtype=torch.float32,
+    )
+    BACKEND = _bundle.backend
+    CATDOG_CONFIRM_MODEL_LOADED = True
+    print("model loaded in dtype   ", _bundle.load_info.get("dtype"))
+elif RUN_STAGE6E_CATDOG_CONFIRMATION:
+    print("Stage 6E requested but REAL_MODE is off.")
+'''
+)
+
+code(
+    r'''
+if REAL_MODE and RUN_STAGE6E_CATDOG_CONFIRMATION and CATDOG_CONFIRM_MODEL_LOADED:
+    from jlens.mmpilot.multimodal_followup import (
+        assert_design_frozen, confirmation_verdict, direct_answer_trial_row,
+        generation_trial_row, property_answer_matches,
+        recruit_all_modality_capable_groups,
+    )
+
+    _design = assert_design_frozen(CATDOG_FROZEN_DESIGN_PATH)
+    _freeze_payload = json.loads(
+        (Path(CATDOG_POPULATION_FREEZE_RUN_DIR) / "catdog_population_freeze.json")
+        .read_text(encoding="utf-8")
+    )
+    _confirm_pool = _freeze_payload["confirmation"]
+
+    from jlens.lens import JacobianLens
+    from jlens.mmpilot.coordinate_swap import (
+        random_two_direction_basis, resolve_concept_token,
+    )
+    from jlens.mmpilot.multimodal_instrument import MODEL_DTYPE_REALIZATION
+    from jlens.mmpilot.multimodal_lens import (
+        build_swap_bases_for_lens, load_broad_pooled_development_source,
+    )
+    from jlens.mmpilot.store import RunFingerprint, UnitStore, safe_key
+    from jlens.mmpilot.workspace_replication import (
+        unrestricted_greedy_completion, unrestricted_greedy_swap_trial,
+    )
+
+    _src, _tgt = _design["direction"]
+    _confirm_config = {
+        "study": "catdog_frozen_animal_sound_confirmation.v1",
+        "design_digest": _design["design_digest"],
+        "population_freeze_digest": EXPECTED_CATDOG_POPULATION_FREEZE_DIGEST,
+        "model_repo_id": MODEL_REPO_ID, "model_revision": MODEL_REVISION,
+        "model_dtype": "float32",
+        "commit": COMMIT,
+    }
+    _confirm_digest = payload_checksum(_confirm_config)
+    CATDOG_CONFIRMATION_RUN_DIR = (
+        RUNS_ROOT / "mmcatdogconfirm" /
+        f"mmcatdogconfirm_real_{_confirm_digest.split(':')[1][:12]}"
+    )
+    CATDOG_CONFIRMATION_RUN_DIR.mkdir(parents=True, exist_ok=True)
+    (CATDOG_CONFIRMATION_RUN_DIR / "scientific_config.json").write_text(
+        json.dumps(_confirm_config, indent=2)
+    )
+    _confirm_store = UnitStore(
+        CATDOG_CONFIRMATION_RUN_DIR,
+        RunFingerprint(
+            mode="real", model_repo_id=MODEL_REPO_ID, model_revision=MODEL_REVISION,
+            processor_revision=MODEL_REVISION, layers=tuple(_design["layers"]),
+            lens_checksum=_design["lens_checksum"], manifest_checksum=MANIFEST_CHECKSUM,
+            split_id=_design["design_digest"],
+            intervention_config={
+                "alpha": _design["alpha"], "conditions": _design["conditions"],
+                "dtype": "float32", "positions": "all_original_prompt_positions",
+                "max_new_tokens": _design["max_new_tokens"],
+            },
+            extra={"study_digest": _confirm_digest},
+        ),
+    )
+    print("catdog confirmation run state", _confirm_store.open())
+
+    _confirm_capability = []
+    for _concept in (_src, _tgt):
+        for _group in _confirm_pool[_concept]:
+            _key = safe_key("catdogconfcap", _group["group_id"])
+            for _modality in ("text", "image", "spoken_audio"):
+                _sub_key = f"{_key}__{_modality}"
+                _row = _confirm_store.load("capability", _sub_key)
+                if _row is None:
+                    _prompt = str(_design["prompt_by_modality"][_modality]).format(
+                        caption=_group["caption"]
+                    )
+                    _inputs = build_group_inputs(_group, _modality, _prompt)
+                    _target_word = (
+                        _design["answer_aliases"][_src][0]
+                        if _concept == _src else _design["answer_aliases"][_tgt][0]
+                    )
+                    _completion = unrestricted_greedy_completion(
+                        BACKEND, _inputs, answer=_target_word,
+                        max_new_tokens=int(_design["max_new_tokens"]),
+                    )
+                    _expected_aliases = (
+                        _design["answer_aliases"][_src]
+                        if _concept == _src else _design["answer_aliases"][_tgt]
+                    )
+                    _row = {
+                        "concept": _concept, "group_id": _group["group_id"],
+                        "image_id": _group["image_id"], "modality": _modality,
+                        "generated": _completion["generated_text"],
+                        "pass": bool(property_answer_matches(
+                            _completion["generated_text"],
+                            {"aliases": _expected_aliases},
+                        )),
+                    }
+                    _confirm_store.save("capability", _sub_key, _row)
+                _confirm_capability.append(_row)
+
+    _confirm_recruitment = recruit_all_modality_capable_groups(
+        [g for _c in (_src, _tgt) for g in _confirm_pool[_c]], _confirm_capability,
+        concepts=(_src, _tgt), n_per_concept=CATDOG_CONFIRM_IMAGES,
+    )
+    print("confirm eligible clean-capable groups", _confirm_recruitment["eligible_counts"])
+    _capability_go = bool(_confirm_recruitment["complete"])
+
+    _confirm_rows = []
+    if _capability_go:
+        _lens = JacobianLens.load(
+            load_broad_pooled_development_source(
+                BROAD_DEVELOPMENT_RUN_DIR,
+                expected_report_checksum=EXPECTED_BROAD_DEVELOPMENT_REPORT_CHECKSUM,
+                expected_population_digest=EXPECTED_BROAD_DEVELOPMENT_POPULATION_DIGEST,
+                expected_lens_checksum=EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+                expected_direction=CONFIRMATION_DIRECTION,
+            )["lens_path"]
+        )
+        _unembed = BACKEND.unembedding_weight()
+        _tokens = {
+            name: resolve_concept_token(BACKEND.encode_candidate, name)
+            for name in (_src, _tgt, *BROAD_POOLED_CONTROLS)
+        }
+        _exact_bases = build_swap_bases_for_lens(
+            _lens, _unembed, layers=_design["layers"],
+            source=_tokens[_src], target=_tokens[_tgt],
+        )
+        _random_bases = {
+            layer: random_two_direction_basis(basis, seed=20260825 + layer)
+            for layer, basis in _exact_bases.items()
+        }
+        _unrelated_bases = build_swap_bases_for_lens(
+            _lens, _unembed, layers=_design["layers"],
+            source=_tokens[BROAD_POOLED_CONTROLS[0]],
+            target=_tokens[BROAD_POOLED_CONTROLS[1]],
+        )
+        _conditions = (
+            ("exact", _design["alpha"], _exact_bases), ("zero", 0.0, _exact_bases),
+            ("random", _design["alpha"], _random_bases),
+            ("unrelated", _design["alpha"], _unrelated_bases),
+        )
+        _target_answer_row = {
+            "aliases": _design["answer_aliases"][_tgt],
+        }
+        _n_confirm_conditions = CATDOG_CONFIRM_IMAGES * 3 * len(_conditions)
+        for _group in _confirm_recruitment["groups"][_src]:
+            for _modality in ("text", "image", "spoken_audio"):
+                for _condition, _alpha, _bases in _conditions:
+                    _key = safe_key(
+                        "catdogconf", _src, _tgt, _group["group_id"], _modality, _condition,
+                    )
+                    _stored = _confirm_store.load("intervention", _key)
+                    if _stored is None:
+                        _prompt = str(_design["prompt_by_modality"][_modality]).format(
+                            caption=_group["caption"]
+                        )
+                        _inputs = build_group_inputs(_group, _modality, _prompt)
+                        _answer_word = _design["answer_aliases"][_tgt][0]
+                        _trial = unrestricted_greedy_swap_trial(
+                            BACKEND, _inputs, bases=_bases, alpha=_alpha,
+                            answer=_answer_word,
+                            max_new_tokens=int(_design["max_new_tokens"]),
+                            realization_policy=MODEL_DTYPE_REALIZATION,
+                        )
+                        _stored = generation_trial_row(
+                            _trial, group=_group, modality=_modality,
+                            condition=_condition, direction=(_src, _tgt),
+                            answer=_target_answer_row, layers=_design["layers"],
+                        )
+                        _confirm_store.save("intervention", _key, _stored)
+                    _confirm_rows.append(_stored)
+                    if len(_confirm_rows) % 40 == 0:
+                        print("confirmation conditions", len(_confirm_rows),
+                              "of", _n_confirm_conditions)
+
+    _confirm_exclusion_audit = {
+        "disjoint": True,
+        "population_freeze_digest": EXPECTED_CATDOG_POPULATION_FREEZE_DIGEST,
+        "development_and_confirmation_share_no_image": True,
+    }
+    CATDOG_CONFIRMATION_REPORT = confirmation_verdict(
+        _confirm_rows, design=_design, capability_go=_capability_go,
+        exclusion_audit=_confirm_exclusion_audit,
+    )
+    CATDOG_CONFIRMATION_REPORT = {
+        **CATDOG_CONFIRMATION_REPORT, "scientific_config": _confirm_config,
+        "recruitment": {
+            k: v for k, v in _confirm_recruitment.items() if k != "groups"
+        },
+    }
+    CATDOG_CONFIRMATION_REPORT["report_checksum"] = payload_checksum({
+        k: v for k, v in CATDOG_CONFIRMATION_REPORT.items() if k != "report_checksum"
+    })
+    _confirm_store.save("metric", "catdog_confirmation", CATDOG_CONFIRMATION_REPORT)
+    _confirm_path = CATDOG_CONFIRMATION_RUN_DIR / "catdog_confirmation_report.json"
+    _confirm_path.write_text(
+        json.dumps(CATDOG_CONFIRMATION_REPORT, indent=2, default=str)
+    )
+    print("=" * 96)
+    print("CAT->DOG FRESH CONFIRMATION --", CATDOG_CONFIRMATION_REPORT["verdict"])
+    print("=" * 96)
+    for _cell in CATDOG_CONFIRMATION_REPORT["cells"]:
+        print(_cell["modality"], f"exact {_cell['exact_successes']}/{_cell['n']}",
+              "controls", {k: v["successes"] for k, v in _cell["controls"].items()})
+    print("gate     ", CATDOG_CONFIRMATION_REPORT.get("gate"))
+    print("report   ", _confirm_path)
+    print("checksum ", CATDOG_CONFIRMATION_REPORT["report_checksum"])
+elif RUN_STAGE6E_CATDOG_CONFIRMATION:
+    print("Stage 6E requested but blocked; confirm its printed budget.")
+'''
+)
+
 
 metadata = {
     "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
