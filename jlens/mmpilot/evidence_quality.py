@@ -101,19 +101,44 @@ ANIMAL_CATEGORIES: tuple[str, ...] = (
 #: scored. Extending this list after seeing which images it would exclude is
 #: exactly the "select the evidence to make it work" failure mode this module
 #: exists to prevent — do not add to it once a study has opened outcomes.
+#: "picture of" / "photo of" / "image of" are deliberately absent. They are
+#: COCO's standard boilerplate for narrating an ordinary real photograph ("A
+#: picture of a dog that is looking out the window") and are indistinguishable
+#: from a genuine depiction ("a picture of a dog statue") by adjacency alone --
+#: both put only "a"/"an"/"the" between the phrase and the animal word. Every
+#: genuine depiction they might have caught is already caught by its own
+#: specific noun ("statue", "toy", "painting", ...) sitting next to the
+#: animal, so dropping them costs no real coverage. Found by inspecting real
+#: COCO rejections: with these three included, adjacency still fired on
+#: "A picture of a dog" as if the dog were fictional.
 DEPICTION_LEXICON: tuple[str, ...] = (
     "statue", "statues", "fake", "plastic", "toy", "toys", "stuffed",
     "stuffed animal", "plush", "painting", "painted", "drawing", "drawn",
     "figurine", "sculpture", "model", "poster", "mural", "cartoon",
-    "picture of", "photo of", "image of", "sign", "billboard", "costume",
+    "sign", "billboard", "costume",
     "balloon", "carousel", "puppet", "doll", "replica", "ceramic",
     "cardboard", "inflatable", "mascot", "stone", "bronze", "wooden",
     "cutout", "sticker", "logo", "advertisement", "ad for",
 )
-_DEPICTION_PATTERN = re.compile(
-    r"\b(" + "|".join(re.escape(word) for word in DEPICTION_LEXICON) + r")\b",
-    re.IGNORECASE,
-)
+
+#: Filler tokens a depiction phrase and the target word are allowed to have
+#: between them and still count as describing the *animal* -- "a statue OF A
+#: cat", "a picture OF THE dog". Anything else between them ("cat ON A
+#: plastic mat", "dog UNDER A stone arch", "dog NEXT TO sign") means the
+#: depiction word is describing a different object in the scene, not the
+#: animal, and must not disqualify the photo. This is the fix for a real
+#: false-positive rate found by inspecting real COCO rejections: with a
+#: bare "does this word appear anywhere in the caption" check, ~150 of a
+#: ~2,400-image sample were rejected for exactly this reason -- "A dog is
+#: sitting under a stone arch" and "A black cat looking at a statue" both
+#: describe real animals near an unrelated object, not a fake animal.
+_DEPICTION_LINKING_TOKENS = frozenset({"a", "an", "the", "of"})
+_TOKEN_PATTERN = re.compile(r"[A-Za-z']+")
+#: How many *non-linking* tokens may sit between an adjacent depiction word
+#: and the animal (e.g. "a small stuffed cat"). Kept separate from the
+#: linking-token allowance so "cat on a plastic mat" (a non-linking "on")
+#: still fails regardless of how many linking tokens surround it.
+_DEPICTION_MAX_GAP = 3
 
 
 def _word_pattern(word: str) -> re.Pattern:
@@ -121,6 +146,53 @@ def _word_pattern(word: str) -> re.Pattern:
 
 
 _ANIMAL_PATTERNS = {name: _word_pattern(name) for name in ANIMAL_CATEGORIES}
+
+
+def _tokenize(text: str) -> list[str]:
+    return [t.lower() for t in _TOKEN_PATTERN.findall(text)]
+
+
+def _depiction_words_near_target(
+    caption: str, target: str, *, lexicon: Sequence[str] = DEPICTION_LEXICON
+) -> set[str]:
+    """Depiction phrases in ``caption`` that plausibly describe ``target``.
+
+    A phrase counts only if every token between it and an occurrence of the
+    target word is a linking token (``a``/``an``/``the``/``of``) -- catching
+    "a statue of a cat" and "a stuffed dog" -- or the gap is small and free of
+    prepositions describing a *different* relationship ("small stuffed cat").
+    A depiction word describing something else in the scene ("on a plastic
+    mat", "under a stone arch", "next to sign") is not counted.
+    """
+    tokens = _tokenize(caption)
+    target_positions = [
+        i for i, t in enumerate(tokens) if t in (target, f"{target}s")
+    ]
+    if not target_positions:
+        return set()
+
+    hits: set[str] = set()
+    for phrase in lexicon:
+        phrase_tokens = tuple(phrase.lower().split())
+        n = len(phrase_tokens)
+        for start in range(len(tokens) - n + 1):
+            if tuple(tokens[start:start + n]) != phrase_tokens:
+                continue
+            end = start + n - 1
+            for target_index in target_positions:
+                if target_index < start:
+                    gap_tokens = tokens[target_index + 1:start]
+                elif target_index > end:
+                    gap_tokens = tokens[end + 1:target_index]
+                else:
+                    continue  # overlapping match, not meaningful
+                if not gap_tokens:
+                    hits.add(phrase)
+                elif len(gap_tokens) <= _DEPICTION_MAX_GAP and all(
+                    token in _DEPICTION_LINKING_TOKENS for token in gap_tokens
+                ):
+                    hits.add(phrase)
+    return hits
 
 
 @dataclass(frozen=True)
@@ -257,9 +329,7 @@ def evaluate_image_evidence_quality(
         failed.append("no_competing_animal_word_in_captions")
 
     depiction_hits = sorted({
-        match.group(1).lower()
-        for c in texts
-        for match in _DEPICTION_PATTERN.finditer(c)
+        word for c in texts for word in _depiction_words_near_target(c, target)
     })
     if depiction_hits:
         failed.append("no_depiction_word_in_captions")

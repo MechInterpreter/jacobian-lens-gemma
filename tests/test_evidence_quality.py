@@ -22,6 +22,7 @@ from jlens.mmpilot.evidence_quality import (
     DEFAULT_THRESHOLDS,
     EvidenceQualityRefused,
     EvidenceQualityThresholds,
+    _depiction_words_near_target,
     build_clean_evidence_index,
     evaluate_image_evidence_quality,
     filter_synchronized_groups,
@@ -147,6 +148,88 @@ def test_a_background_competing_animal_instance_is_caught() -> None:
     assert result["passed"] is False
     assert "exactly_one_animal_species" in result["failed_criteria"]
     assert result["animal_species_present"] == ["cow", "sheep"]
+
+
+# ---------------------------------------------- the depiction-proximity fix
+#
+# Found by running the shipped gate against real COCO captions and inspecting
+# every "no_depiction_word_in_captions" rejection by hand (~2,400-image
+# sample): a bare "does this word appear anywhere in the caption" check
+# rejected ~150 real cat/dog photographs because a depiction word described a
+# *different* object in the scene, not the animal. Every case below is a
+# caption actually seen in that inspection.
+
+
+@pytest.mark.parametrize(
+    "caption, target",
+    [
+        ("A dog is sitting under a stone arch", "dog"),
+        ("A black cat looking at a statue that is sitting in rocks.", "cat"),
+        (
+            "A cat on a plastic mat in a bathtub with water droplets "
+            "falling, with tile on wall.",
+            "cat",
+        ),
+        (
+            'A brown and white dog standing next to sign that reads '
+            '"beware of dog."',
+            "dog",
+        ),
+        ("A small furry dog snuggles in a plush bed.", "dog"),
+        ("a white and woolly dog lying while holding a doll", "dog"),
+        # this caption never mentions the animal at all -- a different
+        # caption of the same image presumably does, and must not be
+        # contaminated by this one
+        ("Large brown wooden door on the side of a building.", "dog"),
+        ("A picture of a dog that is looking out the window.", "dog"),
+        ("This is a photo of a sad looking black lab dog.", "dog"),
+        ("a dog sits on a beach inside of a drawn heart", "dog"),
+        ("A garden with various statues, plants and a tree.", "dog"),
+    ],
+)
+def test_depiction_words_describing_something_else_do_not_disqualify(
+    caption: str, target: str
+) -> None:
+    assert _depiction_words_near_target(caption, target) == set()
+
+
+@pytest.mark.parametrize(
+    "caption, target, expected_word",
+    [
+        (
+            "A man standing next to a fake cow, and smiling for the camera.",
+            "cow", "fake",
+        ),
+        ("a male in a black shirt next to a cow statue and sign", "cow", "statue"),
+        (
+            "a man wearing a tour de france shirt stands beside a statue "
+            "of a cow",
+            "cow", "statue",
+        ),
+        ("A small stuffed cat sits on the shelf", "cat", "stuffed"),
+        ("a toy dog on the table", "dog", "toy"),
+        ("a dog figurine painted blue", "dog", "figurine"),
+    ],
+)
+def test_a_depiction_word_adjacent_to_the_target_still_disqualifies(
+    caption: str, target: str, expected_word: str
+) -> None:
+    assert expected_word in _depiction_words_near_target(caption, target)
+
+
+def test_picture_of_and_photo_of_and_image_of_are_not_in_the_lexicon() -> None:
+    """The single biggest false-positive source, removed rather than patched.
+
+    Every genuine depiction these phrases might have caught is already caught
+    by its own specific noun ("statue", "toy", "painting", ...) sitting next
+    to the animal, so dropping them costs no real coverage -- and they are
+    indistinguishable from ordinary COCO caption boilerplate ("A picture of a
+    dog...") by adjacency alone.
+    """
+    from jlens.mmpilot.evidence_quality import DEPICTION_LEXICON
+
+    for phrase in ("picture of", "photo of", "image of"):
+        assert phrase not in DEPICTION_LEXICON
 
 
 # --------------------------------------------------------- individual clauses
