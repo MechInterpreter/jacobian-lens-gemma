@@ -25,6 +25,9 @@ from jlens.mmpilot.country_workspace import (
     causal_report,
     direct_answer_localization_report,
     freeze_confirmation_design,
+    freeze_identity_calibrated_confirmation_design,
+    identity_band_calibration_report,
+    identity_lens_validation_report,
     validate_media_plan,
 )
 
@@ -316,4 +319,110 @@ def test_full_band_amendment_does_not_require_direct_answer_gate() -> None:
     assert all(
         choice["band"] == list(LAYERS)
         for choice in design["selected_paths"].values()
+    )
+
+
+def test_identity_lens_validation_requires_every_modality() -> None:
+    rows = []
+    for layer in (16, 17):
+        for modality in MODALITIES:
+            for _index in range(2):
+                rows.append(
+                    {
+                        "layer": layer,
+                        "modality": modality,
+                        "source_is_sole_top1": (
+                            layer == 16
+                            or (layer == 17 and modality != "image")
+                        ),
+                        "all_finite": True,
+                    }
+                )
+    report = identity_lens_validation_report(rows, expected_n_per_modality=2)
+    assert report["verdict"] == "COUNTRY_IDENTITY_LENS_VALIDATION_GO"
+    assert report["eligible_layers"] == [16]
+
+
+def _identity_calibration_rows(passing_band: tuple[int, ...]) -> list[dict]:
+    rows = []
+    eligible = {"France->China", "China->France", "Japan->Egypt"}
+    passing = {"France->China", "Japan->Egypt"}
+    for source, target in DIRECTIONS:
+        direction = f"{source}->{target}"
+        if direction not in eligible:
+            continue
+        for band in PATH_BANDS:
+            for modality in MODALITIES:
+                for index in range(N_DEVELOPMENT_PER_COUNTRY):
+                    for condition in ("exact", "zero", "random", "unrelated"):
+                        rows.append(
+                            {
+                                "unit_id": f"{source}-{index}",
+                                "direction": direction,
+                                "modality": modality,
+                                "condition": condition,
+                                "layers_patched": list(band),
+                                "success": (
+                                    condition == "exact"
+                                    and band == passing_band
+                                    and direction in passing
+                                ),
+                                "integrity_pass": True,
+                            }
+                        )
+    return rows
+
+
+def test_identity_band_calibration_selects_without_fact_outcomes() -> None:
+    passing_band = PATH_BANDS[1]
+    report = identity_band_calibration_report(
+        _identity_calibration_rows(passing_band),
+        eligible_directions=("France->China", "China->France", "Japan->Egypt"),
+        expected_n=N_DEVELOPMENT_PER_COUNTRY,
+    )
+    assert report["verdict"] == "COUNTRY_IDENTITY_BAND_CALIBRATION_GO"
+    assert report["selected"]["band"] == list(passing_band)
+    assert report["selection_used_downstream_fact_outcomes"] is False
+
+
+def test_identity_calibrated_confirmation_freeze_uses_selected_band() -> None:
+    media = validate_media_plan(_media_rows())
+    capability = capability_report(_capability_rows())
+    lens_validation = identity_lens_validation_report(
+        [
+            {
+                "layer": 16,
+                "modality": modality,
+                "source_is_sole_top1": True,
+                "all_finite": True,
+            }
+            for modality in MODALITIES
+        ],
+        expected_n_per_modality=1,
+    )
+    calibration = identity_band_calibration_report(
+        _identity_calibration_rows(PATH_BANDS[0]),
+        eligible_directions=("France->China", "China->France", "Japan->Egypt"),
+        expected_n=N_DEVELOPMENT_PER_COUNTRY,
+    )
+    development = causal_report(
+        _causal_rows(
+            N_DEVELOPMENT_PER_COUNTRY,
+            {"France->China", "Japan->Egypt"},
+        ),
+        stage="development",
+        expected_n=N_DEVELOPMENT_PER_COUNTRY,
+    )
+    design = freeze_identity_calibrated_confirmation_design(
+        protocol=benchmark_spec(dataset_revision="pinned"),
+        media_validation=media,
+        capability=capability,
+        lens_validation=lens_validation,
+        identity_calibration=calibration,
+        development=development,
+    )
+    assert design["selection_used_downstream_fact_outcomes"] is False
+    assert all(
+        path["band"] == list(PATH_BANDS[0])
+        for path in design["selected_paths"].values()
     )

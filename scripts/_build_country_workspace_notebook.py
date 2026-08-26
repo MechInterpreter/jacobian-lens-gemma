@@ -50,11 +50,15 @@ measured scope.
 * One pooled multimodal J-lens is fitted on 99 examples from eleven countries
   that never appear in evaluation.
 * Development and confirmation contain different images and audio files.
-* The direct-answer path screen is retained as a diagnostic, not treated as a
-  necessary gate. An early identity exchange can be propagated into a later
-  answer even when an early answer-vector insertion is washed out. The exact
-  development test uses the full L16-L40 band fixed before any country
-  exact-swap output is opened.
+* The inherited animal-domain prompt is never used. A country-specific prompt
+  is checksum-bound before any corrected output is generated.
+* The existing pooled lens must first identify the source country from clean
+  activations. If either that readout or a direct country-identity exchange
+  fails, the notebook may fit one task-matched pooled multimodal J-lens on the
+  already frozen 99-example fit split and repeat the same validation.
+* The layer band is selected only by whether an exact country-identity exchange
+  changes the generated country name across two independent pairs. Capital and
+  continent outputs remain hidden until that band is frozen.
 * Alpha 1 is the exact two-coordinate exchange. No alpha sweep is performed.
 * Output is unrestricted greedy generation. There is no candidate list and no
   teacher forcing.
@@ -117,14 +121,14 @@ if CAPABILITY_PATH.is_file():
 if LOCALIZATION_PATH.is_file():
     LOCALIZATION_REPORT = json.loads(LOCALIZATION_PATH.read_text(encoding="utf-8"))
 
-if CAPABILITY_REPORT is None:
+if CAPABILITY_REPORT is None and RUN_STAGE2_CAPABILITY_AND_LOCALIZATION:
     CAPABILITY_REPORT = _verified_parent_report(
         "country_capability_report.json", PARENT_CAPABILITY_CHECKSUM
     )
     if CAPABILITY_REPORT is not None:
         _write_report(CAPABILITY_PATH, CAPABILITY_REPORT)
         print("reused checksum-pinned parent capability", CAPABILITY_REPORT["verdict"])
-if LOCALIZATION_REPORT is None:
+if LOCALIZATION_REPORT is None and RUN_STAGE2_CAPABILITY_AND_LOCALIZATION:
     LOCALIZATION_REPORT = _verified_parent_report(
         "country_direct_answer_localization_report.json",
         PARENT_LOCALIZATION_CHECKSUM,
@@ -234,6 +238,391 @@ elif CAPABILITY_REPORT is not None:
 '''
 )
 
+markdown("## 9.5 Corrected country prompt, lens validation, and identity-band calibration")
+code(
+    r'''
+CORRECTED_CAPABILITY_PATH = RUN_DIR / "country_corrected_prompt_capability_report.json"
+LENS_VALIDATION_PATH = RUN_DIR / "country_identity_lens_validation_report.json"
+IDENTITY_CALIBRATION_PATH = RUN_DIR / "country_identity_band_calibration_report.json"
+ACTIVE_LENS_PATH = RUN_DIR / "country_active_lens.json"
+TASK_LENS_PATH = RUN_DIR / "lenses" / "lens.pooled.country_identity.l16_l40.pt"
+TASK_LENS_PROVENANCE_PATH = RUN_DIR / "lenses" / "lens.pooled.country_identity.l16_l40.json"
+
+LENS_VALIDATION_REPORT = None
+IDENTITY_CALIBRATION_REPORT = None
+ACTIVE_LENS = LENS
+ACTIVE_LENS_LABEL = "original_pooled_j"
+if CORRECTED_CAPABILITY_PATH.is_file():
+    CAPABILITY_REPORT = json.loads(CORRECTED_CAPABILITY_PATH.read_text(encoding="utf-8"))
+if LENS_VALIDATION_PATH.is_file():
+    LENS_VALIDATION_REPORT = json.loads(LENS_VALIDATION_PATH.read_text(encoding="utf-8"))
+if IDENTITY_CALIBRATION_PATH.is_file():
+    IDENTITY_CALIBRATION_REPORT = json.loads(IDENTITY_CALIBRATION_PATH.read_text(encoding="utf-8"))
+if ACTIVE_LENS_PATH.is_file():
+    _active = json.loads(ACTIVE_LENS_PATH.read_text(encoding="utf-8"))
+    ACTIVE_LENS_LABEL = _active["label"]
+    if ACTIVE_LENS_LABEL == "task_matched_pooled_j":
+        from jlens.lens import JacobianLens
+        from jlens.mmpilot.backend import file_checksum
+        if file_checksum(str(TASK_LENS_PATH)) != _active["lens_checksum"]:
+            raise RuntimeError("task-matched active lens checksum changed")
+        ACTIVE_LENS = JacobianLens.load(str(TASK_LENS_PATH))
+
+if RUN_STAGE2_DEBUG_COUNTRY_INSTRUMENT:
+    if not (
+        MODEL_ENABLED and CONFIRM_IDENTITY_CALIBRATION_BUDGET and LENS is not None
+    ):
+        raise RuntimeError(
+            "corrected country debugging requires the model, existing lens, "
+            "and identity-calibration budget confirmation"
+        )
+    import math
+    import torch
+    from jlens.hooks import ActivationRecorder
+    from jlens.lens import JacobianLens
+    from jlens.mmpilot.backend import file_checksum
+    from jlens.mmpilot.country_workspace import (
+        capability_report, identity_band_calibration_report,
+        identity_lens_validation_report,
+    )
+    from jlens.mmpilot.multimodal_lens import FitUnit, fit_arm
+
+    development_rows = sorted(
+        [row for row in MEDIA_ROWS if row["study_split"] == "development"],
+        key=lambda row: row["unit_id"],
+    )
+
+    # The old capability report used the inherited animal instruction and is
+    # never reused. These are fresh outputs under COUNTRY_COMPLETION_INSTRUCTION.
+    capability_rows = []
+    for row in development_rows:
+        for modality in MODALITIES:
+            for property_name in ("identity", *PROPERTIES):
+                expected = row["country"] if property_name == "identity" else fact(row["country"], property_name)
+                key = safe_key("country_v4_capability", row["unit_id"], modality, property_name)
+                stored = STORE.load("capability", key)
+                if stored is None:
+                    inputs = build_task_inputs(row, modality, property_name)
+                    result = unrestricted_greedy_completion(
+                        BACKEND, inputs, answer=expected, max_new_tokens=MAX_NEW_TOKENS,
+                    )
+                    stored = {
+                        **result, "unit_id": row["unit_id"], "country": row["country"],
+                        "modality": modality, "property": property_name,
+                        "expected": expected,
+                        "success": generated_success(result, expected, property_name),
+                        "country_instruction": COUNTRY_COMPLETION_INSTRUCTION,
+                    }
+                    STORE.save("capability", key, stored)
+                    work = "computed"
+                else:
+                    work = "reused"
+                capability_rows.append(stored)
+                if len(capability_rows) == 1 or len(capability_rows) % 24 == 0:
+                    print("corrected capability", len(capability_rows), work)
+    CAPABILITY_REPORT = capability_report(capability_rows)
+    _capability_body = {
+        key: value for key, value in CAPABILITY_REPORT.items()
+        if key != "report_checksum"
+    }
+    _capability_body.update({
+        "country_instruction": COUNTRY_COMPLETION_INSTRUCTION,
+        "supersedes_animal_instruction_run": True,
+    })
+    CAPABILITY_REPORT = {
+        **_capability_body, "report_checksum": payload_checksum(_capability_body)
+    }
+    _write_report(CORRECTED_CAPABILITY_PATH, CAPABILITY_REPORT)
+    print("corrected capability verdict", CAPABILITY_REPORT["verdict"])
+
+    candidate_names = (*EVAL_COUNTRIES, *CONTROL_COUNTRIES)
+    candidate_tokens = concept_tokens(candidate_names)
+    unembed = BACKEND.unembedding_weight()
+
+    def validate_identity_lens(lens, label):
+        vectors = {
+            layer: {
+                country: selected_lens_vector(
+                    lens, unembed, layer=layer,
+                    token_id=candidate_tokens[country].token_id,
+                )
+                for country in candidate_names
+            }
+            for layer in LAYERS
+        }
+        eligible_sources = set(CAPABILITY_REPORT["eligible_countries"])
+        rows = []
+        source_rows = [
+            row for row in development_rows if row["country"] in eligible_sources
+        ]
+        for row in source_rows:
+            for modality in MODALITIES:
+                key = safe_key("country_lens_readout", label, row["unit_id"], modality)
+                stored = STORE.load("activation", key)
+                if stored is None:
+                    inputs = build_task_inputs(row, modality, "identity")
+                    with ActivationRecorder(BACKEND.blocks, at=LAYERS) as recorder:
+                        BACKEND.forward_logits(inputs.tensors)
+                    per_layer = []
+                    for layer in LAYERS:
+                        h = recorder.activations[layer][0, inputs.final_prompt_position].detach().float().cpu()
+                        scores = {
+                            country: float(h.dot(vectors[layer][country]))
+                            for country in candidate_names
+                        }
+                        source_score = scores[row["country"]]
+                        others = [
+                            score for country, score in scores.items()
+                            if country != row["country"]
+                        ]
+                        per_layer.append({
+                            "layer": layer,
+                            "scores": scores,
+                            "source_is_sole_top1": bool(
+                                source_score > max(others, default=-math.inf)
+                            ),
+                            "all_finite": all(math.isfinite(score) for score in scores.values()),
+                        })
+                    stored = {
+                        "unit_id": row["unit_id"], "country": row["country"],
+                        "modality": modality, "lens_label": label,
+                        "per_layer": per_layer,
+                    }
+                    STORE.save("activation", key, stored)
+                    work = "computed"
+                else:
+                    work = "reused"
+                rows.extend({
+                    "unit_id": stored["unit_id"], "country": stored["country"],
+                    "modality": stored["modality"], "lens_label": label, **item,
+                } for item in stored["per_layer"])
+                if len(rows) == len(LAYERS) or len(rows) % (len(LAYERS) * 12) == 0:
+                    print("lens identity readout", label, len(rows), work)
+        expected_n = len(source_rows)
+        report = identity_lens_validation_report(
+            rows, expected_n_per_modality=expected_n,
+        )
+        _body = {key: value for key, value in report.items() if key != "report_checksum"}
+        _body["lens_label"] = label
+        _body["lens_checksum"] = (
+            file_checksum(str(TASK_LENS_PATH))
+            if label == "task_matched_pooled_j"
+            else PARENT_LENS_CHECKSUM
+        )
+        return {**_body, "report_checksum": payload_checksum(_body)}
+
+    def calibrate_identity_band(lens, label):
+        eligible_direction_names = set(CAPABILITY_REPORT["eligible_directions"])
+        rows = []
+        for source, target in DIRECTIONS:
+            direction = f"{source}->{target}"
+            if direction not in eligible_direction_names:
+                continue
+            source_rows = [row for row in development_rows if row["country"] == source]
+            for band in PATH_BANDS:
+                exact = build_swap_bases_for_lens(
+                    lens, unembed, layers=band,
+                    source=candidate_tokens[source], target=candidate_tokens[target],
+                )
+                random_bases = {
+                    layer: random_two_direction_basis(
+                        basis,
+                        seed=RANDOM_SEED + layer + 1000 * DIRECTIONS.index((source, target)),
+                    )
+                    for layer, basis in exact.items()
+                }
+                unrelated = build_swap_bases_for_lens(
+                    lens, unembed, layers=band,
+                    source=candidate_tokens[CONTROL_COUNTRIES[0]],
+                    target=candidate_tokens[CONTROL_COUNTRIES[1]],
+                )
+                for row in source_rows:
+                    for modality in MODALITIES:
+                        for condition, alpha, bases in (
+                            ("exact", 1.0, exact), ("zero", 0.0, exact),
+                            ("random", 1.0, random_bases),
+                            ("unrelated", 1.0, unrelated),
+                        ):
+                            key = safe_key(
+                                "country_identity_calibration", label, source, target,
+                                band[0], band[-1], row["unit_id"], modality, condition,
+                            )
+                            stored = STORE.load("intervention", key)
+                            if stored is None:
+                                inputs = build_task_inputs(row, modality, "identity")
+                                result = unrestricted_greedy_swap_trial(
+                                    BACKEND, inputs, bases=bases, alpha=alpha,
+                                    answer=target, max_new_tokens=MAX_NEW_TOKENS,
+                                    position_rule="all_prompt_positions",
+                                    realization_policy=TEXT_MODEL_DTYPE_REALIZATION,
+                                )
+                                stored = {
+                                    **result, "unit_id": row["unit_id"],
+                                    "source": source, "target": target,
+                                    "direction": direction, "modality": modality,
+                                    "condition": condition, "expected": target,
+                                    "success": identity_matches(result["generated_text"], target),
+                                    "integrity_pass": diagnostic_integrity(
+                                        result, exact=(condition == "exact")
+                                    ),
+                                }
+                                STORE.save("intervention", key, stored)
+                                work = "computed"
+                            else:
+                                work = "reused"
+                            rows.append(stored)
+                            if len(rows) == 1 or len(rows) % 96 == 0:
+                                print("identity calibration", label, len(rows), work)
+        report = identity_band_calibration_report(
+            rows,
+            eligible_directions=sorted(eligible_direction_names),
+            expected_n=N_DEVELOPMENT_PER_COUNTRY,
+        )
+        _body = {key: value for key, value in report.items() if key != "report_checksum"}
+        _body["lens_label"] = label
+        _body["lens_checksum"] = (
+            file_checksum(str(TASK_LENS_PATH))
+            if label == "task_matched_pooled_j"
+            else PARENT_LENS_CHECKSUM
+        )
+        return {**_body, "report_checksum": payload_checksum(_body)}
+
+    ACTIVE_LENS = LENS
+    ACTIVE_LENS_LABEL = "original_pooled_j"
+    IDENTITY_CALIBRATION_REPORT = None
+    LENS_VALIDATION_REPORT = validate_identity_lens(ACTIVE_LENS, ACTIVE_LENS_LABEL)
+    _write_report(
+        RUN_DIR / "country_identity_lens_validation.original_pooled_j.json",
+        LENS_VALIDATION_REPORT,
+    )
+    if LENS_VALIDATION_REPORT["verdict"] == "COUNTRY_IDENTITY_LENS_VALIDATION_GO":
+        IDENTITY_CALIBRATION_REPORT = calibrate_identity_band(
+            ACTIVE_LENS, ACTIVE_LENS_LABEL
+        )
+        _write_report(
+            RUN_DIR / "country_identity_band_calibration.original_pooled_j.json",
+            IDENTITY_CALIBRATION_REPORT,
+        )
+
+    needs_refit = (
+        LENS_VALIDATION_REPORT["verdict"] != "COUNTRY_IDENTITY_LENS_VALIDATION_GO"
+        or IDENTITY_CALIBRATION_REPORT is None
+        or IDENTITY_CALIBRATION_REPORT["verdict"]
+        != "COUNTRY_IDENTITY_BAND_CALIBRATION_GO"
+    )
+    if needs_refit and RUN_STAGE2_REFIT_TASK_MATCHED_LENS_IF_NEEDED:
+        if not CONFIRM_TASK_MATCHED_REFIT_BUDGET:
+            raise RuntimeError("task-matched refit was requested without budget confirmation")
+        fit_rows = sorted(
+            [row for row in MEDIA_ROWS if row["study_split"] == "fit"],
+            key=lambda row: row["unit_id"],
+        )
+        units = [
+            FitUnit(
+                unit_id=f"{row['unit_id']}:{modality}:country_identity",
+                group_id=row["unit_id"], image_id=row["image_checksum"],
+                modality=modality, caption=text_evidence(row["country"]),
+                image_path=row["image_path"], audio_path=row["audio_path"],
+                prompt="country_identity_task_matched_assistant_prefill",
+            )
+            for row in fit_rows for modality in MODALITIES
+        ]
+        if len(units) != 99:
+            raise RuntimeError(f"task-matched country fit requires 99 units, got {len(units)}")
+        def task_fit_inputs(unit):
+            row = next(item for item in fit_rows if item["unit_id"] == unit.group_id)
+            return build_task_inputs(row, unit.modality, "identity")
+        checkpoint = RUN_DIR / "lenses" / "checkpoints" / "country_identity.jacobian_sum.pt"
+        if TASK_LENS_PATH.is_file():
+            ACTIVE_LENS = JacobianLens.load(str(TASK_LENS_PATH))
+        else:
+            ACTIVE_LENS = fit_arm(
+                BACKEND, units, build_inputs=task_fit_inputs,
+                source_layers=LAYERS, target_layer=TARGET_LAYER,
+                checkpoint_path=checkpoint, arm="pooled",
+                scientific_fingerprint=payload_checksum({
+                    "base": SCIENTIFIC_DIGEST,
+                    "fit": "country_identity_task_matched_assistant_prefill",
+                }),
+                dim_batch=DIM_BATCH, skip_first=SKIP_FIRST,
+                checkpoint_every=CHECKPOINT_EVERY,
+                progress=lambda info: print(
+                    "task-matched fit", info["index"], "/", info["total"],
+                    info["modality"], "checkpoint", info["checkpoint_written"],
+                ) if (
+                    info["index"] == 1 or info["checkpoint_written"]
+                    or info["index"] == info["total"]
+                ) else None,
+            )
+            TASK_LENS_PATH.parent.mkdir(parents=True, exist_ok=True)
+            temporary = TASK_LENS_PATH.with_suffix(".tmp.pt")
+            ACTIVE_LENS.save(str(temporary), dtype=torch.float32)
+            os.replace(temporary, TASK_LENS_PATH)
+        task_provenance = {
+            "lens_checksum": file_checksum(str(TASK_LENS_PATH)),
+            "source_layers": list(LAYERS), "target_layer": TARGET_LAYER,
+            "n_prompts": 99, "stored_dtype": "float32",
+            "fit_prompt": "country_identity_task_matched_assistant_prefill",
+            "country_instruction": COUNTRY_COMPLETION_INSTRUCTION,
+        }
+        task_provenance["provenance_checksum"] = payload_checksum(task_provenance)
+        _write_report(TASK_LENS_PROVENANCE_PATH, task_provenance)
+        ACTIVE_LENS_LABEL = "task_matched_pooled_j"
+        IDENTITY_CALIBRATION_REPORT = None
+        LENS_VALIDATION_REPORT = validate_identity_lens(ACTIVE_LENS, ACTIVE_LENS_LABEL)
+        _write_report(
+            RUN_DIR / "country_identity_lens_validation.task_matched_pooled_j.json",
+            LENS_VALIDATION_REPORT,
+        )
+        if LENS_VALIDATION_REPORT["verdict"] == "COUNTRY_IDENTITY_LENS_VALIDATION_GO":
+            IDENTITY_CALIBRATION_REPORT = calibrate_identity_band(
+                ACTIVE_LENS, ACTIVE_LENS_LABEL
+            )
+            _write_report(
+                RUN_DIR / "country_identity_band_calibration.task_matched_pooled_j.json",
+                IDENTITY_CALIBRATION_REPORT,
+            )
+
+    _write_report(LENS_VALIDATION_PATH, LENS_VALIDATION_REPORT)
+    if IDENTITY_CALIBRATION_REPORT is not None:
+        _write_report(IDENTITY_CALIBRATION_PATH, IDENTITY_CALIBRATION_REPORT)
+    active_record = {
+        "label": ACTIVE_LENS_LABEL,
+        "lens_path": str(
+            TASK_LENS_PATH if ACTIVE_LENS_LABEL == "task_matched_pooled_j" else LENS_PATH
+        ),
+        "lens_checksum": (
+            file_checksum(str(TASK_LENS_PATH))
+            if ACTIVE_LENS_LABEL == "task_matched_pooled_j"
+            else PARENT_LENS_CHECKSUM
+        ),
+        "lens_validation_checksum": LENS_VALIDATION_REPORT["report_checksum"],
+        "identity_calibration_checksum": (
+            IDENTITY_CALIBRATION_REPORT.get("report_checksum")
+            if IDENTITY_CALIBRATION_REPORT else None
+        ),
+    }
+    active_record["record_checksum"] = payload_checksum(active_record)
+    _write_report(ACTIVE_LENS_PATH, active_record)
+    print("identity lens verdict", LENS_VALIDATION_REPORT["verdict"])
+    print("eligible identity layers", LENS_VALIDATION_REPORT["eligible_layers"])
+    print(
+        "identity calibration verdict",
+        IDENTITY_CALIBRATION_REPORT["verdict"] if IDENTITY_CALIBRATION_REPORT else "NOT_RUN",
+    )
+    print(
+        "selected identity band",
+        IDENTITY_CALIBRATION_REPORT.get("selected") if IDENTITY_CALIBRATION_REPORT else None,
+    )
+elif LENS_VALIDATION_REPORT is not None:
+    print("reused identity lens validation", LENS_VALIDATION_REPORT["verdict"])
+    if IDENTITY_CALIBRATION_REPORT is not None:
+        print("reused identity calibration", IDENTITY_CALIBRATION_REPORT["verdict"])
+
+LENS = ACTIVE_LENS
+'''
+)
+
 markdown("## 10. Stage 3: exact alpha-one development")
 code(
     r'''
@@ -250,10 +639,20 @@ if RUN_STAGE3_DEVELOPMENT_SWAP:
         raise RuntimeError("Stage 3 requires the completed capability report")
     if not CAPABILITY_REPORT.get("generalization_ready"):
         print("DEVELOPMENT NOT LICENSED: clean source capability did not cover two pairs")
-    elif LOCALIZATION_REPORT is None:
-        raise RuntimeError("Stage 3 requires the checksum-pinned diagnostic report")
+    elif LENS_VALIDATION_REPORT is None or (
+        LENS_VALIDATION_REPORT.get("verdict")
+        != "COUNTRY_IDENTITY_LENS_VALIDATION_GO"
+    ):
+        print("DEVELOPMENT NOT LICENSED: country identity lens validation did not pass")
+    elif IDENTITY_CALIBRATION_REPORT is None or (
+        IDENTITY_CALIBRATION_REPORT.get("verdict")
+        != "COUNTRY_IDENTITY_BAND_CALIBRATION_GO"
+    ):
+        print("DEVELOPMENT NOT LICENSED: identity-swap band calibration did not pass")
     else:
-        from jlens.mmpilot.country_workspace import causal_report, freeze_confirmation_design
+        from jlens.mmpilot.country_workspace import (
+            causal_report, freeze_identity_calibrated_confirmation_design,
+        )
         development_rows = sorted(
             [row for row in MEDIA_ROWS if row["study_split"] == "development"],
             key=lambda row: row["unit_id"],
@@ -262,11 +661,11 @@ if RUN_STAGE3_DEVELOPMENT_SWAP:
         unembed = BACKEND.unembedding_weight()
         trial_rows = []
         eligible_direction_names = set(CAPABILITY_REPORT["eligible_directions"])
+        selected_identity_band = tuple(
+            IDENTITY_CALIBRATION_REPORT["selected"]["band"]
+        )
         for property_name in PROPERTIES:
-            # Versioned amendment: test the identity-exchange hypothesis on the
-            # original full band. Direct answer insertion remains a diagnostic,
-            # but is not a necessary condition for downstream recomputation.
-            band = tuple(LAYERS)
+            band = selected_identity_band
             unrelated = build_swap_bases_for_lens(
                 LENS, unembed, layers=band,
                 source=tokens[CONTROL_COUNTRIES[0]], target=tokens[CONTROL_COUNTRIES[1]],
@@ -328,11 +727,12 @@ if RUN_STAGE3_DEVELOPMENT_SWAP:
         print("development verdict", DEVELOPMENT_REPORT["verdict"])
         print("passing directions", DEVELOPMENT_REPORT["passing_directions_both_properties"])
         if DEVELOPMENT_REPORT["generalized_across_two_pairs"]:
-            design = freeze_confirmation_design(
+            design = freeze_identity_calibrated_confirmation_design(
                 protocol=PROTOCOL, media_validation=PREPARED["media_validation"],
-                capability=CAPABILITY_REPORT, localization=LOCALIZATION_REPORT,
+                capability=CAPABILITY_REPORT,
+                lens_validation=LENS_VALIDATION_REPORT,
+                identity_calibration=IDENTITY_CALIBRATION_REPORT,
                 development=DEVELOPMENT_REPORT,
-                predeclared_band=LAYERS,
             )
             _write_report(DESIGN_PATH, design)
             print("confirmation design frozen", design["design_checksum"])
@@ -518,16 +918,22 @@ if RUN_STAGE5_WRITE_REPORT:
         "scientific_config": SCIENTIFIC_CONFIG,
         "protocol": PROTOCOL,
         "media_validation": PREPARED["media_validation"],
-        "lens_path": str(LENS_PATH),
-        "lens_exists": LENS_PATH.is_file(),
+        "lens_path": str(
+            TASK_LENS_PATH if ACTIVE_LENS_LABEL == "task_matched_pooled_j" else LENS_PATH
+        ),
+        "lens_exists": bool(LENS is not None),
         "capability": CAPABILITY_REPORT,
         "localization": LOCALIZATION_REPORT,
+        "identity_lens_validation": LENS_VALIDATION_REPORT,
+        "identity_band_calibration": IDENTITY_CALIBRATION_REPORT,
+        "active_lens_label": ACTIVE_LENS_LABEL,
         "development": DEVELOPMENT_REPORT,
         "confirmation": CONFIRMATION_REPORT,
         "headline_verdict": (
             CONFIRMATION_REPORT.get("verdict") if CONFIRMATION_REPORT
             else DEVELOPMENT_REPORT.get("verdict") if DEVELOPMENT_REPORT
-            else LOCALIZATION_REPORT.get("verdict") if LOCALIZATION_REPORT
+            else IDENTITY_CALIBRATION_REPORT.get("verdict") if IDENTITY_CALIBRATION_REPORT
+            else LENS_VALIDATION_REPORT.get("verdict") if LENS_VALIDATION_REPORT
             else CAPABILITY_REPORT.get("verdict") if CAPABILITY_REPORT
             else "NOT_RUN"
         ),
@@ -553,10 +959,32 @@ markdown("## 5. Open the fingerprinted run")
 code(
     r'''
 from jlens.mmpilot.store import RunFingerprint, UnitStore, payload_checksum, safe_key
-PROTOCOL = PREPARED["protocol"]
+BASE_PROTOCOL = PREPARED["protocol"]
+PROTOCOL_AMENDMENT = {
+    "version": "mmpilot.country_prompt_lens_band_debug.v4",
+    "base_protocol_digest": BASE_PROTOCOL["protocol_digest"],
+    "country_completion_instruction": COUNTRY_COMPLETION_INSTRUCTION,
+    "band_selection_endpoint": "exact_country_identity_swap_only",
+    "band_selection_candidates": [list(band) for band in PATH_BANDS],
+    "downstream_facts_hidden_during_band_selection": True,
+    "conditional_refit": (
+        "one_task_matched_pooled_multimodal_j_lens_after_existing_lens_no_go"
+    ),
+}
+PROTOCOL_AMENDMENT["amendment_digest"] = payload_checksum(PROTOCOL_AMENDMENT)
+PROTOCOL = {
+    **BASE_PROTOCOL,
+    "effective_amendment": PROTOCOL_AMENDMENT,
+    "effective_protocol_digest": payload_checksum({
+        "base_protocol_digest": BASE_PROTOCOL["protocol_digest"],
+        "amendment_digest": PROTOCOL_AMENDMENT["amendment_digest"],
+    }),
+}
 SCIENTIFIC_CONFIG = {
     "study": PROTOCOL["version"],
-    "protocol_digest": PROTOCOL["protocol_digest"],
+    "base_protocol_digest": PROTOCOL["protocol_digest"],
+    "protocol_amendment_digest": PROTOCOL_AMENDMENT["amendment_digest"],
+    "effective_protocol_digest": PROTOCOL["effective_protocol_digest"],
     "dataset_revision": PREPARED["dataset_revision"],
     "population_digest": PREPARED["population_digest"],
     "model_repo_id": MODEL_REPO_ID,
@@ -572,8 +1000,11 @@ SCIENTIFIC_CONFIG = {
     "parent_v2_run_dir": str(PARENT_V2_RUN_DIR),
     "parent_capability_checksum": PARENT_CAPABILITY_CHECKSUM,
     "parent_localization_checksum": PARENT_LOCALIZATION_CHECKSUM,
-    "development_band": list(LAYERS),
-    "localization_role": "diagnostic_not_a_necessary_gate",
+    "country_completion_instruction": COUNTRY_COMPLETION_INSTRUCTION,
+    "band_selection_endpoint": "exact_country_identity_swap_only",
+    "band_selection_candidates": [list(band) for band in PATH_BANDS],
+    "downstream_facts_hidden_during_band_selection": True,
+    "task_matched_refit_rule": "only_after_existing_lens_readout_or_identity_swap_no_go",
 }
 SCIENTIFIC_DIGEST = payload_checksum(SCIENTIFIC_CONFIG)
 RUN_DIR = RUNS_ROOT / f"mmcountry_real_{SCIENTIFIC_DIGEST.split(':')[1][:12]}"
@@ -590,7 +1021,12 @@ FINGERPRINT = RunFingerprint(
         "alpha": 1.0, "position_rule": "all_prompt_positions",
         "directions": [list(pair) for pair in DIRECTIONS],
         "properties": list(PROPERTIES), "path_bands": [list(band) for band in PATH_BANDS],
-        "controls": ["zero", "random", "unrelated", "direct_answer"],
+        "controls": ["zero", "random", "unrelated"],
+        "instrument_sequence": [
+            "corrected_clean_capability", "identity_lens_validation",
+            "identity_band_calibration", "downstream_fact_development",
+            "fresh_confirmation",
+        ],
     },
     extra={"scientific_digest": SCIENTIFIC_DIGEST, "dtype": "float32"},
 )
@@ -656,8 +1092,8 @@ from jlens.mmpilot.coordinate_swap import (
     random_two_direction_basis, resolve_concept_token,
 )
 from jlens.mmpilot.country_workspace import (
-    CONTROL_COUNTRIES, FACTS, answer_matches, assistant_prefill, fact,
-    identity_matches, speech_evidence, text_evidence,
+    CONTROL_COUNTRIES, COUNTRY_COMPLETION_INSTRUCTION, FACTS, answer_matches,
+    assistant_prefill, fact, identity_matches, speech_evidence, text_evidence,
 )
 from jlens.mmpilot.multimodal_lens import (
     build_swap_bases_for_lens, selected_lens_vector,
@@ -694,7 +1130,9 @@ def build_task_inputs(row, modality, property_name):
     else:
         waveform, rate = _load_audio(row)
         kwargs.update(audio=waveform, sampling_rate=rate, media_path=row["audio_path"])
-    return build_multimodal_assistant_prefill_inputs(**kwargs)
+    return build_multimodal_assistant_prefill_inputs(
+        **kwargs, instruction=COUNTRY_COMPLETION_INSTRUCTION
+    )
 
 def generated_success(result, expected, property_name):
     if property_name == "identity":
@@ -891,6 +1329,8 @@ RUN_REAL_COUNTRY_WORKSPACE = False
 RUN_STAGE0_PREPARE_DATA = False
 RUN_STAGE1_FIT_POOLED_LENS = False
 RUN_STAGE2_CAPABILITY_AND_LOCALIZATION = False
+RUN_STAGE2_DEBUG_COUNTRY_INSTRUMENT = False
+RUN_STAGE2_REFIT_TASK_MATCHED_LENS_IF_NEEDED = False
 RUN_STAGE3_DEVELOPMENT_SWAP = False
 RUN_STAGE4_FRESH_CONFIRMATION = False
 RUN_STAGE5_WRITE_REPORT = False
@@ -899,12 +1339,14 @@ CONFIRM_MODEL_LOAD = False
 CONFIRM_FP32_A100 = False
 CONFIRM_LENS_FIT_BUDGET = False
 CONFIRM_LOCALIZATION_BUDGET = False
+CONFIRM_IDENTITY_CALIBRATION_BUDGET = False
+CONFIRM_TASK_MATCHED_REFIT_BUDGET = False
 CONFIRM_DEVELOPMENT_BUDGET = False
 CONFIRM_CONFIRMATION_BUDGET = False
 
 MODEL_REPO_ID = "google/gemma-4-E4B-it"
 MODEL_REVISION = "fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd"
-SCIENTIFIC_IMPLEMENTATION_ID = "country-exact-development-v3.20260826"
+SCIENTIFIC_IMPLEMENTATION_ID = "country-prompt-lens-band-debug-v4.20260826"
 PARENT_V1_RUN_DIR = Path(
     "/content/drive/MyDrive/jacobian-lens-gemma/runs/mmcountry/"
     "mmcountry_real_91055b9ab807"
@@ -941,6 +1383,8 @@ ANY_STAGE = any((
     RUN_STAGE0_PREPARE_DATA,
     RUN_STAGE1_FIT_POOLED_LENS,
     RUN_STAGE2_CAPABILITY_AND_LOCALIZATION,
+    RUN_STAGE2_DEBUG_COUNTRY_INSTRUMENT,
+    RUN_STAGE2_REFIT_TASK_MATCHED_LENS_IF_NEEDED,
     RUN_STAGE3_DEVELOPMENT_SWAP,
     RUN_STAGE4_FRESH_CONFIRMATION,
     RUN_STAGE5_WRITE_REPORT,
@@ -953,6 +1397,8 @@ if not ANY_STAGE:
 MODEL_STAGE = any((
     RUN_STAGE1_FIT_POOLED_LENS,
     RUN_STAGE2_CAPABILITY_AND_LOCALIZATION,
+    RUN_STAGE2_DEBUG_COUNTRY_INSTRUMENT,
+    RUN_STAGE2_REFIT_TASK_MATCHED_LENS_IF_NEEDED,
     RUN_STAGE3_DEVELOPMENT_SWAP,
     RUN_STAGE4_FRESH_CONFIRMATION,
 ))
@@ -960,6 +1406,13 @@ if MODEL_STAGE and not CONFIRM_MODEL_LOAD:
     print("MODEL BLOCKED: set CONFIRM_MODEL_LOAD=True after reading the budget")
 if MODEL_STAGE and not CONFIRM_FP32_A100:
     print("FP32 BLOCKED: set CONFIRM_FP32_A100=True on an 80 GB A100")
+if RUN_STAGE2_DEBUG_COUNTRY_INSTRUMENT and not CONFIRM_IDENTITY_CALIBRATION_BUDGET:
+    print("IDENTITY CALIBRATION BLOCKED: confirm its forward-pass budget")
+if (
+    RUN_STAGE2_REFIT_TASK_MATCHED_LENS_IF_NEEDED
+    and not CONFIRM_TASK_MATCHED_REFIT_BUDGET
+):
+    print("TASK-MATCHED REFIT BLOCKED: confirm its backward-pass budget")
 '''
 )
 
@@ -967,7 +1420,8 @@ markdown("## 2. Frozen protocol and budget, printed before model load")
 code(
     r'''
 from jlens.mmpilot.country_workspace import (
-    DIRECTIONS, EVAL_COUNTRIES, FIT_COUNTRIES, LAYERS, MODALITIES,
+    COUNTRY_COMPLETION_INSTRUCTION, DIRECTIONS, EVAL_COUNTRIES, FIT_COUNTRIES,
+    LAYERS, MODALITIES,
     N_CONFIRMATION_PER_COUNTRY, N_DEVELOPMENT_PER_COUNTRY,
     N_FIT_PER_COUNTRY, N_LOCALIZATION_PER_COUNTRY, PATH_BANDS,
     PROPERTIES, TARGET_LAYER, benchmark_spec,
@@ -978,6 +1432,10 @@ print("  fit population", len(FIT_COUNTRIES) * N_FIT_PER_COUNTRY, "identities x 
 print("  fit work", 99, "forwards +", 99 * ((EXPECT_D_MODEL + DIM_BATCH - 1) // DIM_BATCH), "backward passes")
 print("  clean capability", len(EVAL_COUNTRIES) * N_DEVELOPMENT_PER_COUNTRY * len(MODALITIES) * 3, "complete generations")
 print("  direct localization", len(DIRECTIONS) * len(PROPERTIES) * len(MODALITIES) * len(PATH_BANDS) * N_LOCALIZATION_PER_COUNTRY, "conditions")
+print("  corrected clean capability", len(EVAL_COUNTRIES) * N_DEVELOPMENT_PER_COUNTRY * len(MODALITIES) * 3, "complete generations")
+print("  identity lens readout", 3 * N_DEVELOPMENT_PER_COUNTRY * len(MODALITIES), "forwards plus cheap six-country projections")
+print("  identity band calibration maximum", 3 * len(PATH_BANDS) * len(MODALITIES) * 4 * N_DEVELOPMENT_PER_COUNTRY, "conditions per lens")
+print("  conditional task-matched refit", 99, "forwards plus", 99 * ((EXPECT_D_MODEL + DIM_BATCH - 1) // DIM_BATCH), "backward passes")
 print("  development", len(DIRECTIONS) * len(PROPERTIES) * len(MODALITIES) * 4 * N_DEVELOPMENT_PER_COUNTRY, "conditions")
 print("  confirmation maximum", len(DIRECTIONS) * len(PROPERTIES) * len(MODALITIES) * 4 * N_CONFIRMATION_PER_COUNTRY, "conditions")
 print("  model dtype float32; A100 80 GB required; no fallback")

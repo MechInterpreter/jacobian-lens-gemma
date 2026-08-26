@@ -28,6 +28,17 @@ from jlens.mmpilot.store import payload_checksum
 
 PROTOCOL_VERSION = "mmpilot.country_workspace_generalization.v1"
 CAPABILITY_GATE_VERSION = "mmpilot.country_direction_capability.v2"
+COUNTRY_COMPLETION_INSTRUCTION = (
+    "Use the supplied evidence to identify the country, then use ordinary "
+    "factual knowledge to complete the assistant's sentence directly. "
+    "Do not restart, explain, or list choices."
+)
+COUNTRY_IDENTITY_LENS_VALIDATION_VERSION = (
+    "mmpilot.country_identity_lens_validation.v1"
+)
+COUNTRY_IDENTITY_BAND_CALIBRATION_VERSION = (
+    "mmpilot.country_identity_band_calibration.v1"
+)
 DATASET_ID = "tokeron/country-flags-variations"
 DATASET_REVISION = "1ea3cce246ab44f0fe8ecb526ad759ea11d28465"
 DATASET_CARD = "https://huggingface.co/datasets/tokeron/country-flags-variations"
@@ -90,6 +101,8 @@ MIN_DIRECT_ANSWER_RATE = 0.75
 MIN_SWAP_RATE = 0.75
 MIN_CONTROL_MARGIN = 0.25
 FAMILYWISE_ALPHA = 0.05
+MIN_IDENTITY_LENS_TOP1_RATE = 0.75
+MIN_IDENTITY_SWAP_RATE = 0.75
 
 
 class CountryWorkspaceRefused(RuntimeError):
@@ -514,6 +527,202 @@ def direct_answer_localization_report(rows: Sequence[Mapping]) -> dict:
     return {**body, "report_checksum": payload_checksum(body)}
 
 
+def identity_lens_validation_report(
+    rows: Sequence[Mapping],
+    *,
+    expected_n_per_modality: int,
+) -> dict:
+    """Validate whether a lens identifies the clean source country.
+
+    This diagnostic ranks the ground-truth source against the fixed evaluation
+    and unrelated-control country tokens. It never supplies candidates to the
+    model's generated output. A layer is eligible only when the source is the
+    sole maximum on at least 75% of examples in every modality.
+    """
+
+    records = [dict(row) for row in rows]
+    cells = []
+    eligible_layers = []
+    observed_layers = sorted({int(row["layer"]) for row in records})
+    for layer in observed_layers:
+        layer_cells = []
+        for modality in MODALITIES:
+            selected = [
+                row
+                for row in records
+                if int(row.get("layer", -1)) == layer
+                and row.get("modality") == modality
+            ]
+            top1 = sum(bool(row.get("source_is_sole_top1")) for row in selected)
+            complete = len(selected) == int(expected_n_per_modality)
+            finite = bool(selected) and all(bool(row.get("all_finite")) for row in selected)
+            passed = (
+                complete
+                and finite
+                and top1 / len(selected) >= MIN_IDENTITY_LENS_TOP1_RATE
+            )
+            cell = {
+                "layer": layer,
+                "modality": modality,
+                "n": len(selected),
+                "sole_top1": top1,
+                "top1_rate": top1 / len(selected) if selected else 0.0,
+                "complete": complete,
+                "all_finite": finite,
+                "passed": passed,
+            }
+            cells.append(cell)
+            layer_cells.append(cell)
+        if len(layer_cells) == len(MODALITIES) and all(
+            cell["passed"] for cell in layer_cells
+        ):
+            eligible_layers.append(layer)
+    body = {
+        "version": COUNTRY_IDENTITY_LENS_VALIDATION_VERSION,
+        "verdict": (
+            "COUNTRY_IDENTITY_LENS_VALIDATION_GO"
+            if eligible_layers
+            else "COUNTRY_IDENTITY_LENS_VALIDATION_NO_GO"
+        ),
+        "candidate_universe": [*EVAL_COUNTRIES, *CONTROL_COUNTRIES],
+        "generated_output_used_for_selection": False,
+        "minimum_top1_rate": MIN_IDENTITY_LENS_TOP1_RATE,
+        "eligible_layers": eligible_layers,
+        "cells": cells,
+        "rows": records,
+    }
+    return {**body, "report_checksum": payload_checksum(body)}
+
+
+def identity_band_calibration_report(
+    rows: Sequence[Mapping],
+    *,
+    eligible_directions: Sequence[str],
+    expected_n: int,
+) -> dict:
+    """Choose a band using identity swaps, never downstream-fact outcomes."""
+
+    records = [dict(row) for row in rows]
+    allowed = set(map(str, eligible_directions))
+    candidates = []
+    for band in PATH_BANDS:
+        direction_cells = []
+        passing_directions = []
+        for source, target in DIRECTIONS:
+            direction = f"{source}->{target}"
+            if direction not in allowed:
+                continue
+            modality_cells = []
+            for modality in MODALITIES:
+                subset = [
+                    row
+                    for row in records
+                    if row.get("direction") == direction
+                    and row.get("modality") == modality
+                    and tuple(map(int, row.get("layers_patched") or ())) == band
+                ]
+                conditions = {
+                    condition: _condition_summary(subset, condition)
+                    for condition in ("exact", "zero", "random", "unrelated")
+                }
+                exact = conditions["exact"]
+                margins = {
+                    control: exact["rate"] - conditions[control]["rate"]
+                    for control in ("zero", "random", "unrelated")
+                }
+                complete = all(
+                    condition["n"] == int(expected_n)
+                    for condition in conditions.values()
+                )
+                passed = (
+                    complete
+                    and exact["rate"] >= MIN_IDENTITY_SWAP_RATE
+                    and exact["integrity_pass"]
+                    and all(
+                        conditions[name]["integrity_pass"]
+                        for name in ("zero", "random", "unrelated")
+                    )
+                    and min(margins.values()) >= MIN_CONTROL_MARGIN
+                )
+                cell = {
+                    "direction": direction,
+                    "modality": modality,
+                    "conditions": conditions,
+                    "margins": margins,
+                    "complete": complete,
+                    "passed": passed,
+                }
+                modality_cells.append(cell)
+                direction_cells.append(cell)
+            if len(modality_cells) == len(MODALITIES) and all(
+                cell["passed"] for cell in modality_cells
+            ):
+                passing_directions.append(direction)
+        unordered_pairs = {
+            tuple(sorted(direction.split("->", 1)))
+            for direction in passing_directions
+        }
+        exact_rates = [
+            cell["conditions"]["exact"]["rate"] for cell in direction_cells
+        ]
+        candidates.append(
+            {
+                "path_id": f"L{band[0]}-{band[-1]}",
+                "band": list(band),
+                "passing_directions": passing_directions,
+                "n_distinct_pairs": len(unordered_pairs),
+                "generalized_across_two_pairs": len(unordered_pairs) >= 2,
+                "minimum_exact_rate": min(exact_rates, default=0.0),
+                "mean_exact_rate": (
+                    sum(exact_rates) / len(exact_rates) if exact_rates else 0.0
+                ),
+                "cells": direction_cells,
+            }
+        )
+    eligible = [
+        candidate
+        for candidate in candidates
+        if candidate["generalized_across_two_pairs"]
+    ]
+    eligible.sort(
+        key=lambda candidate: (
+            -float(candidate["minimum_exact_rate"]),
+            -float(candidate["mean_exact_rate"]),
+            len(candidate["band"]),
+            candidate["band"],
+        )
+    )
+    selected = None
+    if eligible:
+        selected = {
+            key: eligible[0][key]
+            for key in (
+                "path_id",
+                "band",
+                "passing_directions",
+                "n_distinct_pairs",
+                "minimum_exact_rate",
+                "mean_exact_rate",
+            )
+        }
+    body = {
+        "version": COUNTRY_IDENTITY_BAND_CALIBRATION_VERSION,
+        "verdict": (
+            "COUNTRY_IDENTITY_BAND_CALIBRATION_GO"
+            if selected is not None
+            else "COUNTRY_IDENTITY_BAND_CALIBRATION_NO_GO"
+        ),
+        "selection_used_downstream_fact_outcomes": False,
+        "eligible_directions": sorted(allowed),
+        "minimum_swap_rate": MIN_IDENTITY_SWAP_RATE,
+        "minimum_control_margin": MIN_CONTROL_MARGIN,
+        "selected": selected,
+        "candidates": candidates,
+        "rows": records,
+    }
+    return {**body, "report_checksum": payload_checksum(body)}
+
+
 def _condition_summary(rows: Sequence[Mapping], condition: str) -> dict:
     selected = [row for row in rows if row.get("condition") == condition]
     successes = sum(bool(row.get("success")) for row in selected)
@@ -769,13 +978,82 @@ def freeze_confirmation_design(
         )
     body = {
         "version": PROTOCOL_VERSION,
-        "protocol_digest": protocol.get("protocol_digest"),
+        "protocol_digest": (
+            protocol.get("effective_protocol_digest")
+            or protocol.get("protocol_digest")
+        ),
         "media_population_digest": media_validation.get("population_digest"),
         "capability_report_checksum": capability.get("report_checksum"),
         "localization_report_checksum": localization.get("report_checksum"),
         "development_report_checksum": development.get("report_checksum"),
         "selected_paths": selected_paths,
         "localization_role": localization_role,
+        "directions": directions,
+        "properties": list(PROPERTIES),
+        "modalities": list(MODALITIES),
+        "alpha": ALPHA,
+        "position_rule": POSITION_RULE,
+        "confirmation_per_country": N_CONFIRMATION_PER_COUNTRY,
+        "frozen_before_confirmation_outputs": True,
+    }
+    return {**body, "design_checksum": payload_checksum(body)}
+
+
+def freeze_identity_calibrated_confirmation_design(
+    *,
+    protocol: Mapping,
+    media_validation: Mapping,
+    capability: Mapping,
+    lens_validation: Mapping,
+    identity_calibration: Mapping,
+    development: Mapping,
+) -> dict:
+    """Freeze downstream confirmation after outcome-blind identity calibration."""
+
+    if not bool(media_validation.get("passed")):
+        raise CountryWorkspaceRefused("media validation did not pass")
+    if not bool(capability.get("generalization_ready")):
+        raise CountryWorkspaceRefused(
+            "clean source capability did not cover two independent pairs"
+        )
+    if lens_validation.get("verdict") != "COUNTRY_IDENTITY_LENS_VALIDATION_GO":
+        raise CountryWorkspaceRefused("country identity lens validation did not pass")
+    if (
+        identity_calibration.get("verdict")
+        != "COUNTRY_IDENTITY_BAND_CALIBRATION_GO"
+    ):
+        raise CountryWorkspaceRefused("country identity band calibration did not pass")
+    selected = dict(identity_calibration.get("selected") or {})
+    band = tuple(map(int, selected.get("band") or ()))
+    if band not in PATH_BANDS:
+        raise CountryWorkspaceRefused(
+            f"identity calibration selected unregistered band {list(band)}"
+        )
+    directions = list(development.get("passing_directions_both_properties") or ())
+    if not bool(development.get("generalized_across_two_pairs")):
+        raise CountryWorkspaceRefused(
+            "development did not pass both properties across two independent pairs"
+        )
+    selected_paths = {
+        property_name: {
+            "path_id": selected["path_id"],
+            "band": list(band),
+            "selection_basis": "identity_swap_only_before_downstream_fact_outputs",
+        }
+        for property_name in PROPERTIES
+    }
+    body = {
+        "version": PROTOCOL_VERSION,
+        "protocol_digest": protocol.get("protocol_digest"),
+        "media_population_digest": media_validation.get("population_digest"),
+        "capability_report_checksum": capability.get("report_checksum"),
+        "lens_validation_report_checksum": lens_validation.get("report_checksum"),
+        "identity_calibration_report_checksum": identity_calibration.get(
+            "report_checksum"
+        ),
+        "development_report_checksum": development.get("report_checksum"),
+        "selected_paths": selected_paths,
+        "selection_used_downstream_fact_outcomes": False,
         "directions": directions,
         "properties": list(PROPERTIES),
         "modalities": list(MODALITIES),
@@ -800,6 +1078,9 @@ __all__ = [
     "ALPHA",
     "ANSWER_ALIASES",
     "CAPABILITY_GATE_VERSION",
+    "COUNTRY_COMPLETION_INSTRUCTION",
+    "COUNTRY_IDENTITY_BAND_CALIBRATION_VERSION",
+    "COUNTRY_IDENTITY_LENS_VALIDATION_VERSION",
     "CONTROL_COUNTRIES",
     "CountryMediaRow",
     "CountryWorkspaceRefused",
@@ -815,6 +1096,8 @@ __all__ = [
     "MIN_CAPABILITY_RATE",
     "MIN_CONTROL_MARGIN",
     "MIN_DIRECT_ANSWER_RATE",
+    "MIN_IDENTITY_LENS_TOP1_RATE",
+    "MIN_IDENTITY_SWAP_RATE",
     "MIN_SWAP_RATE",
     "MODALITIES",
     "N_CONFIRMATION_PER_COUNTRY",
@@ -834,6 +1117,9 @@ __all__ = [
     "direct_answer_localization_report",
     "fact",
     "freeze_confirmation_design",
+    "freeze_identity_calibrated_confirmation_design",
+    "identity_band_calibration_report",
+    "identity_lens_validation_report",
     "identity_matches",
     "normalize_surface",
     "speech_evidence",

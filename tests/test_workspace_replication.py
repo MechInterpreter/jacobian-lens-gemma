@@ -193,6 +193,25 @@ def test_multimodal_prefill_text_keeps_evidence_in_user_turn() -> None:
     assert MULTIMODAL_MAX_NEW_TOKENS == 4
 
 
+def test_multimodal_prefill_accepts_a_domain_specific_instruction() -> None:
+    processor = _PrefillProcessor()
+    backend = SimpleNamespace(
+        processor=processor, device=torch.device("cpu"), interface={}
+    )
+    instruction = "Identify the country and complete the factual sentence."
+    build_multimodal_assistant_prefill_inputs(
+        backend,
+        modality="text",
+        caption="Country evidence: France.",
+        assistant_prefill="The capital of the country in the evidence is",
+        instruction=instruction,
+    )
+    messages, _ = processor.chat_calls[0]
+    user_text = messages[0]["content"][0]["text"]
+    assert instruction in user_text
+    assert MULTIMODAL_COMPLETION_INSTRUCTION not in user_text
+
+
 def test_multimodal_prefill_image_preserves_media_token_span() -> None:
     class ImageProcessor(_PrefillProcessor):
         def apply_chat_template(self, messages, **kwargs):

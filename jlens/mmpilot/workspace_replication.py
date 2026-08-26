@@ -665,6 +665,7 @@ def build_multimodal_assistant_prefill_inputs(
     audio=None,
     sampling_rate: int | None = None,
     media_path: str | None = None,
+    instruction: str | None = None,
 ):
     """Build one answer-neutral completion input for any supported modality.
 
@@ -708,7 +709,16 @@ def build_multimodal_assistant_prefill_inputs(
             "template"
         )
 
-    instruction = MULTIMODAL_COMPLETION_INSTRUCTION
+    instruction = (
+        MULTIMODAL_COMPLETION_INSTRUCTION
+        if instruction is None
+        else str(instruction).strip()
+    )
+    if not instruction:
+        raise WorkspaceReplicationRefused(
+            "multimodal assistant-prefill completion requires a non-empty "
+            "domain instruction"
+        )
     user_content: list[dict] = []
     audio_record = None
     modality_token_id = None

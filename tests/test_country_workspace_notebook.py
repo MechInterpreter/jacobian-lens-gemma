@@ -48,11 +48,13 @@ def test_default_configuration_spends_nothing() -> None:
     assert "RUN_STAGE0_PREPARE_DATA = False" in source
     assert "RUN_STAGE1_FIT_POOLED_LENS = False" in source
     assert "RUN_STAGE2_CAPABILITY_AND_LOCALIZATION = False" in source
+    assert "RUN_STAGE2_DEBUG_COUNTRY_INSTRUMENT = False" in source
+    assert "RUN_STAGE2_REFIT_TASK_MATCHED_LENS_IF_NEEDED = False" in source
     assert "RUN_STAGE3_DEVELOPMENT_SWAP = False" in source
     assert "RUN_STAGE4_FRESH_CONFIRMATION = False" in source
     assert "CONFIRM_MODEL_LOAD = False" in source
     assert "CONFIRM_FP32_A100 = False" in source
-    assert 'SCIENTIFIC_IMPLEMENTATION_ID = "country-exact-development-v3.20260826"' in source
+    assert 'SCIENTIFIC_IMPLEMENTATION_ID = "country-prompt-lens-band-debug-v4.20260826"' in source
     assert '"scientific_implementation_id": SCIENTIFIC_IMPLEMENTATION_ID' in source
     assert "PARENT_LENS_CHECKSUM" in source
 
@@ -98,13 +100,24 @@ def test_path_selection_cannot_read_exact_swap_results() -> None:
     assert "Stage 3 requires completed Stage 2 reports" not in source
 
 
-def test_direct_answer_localization_is_diagnostic_not_a_development_gate() -> None:
+def test_identity_calibration_not_direct_answer_selects_development_band() -> None:
     source = _source()
-    assert 'band = tuple(LAYERS)' in source
+    assert 'IDENTITY_CALIBRATION_REPORT["selected"]["band"]' in source
     assert 'LOCALIZATION_REPORT["verdict"] != "COUNTRY_DIRECT_PATHS_GO"' not in source
     assert "DEVELOPMENT NOT LICENSED: direct-answer localization did not pass" not in source
-    assert "predeclared_band=LAYERS" in source
-    assert "PARENT_LOCALIZATION_CHECKSUM" in source
+    assert "freeze_identity_calibrated_confirmation_design" in source
+    assert '"success": identity_matches(result["generated_text"], target)' in source
+    assert '"downstream_facts_hidden_during_band_selection": True' in source
+
+
+def test_country_prompt_and_task_matched_refit_are_explicit() -> None:
+    source = _source()
+    assert "instruction=COUNTRY_COMPLETION_INSTRUCTION" in source
+    assert '"effective_protocol_digest": payload_checksum' in source
+    assert '"base_protocol_digest": BASE_PROTOCOL["protocol_digest"]' in source
+    assert "country_identity_task_matched_assistant_prefill" in source
+    assert "TASK_LENS_PATH" in source
+    assert "RUN_STAGE2_REFIT_TASK_MATCHED_LENS_IF_NEEDED" in source
 
 
 def test_audio_transcript_is_not_passed_to_backend() -> None:
