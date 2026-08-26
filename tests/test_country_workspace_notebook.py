@@ -91,6 +91,8 @@ def test_path_selection_cannot_read_exact_swap_results() -> None:
     assert '"condition": "direct_answer"' in source
     assert "selection_used_exact_swap_outcomes" not in source
     assert "confirmation remains unopened: no direction passed both properties" in source
+    assert "DEVELOPMENT NOT LICENSED: clean capability did not pass" in source
+    assert "Stage 3 requires completed Stage 2 reports" not in source
 
 
 def test_audio_transcript_is_not_passed_to_backend() -> None:

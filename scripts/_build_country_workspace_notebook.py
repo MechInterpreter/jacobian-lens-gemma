@@ -206,9 +206,13 @@ if DEVELOPMENT_PATH.is_file():
 if RUN_STAGE3_DEVELOPMENT_SWAP:
     if not (MODEL_ENABLED and CONFIRM_DEVELOPMENT_BUDGET and LENS is not None):
         raise RuntimeError("Stage 3 requires the completed lens and development budget confirmation")
-    if CAPABILITY_REPORT is None or LOCALIZATION_REPORT is None:
-        raise RuntimeError("Stage 3 requires completed Stage 2 reports")
-    if LOCALIZATION_REPORT["verdict"] != "COUNTRY_DIRECT_PATHS_GO":
+    if CAPABILITY_REPORT is None:
+        raise RuntimeError("Stage 3 requires the completed capability report")
+    if CAPABILITY_REPORT["verdict"] != "COUNTRY_CAPABILITY_GO":
+        print("DEVELOPMENT NOT LICENSED: clean capability did not pass")
+    elif LOCALIZATION_REPORT is None:
+        print("DEVELOPMENT NOT LICENSED: no localization report exists")
+    elif LOCALIZATION_REPORT["verdict"] != "COUNTRY_DIRECT_PATHS_GO":
         print("DEVELOPMENT NOT LICENSED: direct-answer localization did not pass")
     else:
         from jlens.mmpilot.country_workspace import causal_report, freeze_confirmation_design
