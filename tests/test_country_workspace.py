@@ -11,6 +11,7 @@ from jlens.mmpilot.country_workspace import (
     EVAL_COUNTRIES,
     FACTS,
     FIT_COUNTRIES,
+    LAYERS,
     MODALITIES,
     N_CONFIRMATION_PER_COUNTRY,
     N_DEVELOPMENT_PER_COUNTRY,
@@ -286,3 +287,33 @@ def test_confirmation_design_is_frozen_only_after_development_passes() -> None:
             localization=localization,
             development=development,
         )
+
+
+def test_full_band_amendment_does_not_require_direct_answer_gate() -> None:
+    media = validate_media_plan(_media_rows())
+    capability = capability_report(_capability_rows())
+    localization = direct_answer_localization_report(
+        _localization_rows(passing_band=())
+    )
+    assert localization["verdict"] == "COUNTRY_DIRECT_PATHS_NO_GO"
+    development = causal_report(
+        _causal_rows(
+            N_DEVELOPMENT_PER_COUNTRY,
+            {"France->China", "Japan->Egypt"},
+        ),
+        stage="development",
+        expected_n=N_DEVELOPMENT_PER_COUNTRY,
+    )
+    design = freeze_confirmation_design(
+        protocol=benchmark_spec(dataset_revision="pinned"),
+        media_validation=media,
+        capability=capability,
+        localization=localization,
+        development=development,
+        predeclared_band=LAYERS,
+    )
+    assert design["localization_role"] == "diagnostic_not_a_necessary_gate"
+    assert all(
+        choice["band"] == list(LAYERS)
+        for choice in design["selected_paths"].values()
+    )

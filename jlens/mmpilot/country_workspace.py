@@ -733,6 +733,7 @@ def freeze_confirmation_design(
     capability: Mapping,
     localization: Mapping,
     development: Mapping,
+    predeclared_band: Sequence[int] | None = None,
 ) -> dict:
     if not bool(media_validation.get("passed")):
         raise CountryWorkspaceRefused("media validation did not pass")
@@ -740,8 +741,27 @@ def freeze_confirmation_design(
         raise CountryWorkspaceRefused(
             "clean source capability did not cover two independent pairs"
         )
-    if localization.get("verdict") != "COUNTRY_DIRECT_PATHS_GO":
-        raise CountryWorkspaceRefused("direct-answer path localization did not pass")
+    if predeclared_band is None:
+        if localization.get("verdict") != "COUNTRY_DIRECT_PATHS_GO":
+            raise CountryWorkspaceRefused("direct-answer path localization did not pass")
+        selected_paths = localization.get("selected_paths")
+        localization_role = "outcome_blind_path_selector"
+    else:
+        band = tuple(map(int, predeclared_band))
+        if band != LAYERS:
+            raise CountryWorkspaceRefused(
+                "the diagnostic-gate amendment permits only the predeclared "
+                f"full L{LAYERS[0]}-L{LAYERS[-1]} band"
+            )
+        selected_paths = {
+            property_name: {
+                "path_id": f"L{band[0]}-{band[-1]}",
+                "band": list(band),
+                "selection_basis": "predeclared_full_band_before_exact_swap_outputs",
+            }
+            for property_name in PROPERTIES
+        }
+        localization_role = "diagnostic_not_a_necessary_gate"
     directions = list(development.get("passing_directions_both_properties") or ())
     if not bool(development.get("generalized_across_two_pairs")):
         raise CountryWorkspaceRefused(
@@ -754,7 +774,8 @@ def freeze_confirmation_design(
         "capability_report_checksum": capability.get("report_checksum"),
         "localization_report_checksum": localization.get("report_checksum"),
         "development_report_checksum": development.get("report_checksum"),
-        "selected_paths": localization.get("selected_paths"),
+        "selected_paths": selected_paths,
+        "localization_role": localization_role,
         "directions": directions,
         "properties": list(PROPERTIES),
         "modalities": list(MODALITIES),

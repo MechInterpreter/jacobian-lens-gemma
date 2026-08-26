@@ -52,7 +52,7 @@ def test_default_configuration_spends_nothing() -> None:
     assert "RUN_STAGE4_FRESH_CONFIRMATION = False" in source
     assert "CONFIRM_MODEL_LOAD = False" in source
     assert "CONFIRM_FP32_A100 = False" in source
-    assert 'SCIENTIFIC_IMPLEMENTATION_ID = "country-direction-capability-v2.20260826"' in source
+    assert 'SCIENTIFIC_IMPLEMENTATION_ID = "country-exact-development-v3.20260826"' in source
     assert '"scientific_implementation_id": SCIENTIFIC_IMPLEMENTATION_ID' in source
     assert "PARENT_LENS_CHECKSUM" in source
 
@@ -96,6 +96,15 @@ def test_path_selection_cannot_read_exact_swap_results() -> None:
     assert "development did not pass both" in source
     assert "clean source capability did not cover two pairs" in source
     assert "Stage 3 requires completed Stage 2 reports" not in source
+
+
+def test_direct_answer_localization_is_diagnostic_not_a_development_gate() -> None:
+    source = _source()
+    assert 'band = tuple(LAYERS)' in source
+    assert 'LOCALIZATION_REPORT["verdict"] != "COUNTRY_DIRECT_PATHS_GO"' not in source
+    assert "DEVELOPMENT NOT LICENSED: direct-answer localization did not pass" not in source
+    assert "predeclared_band=LAYERS" in source
+    assert "PARENT_LOCALIZATION_CHECKSUM" in source
 
 
 def test_audio_transcript_is_not_passed_to_backend() -> None:

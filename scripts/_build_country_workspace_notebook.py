@@ -50,8 +50,11 @@ measured scope.
 * One pooled multimodal J-lens is fitted on 99 examples from eleven countries
   that never appear in evaluation.
 * Development and confirmation contain different images and audio files.
-* Path selection uses only clean capability and a direct-answer positive
-  control. Exact identity-swap outputs are unavailable while paths are chosen.
+* The direct-answer path screen is retained as a diagnostic, not treated as a
+  necessary gate. An early identity exchange can be propagated into a later
+  answer even when an early answer-vector insertion is washed out. The exact
+  development test uses the full L16-L40 band fixed before any country
+  exact-swap output is opened.
 * Alpha 1 is the exact two-coordinate exchange. No alpha sweep is performed.
 * Output is unrestricted greedy generation. There is no candidate list and no
   teacher forcing.
@@ -91,10 +94,44 @@ def _write_report(path, report):
     temporary.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
     os.replace(temporary, path)
 
+def _verified_parent_report(name, expected_checksum):
+    path = PARENT_V2_RUN_DIR / name
+    if not path.is_file():
+        return None
+    report = json.loads(path.read_text(encoding="utf-8"))
+    body = {key: value for key, value in report.items() if key != "report_checksum"}
+    computed_checksum = payload_checksum(body)
+    if (
+        report.get("report_checksum") != expected_checksum
+        or computed_checksum != expected_checksum
+    ):
+        raise RuntimeError(
+            f"refusing changed parent report {path}: "
+            f"recorded={report.get('report_checksum')} "
+            f"computed={computed_checksum} expected={expected_checksum}"
+        )
+    return report
+
 if CAPABILITY_PATH.is_file():
     CAPABILITY_REPORT = json.loads(CAPABILITY_PATH.read_text(encoding="utf-8"))
 if LOCALIZATION_PATH.is_file():
     LOCALIZATION_REPORT = json.loads(LOCALIZATION_PATH.read_text(encoding="utf-8"))
+
+if CAPABILITY_REPORT is None:
+    CAPABILITY_REPORT = _verified_parent_report(
+        "country_capability_report.json", PARENT_CAPABILITY_CHECKSUM
+    )
+    if CAPABILITY_REPORT is not None:
+        _write_report(CAPABILITY_PATH, CAPABILITY_REPORT)
+        print("reused checksum-pinned parent capability", CAPABILITY_REPORT["verdict"])
+if LOCALIZATION_REPORT is None:
+    LOCALIZATION_REPORT = _verified_parent_report(
+        "country_direct_answer_localization_report.json",
+        PARENT_LOCALIZATION_CHECKSUM,
+    )
+    if LOCALIZATION_REPORT is not None:
+        _write_report(LOCALIZATION_PATH, LOCALIZATION_REPORT)
+        print("reused checksum-pinned parent localization", LOCALIZATION_REPORT["verdict"])
 
 if RUN_STAGE2_CAPABILITY_AND_LOCALIZATION:
     if not (MODEL_ENABLED and CONFIRM_LOCALIZATION_BUDGET and LENS is not None):
@@ -214,9 +251,7 @@ if RUN_STAGE3_DEVELOPMENT_SWAP:
     if not CAPABILITY_REPORT.get("generalization_ready"):
         print("DEVELOPMENT NOT LICENSED: clean source capability did not cover two pairs")
     elif LOCALIZATION_REPORT is None:
-        print("DEVELOPMENT NOT LICENSED: no localization report exists")
-    elif LOCALIZATION_REPORT["verdict"] != "COUNTRY_DIRECT_PATHS_GO":
-        print("DEVELOPMENT NOT LICENSED: direct-answer localization did not pass")
+        raise RuntimeError("Stage 3 requires the checksum-pinned diagnostic report")
     else:
         from jlens.mmpilot.country_workspace import causal_report, freeze_confirmation_design
         development_rows = sorted(
@@ -228,7 +263,10 @@ if RUN_STAGE3_DEVELOPMENT_SWAP:
         trial_rows = []
         eligible_direction_names = set(CAPABILITY_REPORT["eligible_directions"])
         for property_name in PROPERTIES:
-            band = tuple(LOCALIZATION_REPORT["selected_paths"][property_name]["band"])
+            # Versioned amendment: test the identity-exchange hypothesis on the
+            # original full band. Direct answer insertion remains a diagnostic,
+            # but is not a necessary condition for downstream recomputation.
+            band = tuple(LAYERS)
             unrelated = build_swap_bases_for_lens(
                 LENS, unembed, layers=band,
                 source=tokens[CONTROL_COUNTRIES[0]], target=tokens[CONTROL_COUNTRIES[1]],
@@ -294,6 +332,7 @@ if RUN_STAGE3_DEVELOPMENT_SWAP:
                 protocol=PROTOCOL, media_validation=PREPARED["media_validation"],
                 capability=CAPABILITY_REPORT, localization=LOCALIZATION_REPORT,
                 development=DEVELOPMENT_REPORT,
+                predeclared_band=LAYERS,
             )
             _write_report(DESIGN_PATH, design)
             print("confirmation design frozen", design["design_checksum"])
@@ -530,6 +569,11 @@ SCIENTIFIC_CONFIG = {
     "capability_gate_version": "mmpilot.country_direction_capability.v2",
     "parent_v1_run_dir": str(PARENT_V1_RUN_DIR),
     "parent_lens_checksum": PARENT_LENS_CHECKSUM,
+    "parent_v2_run_dir": str(PARENT_V2_RUN_DIR),
+    "parent_capability_checksum": PARENT_CAPABILITY_CHECKSUM,
+    "parent_localization_checksum": PARENT_LOCALIZATION_CHECKSUM,
+    "development_band": list(LAYERS),
+    "localization_role": "diagnostic_not_a_necessary_gate",
 }
 SCIENTIFIC_DIGEST = payload_checksum(SCIENTIFIC_CONFIG)
 RUN_DIR = RUNS_ROOT / f"mmcountry_real_{SCIENTIFIC_DIGEST.split(':')[1][:12]}"
@@ -860,13 +904,23 @@ CONFIRM_CONFIRMATION_BUDGET = False
 
 MODEL_REPO_ID = "google/gemma-4-E4B-it"
 MODEL_REVISION = "fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd"
-SCIENTIFIC_IMPLEMENTATION_ID = "country-direction-capability-v2.20260826"
+SCIENTIFIC_IMPLEMENTATION_ID = "country-exact-development-v3.20260826"
 PARENT_V1_RUN_DIR = Path(
     "/content/drive/MyDrive/jacobian-lens-gemma/runs/mmcountry/"
     "mmcountry_real_91055b9ab807"
 )
 PARENT_LENS_CHECKSUM = (
     "sha256:abfae7fdd9fb2cb66afe4c3d6ae0211a1b727001c882844e966883fcc0284ebe"
+)
+PARENT_V2_RUN_DIR = Path(
+    "/content/drive/MyDrive/jacobian-lens-gemma/runs/mmcountry/"
+    "mmcountry_real_5428299c4217"
+)
+PARENT_CAPABILITY_CHECKSUM = (
+    "sha256:cd90a36c6625f708f72f7458a4407832b9c4ac65a0562d46063d0d7df2dee30e"
+)
+PARENT_LOCALIZATION_CHECKSUM = (
+    "sha256:b0a61df35ba7fba9b4cf37e00f07d2ae092ce83a51e798ffb7c97f3605936ac4"
 )
 EXPECT_N_LAYERS, EXPECT_D_MODEL, EXPECT_VOCAB = 42, 2560, 262144
 AUDIO_PROTOCOL_FINGERPRINT = (
