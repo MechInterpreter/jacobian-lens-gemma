@@ -247,6 +247,8 @@ IDENTITY_CALIBRATION_PATH = RUN_DIR / "country_identity_band_calibration_report.
 ACTIVE_LENS_PATH = RUN_DIR / "country_active_lens.json"
 TASK_LENS_PATH = RUN_DIR / "lenses" / "lens.pooled.country_identity.l16_l40.pt"
 TASK_LENS_PROVENANCE_PATH = RUN_DIR / "lenses" / "lens.pooled.country_identity.l16_l40.json"
+BALANCED_LENS_PATH = RUN_DIR / "lenses" / "lens.pooled.country_balanced_tasks.l16_l40.pt"
+BALANCED_LENS_PROVENANCE_PATH = RUN_DIR / "lenses" / "lens.pooled.country_balanced_tasks.l16_l40.json"
 
 LENS_VALIDATION_REPORT = None
 IDENTITY_CALIBRATION_REPORT = None
@@ -267,8 +269,14 @@ if ACTIVE_LENS_PATH.is_file():
         if file_checksum(str(TASK_LENS_PATH)) != _active["lens_checksum"]:
             raise RuntimeError("task-matched active lens checksum changed")
         ACTIVE_LENS = JacobianLens.load(str(TASK_LENS_PATH))
+    elif ACTIVE_LENS_LABEL == "balanced_task_pooled_j":
+        from jlens.lens import JacobianLens
+        from jlens.mmpilot.backend import file_checksum
+        if file_checksum(str(BALANCED_LENS_PATH)) != _active["lens_checksum"]:
+            raise RuntimeError("balanced-task active lens checksum changed")
+        ACTIVE_LENS = JacobianLens.load(str(BALANCED_LENS_PATH))
 
-if RUN_STAGE2_DEBUG_COUNTRY_INSTRUMENT:
+if RUN_STAGE2_DEBUG_COUNTRY_INSTRUMENT or RUN_STAGE2C_FIT_BALANCED_TASK_LENS:
     if not (
         MODEL_ENABLED and CONFIRM_IDENTITY_CALIBRATION_BUDGET and LENS is not None
     ):
@@ -405,7 +413,9 @@ if RUN_STAGE2_DEBUG_COUNTRY_INSTRUMENT:
         _body = {key: value for key, value in report.items() if key != "report_checksum"}
         _body["lens_label"] = label
         _body["lens_checksum"] = (
-            file_checksum(str(TASK_LENS_PATH))
+            file_checksum(str(BALANCED_LENS_PATH))
+            if label == "balanced_task_pooled_j"
+            else file_checksum(str(TASK_LENS_PATH))
             if label == "task_matched_pooled_j"
             else PARENT_LENS_CHECKSUM
         )
@@ -481,7 +491,9 @@ if RUN_STAGE2_DEBUG_COUNTRY_INSTRUMENT:
         _body = {key: value for key, value in report.items() if key != "report_checksum"}
         _body["lens_label"] = label
         _body["lens_checksum"] = (
-            file_checksum(str(TASK_LENS_PATH))
+            file_checksum(str(BALANCED_LENS_PATH))
+            if label == "balanced_task_pooled_j"
+            else file_checksum(str(TASK_LENS_PATH))
             if label == "task_matched_pooled_j"
             else PARENT_LENS_CHECKSUM
         )
@@ -583,16 +595,137 @@ if RUN_STAGE2_DEBUG_COUNTRY_INSTRUMENT:
                 IDENTITY_CALIBRATION_REPORT,
             )
 
+    if RUN_STAGE2C_FIT_BALANCED_TASK_LENS:
+        if not CONFIRM_BALANCED_TASK_FINAL_FIT_BUDGET:
+            raise RuntimeError(
+                "the final balanced-task fit was requested without budget confirmation"
+            )
+        fit_rows = sorted(
+            [row for row in MEDIA_ROWS if row["study_split"] == "fit"],
+            key=lambda row: row["unit_id"],
+        )
+        task_names = ("identity", "capital", "continent")
+        balanced_plan = []
+        for row_index, row in enumerate(fit_rows):
+            for modality_index, modality in enumerate(MODALITIES):
+                property_name = task_names[(row_index + modality_index) % len(task_names)]
+                balanced_plan.append((row, modality, property_name))
+        balance = {
+            modality: {
+                property_name: sum(
+                    1 for _row, item_modality, item_property in balanced_plan
+                    if item_modality == modality and item_property == property_name
+                )
+                for property_name in task_names
+            }
+            for modality in MODALITIES
+        }
+        if len(balanced_plan) != 99 or any(
+            count != 11 for per_modality in balance.values()
+            for count in per_modality.values()
+        ):
+            raise RuntimeError(
+                f"the final fit is not exactly balanced across tasks/modalities: {balance}"
+            )
+        units = [
+            FitUnit(
+                unit_id=f"{row['unit_id']}:{modality}:{property_name}",
+                group_id=row["unit_id"], image_id=row["image_checksum"],
+                modality=modality, caption=text_evidence(row["country"]),
+                image_path=row["image_path"], audio_path=row["audio_path"],
+                prompt=f"country_balanced_task:{property_name}",
+            )
+            for row, modality, property_name in balanced_plan
+        ]
+        plan_by_unit = {
+            unit.unit_id: (row, property_name)
+            for unit, (row, _modality, property_name) in zip(units, balanced_plan)
+        }
+        def balanced_fit_inputs(unit):
+            row, property_name = plan_by_unit[unit.unit_id]
+            return build_task_inputs(row, unit.modality, property_name)
+        checkpoint = (
+            RUN_DIR / "lenses" / "checkpoints"
+            / "country_balanced_tasks.jacobian_sum.pt"
+        )
+        if BALANCED_LENS_PATH.is_file():
+            ACTIVE_LENS = JacobianLens.load(str(BALANCED_LENS_PATH))
+            print("final balanced-task lens reused; no fitting performed")
+        else:
+            ACTIVE_LENS = fit_arm(
+                BACKEND, units, build_inputs=balanced_fit_inputs,
+                source_layers=LAYERS, target_layer=TARGET_LAYER,
+                checkpoint_path=checkpoint, arm="pooled",
+                scientific_fingerprint=payload_checksum({
+                    "base": SCIENTIFIC_DIGEST,
+                    "fit": "country_balanced_identity_capital_continent.v1",
+                    "balance": balance,
+                    "n_prompts": len(units),
+                    "no_further_fit_fallback": True,
+                }),
+                dim_batch=DIM_BATCH, skip_first=SKIP_FIRST,
+                checkpoint_every=CHECKPOINT_EVERY,
+                progress=lambda info: print(
+                    "FINAL balanced fit", info["index"], "/", info["total"],
+                    info["modality"], "checkpoint", info["checkpoint_written"],
+                ) if (
+                    info["index"] == 1 or info["checkpoint_written"]
+                    or info["index"] == info["total"]
+                ) else None,
+            )
+            BALANCED_LENS_PATH.parent.mkdir(parents=True, exist_ok=True)
+            temporary = BALANCED_LENS_PATH.with_suffix(".tmp.pt")
+            ACTIVE_LENS.save(str(temporary), dtype=torch.float32)
+            os.replace(temporary, BALANCED_LENS_PATH)
+        balanced_provenance = {
+            "lens_checksum": file_checksum(str(BALANCED_LENS_PATH)),
+            "source_layers": list(LAYERS), "target_layer": TARGET_LAYER,
+            "n_prompts": 99, "stored_dtype": "float32",
+            "fit_tasks": list(task_names), "per_modality_task_counts": balance,
+            "fit_countries": sorted({row["country"] for row in fit_rows}),
+            "excluded_evaluation_countries": list(EVAL_COUNTRIES),
+            "checkpoint_every": CHECKPOINT_EVERY,
+            "no_further_fit_fallback": True,
+        }
+        balanced_provenance["provenance_checksum"] = payload_checksum(
+            balanced_provenance
+        )
+        _write_report(BALANCED_LENS_PROVENANCE_PATH, balanced_provenance)
+        ACTIVE_LENS_LABEL = "balanced_task_pooled_j"
+        IDENTITY_CALIBRATION_REPORT = None
+        LENS_VALIDATION_REPORT = validate_identity_lens(
+            ACTIVE_LENS, ACTIVE_LENS_LABEL
+        )
+        _write_report(
+            RUN_DIR / "country_identity_lens_validation.balanced_task_pooled_j.json",
+            LENS_VALIDATION_REPORT,
+        )
+        if LENS_VALIDATION_REPORT["verdict"] == "COUNTRY_IDENTITY_LENS_VALIDATION_GO":
+            IDENTITY_CALIBRATION_REPORT = calibrate_identity_band(
+                ACTIVE_LENS, ACTIVE_LENS_LABEL
+            )
+            _write_report(
+                RUN_DIR / "country_identity_band_calibration.balanced_task_pooled_j.json",
+                IDENTITY_CALIBRATION_REPORT,
+            )
+        print("FINAL FIT COMPLETE; NO ADDITIONAL FIT FALLBACK IS IMPLEMENTED")
+
     _write_report(LENS_VALIDATION_PATH, LENS_VALIDATION_REPORT)
     if IDENTITY_CALIBRATION_REPORT is not None:
         _write_report(IDENTITY_CALIBRATION_PATH, IDENTITY_CALIBRATION_REPORT)
     active_record = {
         "label": ACTIVE_LENS_LABEL,
         "lens_path": str(
-            TASK_LENS_PATH if ACTIVE_LENS_LABEL == "task_matched_pooled_j" else LENS_PATH
+            BALANCED_LENS_PATH
+            if ACTIVE_LENS_LABEL == "balanced_task_pooled_j"
+            else TASK_LENS_PATH
+            if ACTIVE_LENS_LABEL == "task_matched_pooled_j"
+            else LENS_PATH
         ),
         "lens_checksum": (
-            file_checksum(str(TASK_LENS_PATH))
+            file_checksum(str(BALANCED_LENS_PATH))
+            if ACTIVE_LENS_LABEL == "balanced_task_pooled_j"
+            else file_checksum(str(TASK_LENS_PATH))
             if ACTIVE_LENS_LABEL == "task_matched_pooled_j"
             else PARENT_LENS_CHECKSUM
         ),
@@ -923,6 +1056,7 @@ FRANCE_CHINA_CONFIRMATION = (
     json.loads(FRANCE_CHINA_CONFIRMATION_PATH.read_text(encoding="utf-8"))
     if FRANCE_CHINA_CONFIRMATION_PATH.is_file() else None
 )
+from jlens.mmpilot.backend import file_checksum
 
 def _france_china_trials(rows, *, stage, expected_n):
     from jlens.mmpilot.country_workspace import france_china_followup_report
@@ -940,6 +1074,7 @@ def _france_china_trials(rows, *, stage, expected_n):
         source=tokens[CONTROL_COUNTRIES[0]], target=tokens[CONTROL_COUNTRIES[1]],
     )
     trial_rows = []
+    active_lens_checksum = file_checksum(str(BALANCED_LENS_PATH))
     for property_name in PROPERTIES:
         expected = fact("China", property_name)
         for row in rows:
@@ -950,6 +1085,7 @@ def _france_china_trials(rows, *, stage, expected_n):
                 ):
                     key = safe_key(
                         "france_china_followup", stage, property_name,
+                        ACTIVE_LENS_LABEL, active_lens_checksum,
                         row["unit_id"], modality, condition,
                     )
                     stored = STORE.load("intervention", key)
@@ -992,8 +1128,8 @@ if RUN_STAGE3B_FRANCE_CHINA_DOWNSTREAM_DEVELOPMENT:
             "France-to-China development requires the model, existing task-matched "
             "lens, and its budget confirmation"
         )
-    if ACTIVE_LENS_LABEL != "task_matched_pooled_j":
-        raise RuntimeError("the follow-up is pinned to the task-matched pooled J-lens")
+    if ACTIVE_LENS_LABEL != "balanced_task_pooled_j":
+        raise RuntimeError("the follow-up is pinned to the final balanced-task pooled J-lens")
     if LENS_VALIDATION_REPORT is None or IDENTITY_CALIBRATION_REPORT is None:
         raise RuntimeError("the follow-up requires the stored lens-validation artifacts")
     full_band = next(
@@ -1020,7 +1156,7 @@ if RUN_STAGE3B_FRANCE_CHINA_DOWNSTREAM_DEVELOPMENT:
             protocol=PROTOCOL, media_validation=PREPARED["media_validation"],
             capability=CAPABILITY_REPORT, lens_validation=LENS_VALIDATION_REPORT,
             identity_calibration=IDENTITY_CALIBRATION_REPORT,
-            lens_checksum=LENS_VALIDATION_REPORT["lens_checksum"],
+            lens_checksum=file_checksum(str(BALANCED_LENS_PATH)),
             development=FRANCE_CHINA_DEVELOPMENT,
         )
         _write_report(FRANCE_CHINA_DESIGN_PATH, design)
@@ -1117,7 +1253,11 @@ if RUN_STAGE5_WRITE_REPORT:
         "protocol": PROTOCOL,
         "media_validation": PREPARED["media_validation"],
         "lens_path": str(
-            TASK_LENS_PATH if ACTIVE_LENS_LABEL == "task_matched_pooled_j" else LENS_PATH
+            BALANCED_LENS_PATH
+            if ACTIVE_LENS_LABEL == "balanced_task_pooled_j"
+            else TASK_LENS_PATH
+            if ACTIVE_LENS_LABEL == "task_matched_pooled_j"
+            else LENS_PATH
         ),
         "lens_exists": bool(LENS is not None),
         "capability": CAPABILITY_REPORT,
@@ -1534,6 +1674,7 @@ RUN_STAGE1_FIT_POOLED_LENS = False
 RUN_STAGE2_CAPABILITY_AND_LOCALIZATION = False
 RUN_STAGE2_DEBUG_COUNTRY_INSTRUMENT = False
 RUN_STAGE2_REFIT_TASK_MATCHED_LENS_IF_NEEDED = False
+RUN_STAGE2C_FIT_BALANCED_TASK_LENS = False
 RUN_STAGE3_DEVELOPMENT_SWAP = False
 RUN_STAGE4_FRESH_CONFIRMATION = False
 RUN_STAGE3B_FRANCE_CHINA_DOWNSTREAM_DEVELOPMENT = False
@@ -1546,6 +1687,7 @@ CONFIRM_LENS_FIT_BUDGET = False
 CONFIRM_LOCALIZATION_BUDGET = False
 CONFIRM_IDENTITY_CALIBRATION_BUDGET = False
 CONFIRM_TASK_MATCHED_REFIT_BUDGET = False
+CONFIRM_BALANCED_TASK_FINAL_FIT_BUDGET = False
 CONFIRM_DEVELOPMENT_BUDGET = False
 CONFIRM_CONFIRMATION_BUDGET = False
 CONFIRM_FRANCE_CHINA_DEVELOPMENT_BUDGET = False
@@ -1592,6 +1734,7 @@ ANY_STAGE = any((
     RUN_STAGE2_CAPABILITY_AND_LOCALIZATION,
     RUN_STAGE2_DEBUG_COUNTRY_INSTRUMENT,
     RUN_STAGE2_REFIT_TASK_MATCHED_LENS_IF_NEEDED,
+    RUN_STAGE2C_FIT_BALANCED_TASK_LENS,
     RUN_STAGE3_DEVELOPMENT_SWAP,
     RUN_STAGE4_FRESH_CONFIRMATION,
     RUN_STAGE3B_FRANCE_CHINA_DOWNSTREAM_DEVELOPMENT,
@@ -1608,6 +1751,7 @@ MODEL_STAGE = any((
     RUN_STAGE2_CAPABILITY_AND_LOCALIZATION,
     RUN_STAGE2_DEBUG_COUNTRY_INSTRUMENT,
     RUN_STAGE2_REFIT_TASK_MATCHED_LENS_IF_NEEDED,
+    RUN_STAGE2C_FIT_BALANCED_TASK_LENS,
     RUN_STAGE3_DEVELOPMENT_SWAP,
     RUN_STAGE4_FRESH_CONFIRMATION,
     RUN_STAGE3B_FRANCE_CHINA_DOWNSTREAM_DEVELOPMENT,
@@ -1624,6 +1768,8 @@ if (
     and not CONFIRM_TASK_MATCHED_REFIT_BUDGET
 ):
     print("TASK-MATCHED REFIT BLOCKED: confirm its backward-pass budget")
+if RUN_STAGE2C_FIT_BALANCED_TASK_LENS and not CONFIRM_BALANCED_TASK_FINAL_FIT_BUDGET:
+    print("FINAL BALANCED FIT BLOCKED: confirm its one-time backward-pass budget")
 '''
 )
 
@@ -1647,6 +1793,8 @@ print("  corrected clean capability", len(EVAL_COUNTRIES) * N_DEVELOPMENT_PER_CO
 print("  identity lens readout", 3 * N_DEVELOPMENT_PER_COUNTRY * len(MODALITIES), "forwards plus cheap six-country projections")
 print("  identity band calibration maximum", 3 * len(PATH_BANDS) * len(MODALITIES) * 4 * N_DEVELOPMENT_PER_COUNTRY, "conditions per lens")
 print("  conditional task-matched refit", 99, "forwards plus", 99 * ((EXPECT_D_MODEL + DIM_BATCH - 1) // DIM_BATCH), "backward passes")
+print("  FINAL balanced-task pooled fit", 99, "forwards plus", 99 * ((EXPECT_D_MODEL + DIM_BATCH - 1) // DIM_BATCH), "backward passes; exactly one fit arm")
+print("    balance: 33 identity, 33 capital, 33 continent; 11 of each per modality")
 print("  development", len(DIRECTIONS) * len(PROPERTIES) * len(MODALITIES) * 4 * N_DEVELOPMENT_PER_COUNTRY, "conditions")
 print("  confirmation maximum", len(DIRECTIONS) * len(PROPERTIES) * len(MODALITIES) * 4 * N_CONFIRMATION_PER_COUNTRY, "conditions")
 print("  France-to-China follow-up development", len(PROPERTIES) * len(MODALITIES) * 4 * N_DEVELOPMENT_PER_COUNTRY, "conditions")

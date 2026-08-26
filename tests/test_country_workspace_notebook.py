@@ -50,6 +50,7 @@ def test_default_configuration_spends_nothing() -> None:
     assert "RUN_STAGE2_CAPABILITY_AND_LOCALIZATION = False" in source
     assert "RUN_STAGE2_DEBUG_COUNTRY_INSTRUMENT = False" in source
     assert "RUN_STAGE2_REFIT_TASK_MATCHED_LENS_IF_NEEDED = False" in source
+    assert "RUN_STAGE2C_FIT_BALANCED_TASK_LENS = False" in source
     assert "RUN_STAGE3_DEVELOPMENT_SWAP = False" in source
     assert "RUN_STAGE4_FRESH_CONFIRMATION = False" in source
     assert "RUN_STAGE3B_FRANCE_CHINA_DOWNSTREAM_DEVELOPMENT = False" in source
@@ -130,6 +131,20 @@ def test_country_prompt_and_task_matched_refit_are_explicit() -> None:
     assert "country_identity_task_matched_assistant_prefill" in source
     assert "TASK_LENS_PATH" in source
     assert "RUN_STAGE2_REFIT_TASK_MATCHED_LENS_IF_NEEDED" in source
+
+
+def test_final_balanced_fit_is_exactly_balanced_and_has_no_fallback() -> None:
+    source = _source()
+    assert 'task_names = ("identity", "capital", "continent")' in source
+    assert "(row_index + modality_index) % len(task_names)" in source
+    assert "len(balanced_plan) != 99" in source
+    assert "count != 11" in source
+    assert '"no_further_fit_fallback": True' in source
+    assert "FINAL FIT COMPLETE; NO ADDITIONAL FIT FALLBACK IS IMPLEMENTED" in source
+    assert "country_balanced_tasks.jacobian_sum.pt" in source
+    assert 'checkpoint_every=CHECKPOINT_EVERY' in source
+    assert 'ACTIVE_LENS_LABEL = "balanced_task_pooled_j"' in source
+    assert "the follow-up is pinned to the final balanced-task pooled J-lens" in source
 
 
 def test_audio_transcript_is_not_passed_to_backend() -> None:

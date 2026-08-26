@@ -1004,7 +1004,7 @@ def freeze_france_china_followup_design(
     if lens_validation.get("verdict") != "COUNTRY_IDENTITY_LENS_VALIDATION_GO":
         raise CountryWorkspaceRefused("country identity lens validation did not pass")
     if not str(lens_checksum).startswith("sha256:"):
-        raise CountryWorkspaceRefused("the task-matched lens checksum is not pinned")
+        raise CountryWorkspaceRefused("the balanced-task lens checksum is not pinned")
     full_band = next(
         (
             candidate
@@ -1036,7 +1036,7 @@ def freeze_france_china_followup_design(
         "identity_calibration_report_checksum": identity_calibration.get(
             "report_checksum"
         ),
-        "task_matched_lens_checksum": lens_checksum,
+        "balanced_task_lens_checksum": lens_checksum,
         "development_report_checksum": development.get("report_checksum"),
         "direction": "France->China",
         "properties": list(PROPERTIES),
