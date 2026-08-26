@@ -20,7 +20,7 @@ re-running it today would re-run an *older protocol*.
 ## Active workflow
 
 Run in this order. Each stage consumes the artifacts the one above it
-published. Notebooks 1, 2, and 13 are the only ones that fit lenses.
+published. Notebooks 1, 2, 13, and 15 are the only ones that fit lenses.
 
 | # | notebook | what it is | produces |
 |---|---|---|---|
@@ -41,9 +41,10 @@ published. Notebooks 1, 2, and 13 are the only ones that fit lenses.
 | 12 | `multimodal_jspace_digit_reasoning_confirmation_colab.ipynb` | **Exact-exchange confirmation (v3).** The completed alpha=2 null and alpha=1 capability-no-go run remain immutable. V3 changes only recruitment capacity: 64 fresh candidates per concept, still requiring eight selected examples per direction×modality cell and excluding both completed digit populations. The causal design remains alpha=1-only over L33-L40 with unrestricted global argmax, greedy parity, exact-exchange diagnostics, both directions, every modality, a direct-answer positive control, and matched controls. Every forward pass is an atomic resume unit; nothing is fitted. | `mmalpha1confirm64_real_*` run and `alpha1_exact_swap_recruitment64_confirmation_report.json` |
 | 13 | `multimodal_jspace_matched_jlens_colab.ipynb` | **Matched-distribution J-Lens study and bounded follow-ups.** Fits equal-size text, image, spoken-caption, and pooled average-Jacobian lenses from the checkpoint's real processor inputs; the pooled arm is exactly 33/33/33 at the default 99-example scale. It contains the confirmed bird-to-cat result and the evidence-gated fp32 cat-to-dog stages. Stage 6C2 checksum-pins the completed inconclusive cat-to-dog run and uses only its already-spent photographs to localize direct-answer causal leverage over a frozen band/position grid; it never scores an exact-swap outcome and cannot itself establish transfer. Fit accumulators and every evaluation/causal unit smart-save to Drive. | `mmjlens4_real_*`, `mmcatdogdev_real_*`, and `mmcatdogloc_real_*` runs |
 | 14 | `multimodal_jspace_workspace_replication_colab.ipynb` | **Paper-first replication and fresh confirmation.** First requires a literal text-only replication of the paper's spider→ant downstream task and France/China flexible-function family. It then measures clean source-concept loading with the matched pooled lens, chooses the concept pair, contiguous band, and modality-specific position rule from loading only, freezes the design, and finally opens disjoint photographs/recordings for unrestricted alpha-one confirmation. Alpha=.75 is sensitivity only. | `mmworkspace_real_*` and `paper_first_workspace_study_report.json` |
+| 15 | `multimodal_country_workspace_generalization_colab.ipynb` | **Prospective country-fact generalization benchmark.** Fits one fresh pooled multimodal J-lens on 99 text, verified-flag-image, and synthetic-spoken-country examples from eleven countries outside evaluation. It then tests two country pairs, both directions, and two downstream facts using exact alpha-one coordinate exchange with unrestricted generation. Path selection reads only clean capability and a cumulative norm-matched direct-answer positive control; exact-swap development and checksum-sealed fresh confirmation remain separate. CPU preparation, fp32 A100 fitting, and every causal condition smart-resume. | `mmcountry_real_*` and `country_workspace_generalization_report.json` |
 | A | `mats_research_evidence_analysis.ipynb` | CPU-only analysis of the completed run archives for the MATS research dossier. It produces descriptive tables and figures; it runs no model and changes no scientific result. | `reports/mats_application/figures/` |
 
-Notebooks 1–5 and 7–14 are all **switched off** in the committed file. Opening
+Notebooks 1–5 and 7–15 are all **switched off** in the committed file. Opening
 one downloads no model and spends no GPU compute. Notebooks 9, 10, 11, and 13
 have off states that are complete MOCK runs on CPU.
 
@@ -167,6 +168,7 @@ semantics and what a fresh process reconstructs versus re-proves.
 | the paper's contiguous-band clamp, and the lenses for physical layers 33/34/36/37/39 | (9) Anthropic band swap |
 | causal exchange across the **validated** band L33–L40 | (10) the L33–L40 follow-up |
 | paper-comparable text replication, clean source-loading localization, and untouched multimodal confirmation | (14) workspace replication |
+| prospective generalization across country identities, country pairs, capital and continent | (15) country workspace generalization |
 | anything about a band beginning at L32, or any layer earlier than 33 | nothing. L32 failed the frozen gate and no notebook may claim it |
 
 ---
