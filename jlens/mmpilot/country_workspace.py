@@ -27,6 +27,7 @@ from jlens.mmpilot.multimodal_lens import holm_adjust, paired_binary_one_sided_p
 from jlens.mmpilot.store import payload_checksum
 
 PROTOCOL_VERSION = "mmpilot.country_workspace_generalization.v1"
+CAPABILITY_GATE_VERSION = "mmpilot.country_direction_capability.v2"
 DATASET_ID = "tokeron/country-flags-variations"
 DATASET_REVISION = "1ea3cce246ab44f0fe8ecb526ad759ea11d28465"
 DATASET_CARD = "https://huggingface.co/datasets/tokeron/country-flags-variations"
@@ -363,14 +364,34 @@ def capability_report(rows: Sequence[Mapping]) -> dict:
         country_cells = [cell for cell in cells if cell["country"] == country]
         if country_cells and all(cell["passed"] for cell in country_cells):
             eligible.append(country)
+    eligible_directions = [
+        f"{source}->{target}"
+        for source, target in DIRECTIONS
+        if source in eligible
+    ]
+    eligible_pairs = {
+        tuple(sorted(direction.split("->"))) for direction in eligible_directions
+    }
+    generalization_ready = len(eligible_pairs) >= 2
     body = {
         "version": PROTOCOL_VERSION,
+        "capability_gate_version": CAPABILITY_GATE_VERSION,
         "verdict": (
-            "COUNTRY_CAPABILITY_GO"
-            if set(eligible) == set(EVAL_COUNTRIES)
+            "COUNTRY_CAPABILITY_GENERALIZATION_GO"
+            if generalization_ready
+            else "COUNTRY_CAPABILITY_PARTIAL_GO"
+            if eligible_directions
             else "COUNTRY_CAPABILITY_NO_GO"
         ),
         "eligible_countries": eligible,
+        "eligible_directions": eligible_directions,
+        "n_eligible_pairs": len(eligible_pairs),
+        "generalization_ready": generalization_ready,
+        "gate_rationale": (
+            "Clean capability is required for a direction's source evidence. "
+            "A target need not be cleanly recognized as input because it is "
+            "never supplied as evidence in that direction."
+        ),
         "cells": cells,
         "rows": selected,
     }
@@ -389,11 +410,23 @@ def direct_answer_localization_report(rows: Sequence[Mapping]) -> dict:
         raise CountryWorkspaceRefused(
             "path selection received a non-direct-answer outcome"
         )
+    frozen_direction_names = {
+        f"{source}->{target}" for source, target in DIRECTIONS
+    }
+    observed_directions = sorted(
+        {str(row.get("direction")) for row in selected}
+    )
+    if not observed_directions or not set(observed_directions) <= frozen_direction_names:
+        raise CountryWorkspaceRefused(
+            f"path selection received invalid directions {observed_directions}"
+        )
     candidates = []
     for property_name in PROPERTIES:
         for band in PATH_BANDS:
             cells = []
-            for _source, target in DIRECTIONS:
+            for source, target in DIRECTIONS:
+                if f"{source}->{target}" not in observed_directions:
+                    continue
                 for modality in MODALITIES:
                     subset = [
                         row
@@ -472,6 +505,7 @@ def direct_answer_localization_report(rows: Sequence[Mapping]) -> dict:
             else "COUNTRY_DIRECT_PATHS_NO_GO"
         ),
         "selection_used_exact_swap_outcomes": False,
+        "eligible_directions": observed_directions,
         "n_paths_per_property": len(PATH_BANDS),
         "selected_paths": chosen,
         "candidates": candidates,
@@ -702,14 +736,16 @@ def freeze_confirmation_design(
 ) -> dict:
     if not bool(media_validation.get("passed")):
         raise CountryWorkspaceRefused("media validation did not pass")
-    if capability.get("verdict") != "COUNTRY_CAPABILITY_GO":
-        raise CountryWorkspaceRefused("clean country capability did not pass")
+    if not bool(capability.get("generalization_ready")):
+        raise CountryWorkspaceRefused(
+            "clean source capability did not cover two independent pairs"
+        )
     if localization.get("verdict") != "COUNTRY_DIRECT_PATHS_GO":
         raise CountryWorkspaceRefused("direct-answer path localization did not pass")
     directions = list(development.get("passing_directions_both_properties") or ())
-    if not directions:
+    if not bool(development.get("generalized_across_two_pairs")):
         raise CountryWorkspaceRefused(
-            "no direction passed both properties on development"
+            "development did not pass both properties across two independent pairs"
         )
     body = {
         "version": PROTOCOL_VERSION,
@@ -742,6 +778,7 @@ def assert_finite_rows(rows: Sequence[Mapping]) -> None:
 __all__ = [
     "ALPHA",
     "ANSWER_ALIASES",
+    "CAPABILITY_GATE_VERSION",
     "CONTROL_COUNTRIES",
     "CountryMediaRow",
     "CountryWorkspaceRefused",

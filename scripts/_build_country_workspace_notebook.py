@@ -135,12 +135,15 @@ if RUN_STAGE2_CAPABILITY_AND_LOCALIZATION:
     _write_report(CAPABILITY_PATH, CAPABILITY_REPORT)
     print("capability verdict", CAPABILITY_REPORT["verdict"])
 
-    if CAPABILITY_REPORT["verdict"] == "COUNTRY_CAPABILITY_GO":
+    if CAPABILITY_REPORT.get("generalization_ready"):
+        eligible_direction_names = set(CAPABILITY_REPORT["eligible_directions"])
         tokens = concept_tokens((*EVAL_COUNTRIES, *CONTROL_COUNTRIES))
         unembed = BACKEND.unembedding_weight()
         localization_rows = []
         for property_name in PROPERTIES:
             for source, target in DIRECTIONS:
+                if f"{source}->{target}" not in eligible_direction_names:
+                    continue
                 source_rows = [
                     row for row in development_rows if row["country"] == source
                 ][:N_LOCALIZATION_PER_COUNTRY]
@@ -186,7 +189,7 @@ if RUN_STAGE2_CAPABILITY_AND_LOCALIZATION:
         print("localization verdict", LOCALIZATION_REPORT["verdict"])
         print("selected paths", LOCALIZATION_REPORT["selected_paths"])
     else:
-        print("Localization not run: clean capability did not pass.")
+        print("Localization not run: clean source capability did not cover two pairs.")
 elif CAPABILITY_REPORT is not None:
     print("reused capability", CAPABILITY_REPORT["verdict"])
     if LOCALIZATION_REPORT is not None:
@@ -208,8 +211,8 @@ if RUN_STAGE3_DEVELOPMENT_SWAP:
         raise RuntimeError("Stage 3 requires the completed lens and development budget confirmation")
     if CAPABILITY_REPORT is None:
         raise RuntimeError("Stage 3 requires the completed capability report")
-    if CAPABILITY_REPORT["verdict"] != "COUNTRY_CAPABILITY_GO":
-        print("DEVELOPMENT NOT LICENSED: clean capability did not pass")
+    if not CAPABILITY_REPORT.get("generalization_ready"):
+        print("DEVELOPMENT NOT LICENSED: clean source capability did not cover two pairs")
     elif LOCALIZATION_REPORT is None:
         print("DEVELOPMENT NOT LICENSED: no localization report exists")
     elif LOCALIZATION_REPORT["verdict"] != "COUNTRY_DIRECT_PATHS_GO":
@@ -223,6 +226,7 @@ if RUN_STAGE3_DEVELOPMENT_SWAP:
         tokens = concept_tokens((*EVAL_COUNTRIES, *CONTROL_COUNTRIES))
         unembed = BACKEND.unembedding_weight()
         trial_rows = []
+        eligible_direction_names = set(CAPABILITY_REPORT["eligible_directions"])
         for property_name in PROPERTIES:
             band = tuple(LOCALIZATION_REPORT["selected_paths"][property_name]["band"])
             unrelated = build_swap_bases_for_lens(
@@ -230,6 +234,8 @@ if RUN_STAGE3_DEVELOPMENT_SWAP:
                 source=tokens[CONTROL_COUNTRIES[0]], target=tokens[CONTROL_COUNTRIES[1]],
             )
             for source, target in DIRECTIONS:
+                if f"{source}->{target}" not in eligible_direction_names:
+                    continue
                 exact = build_swap_bases_for_lens(
                     LENS, unembed, layers=band, source=tokens[source], target=tokens[target]
                 )
@@ -283,7 +289,7 @@ if RUN_STAGE3_DEVELOPMENT_SWAP:
         _write_report(DEVELOPMENT_PATH, DEVELOPMENT_REPORT)
         print("development verdict", DEVELOPMENT_REPORT["verdict"])
         print("passing directions", DEVELOPMENT_REPORT["passing_directions_both_properties"])
-        if DEVELOPMENT_REPORT["passing_directions_both_properties"]:
+        if DEVELOPMENT_REPORT["generalized_across_two_pairs"]:
             design = freeze_confirmation_design(
                 protocol=PROTOCOL, media_validation=PREPARED["media_validation"],
                 capability=CAPABILITY_REPORT, localization=LOCALIZATION_REPORT,
@@ -292,7 +298,10 @@ if RUN_STAGE3_DEVELOPMENT_SWAP:
             _write_report(DESIGN_PATH, design)
             print("confirmation design frozen", design["design_checksum"])
         else:
-            print("confirmation remains unopened: no direction passed both properties")
+            print(
+                "confirmation remains unopened: development did not pass both "
+                "properties across two independent pairs"
+            )
 elif DEVELOPMENT_REPORT is not None:
     print("reused development", DEVELOPMENT_REPORT["verdict"])
 '''
@@ -517,9 +526,10 @@ SCIENTIFIC_CONFIG = {
     "audio_protocol_fingerprint": AUDIO_PROTOCOL_FINGERPRINT,
     "max_new_tokens": MAX_NEW_TOKENS,
     "random_seed": RANDOM_SEED,
-    # Engineering-only control-flow repairs do not create a new scientific
-    # run. Any scientific change must deliberately update this frozen pin.
-    "commit": SCIENTIFIC_IMPLEMENTATION_COMMIT,
+    "scientific_implementation_id": SCIENTIFIC_IMPLEMENTATION_ID,
+    "capability_gate_version": "mmpilot.country_direction_capability.v2",
+    "parent_v1_run_dir": str(PARENT_V1_RUN_DIR),
+    "parent_lens_checksum": PARENT_LENS_CHECKSUM,
 }
 SCIENTIFIC_DIGEST = payload_checksum(SCIENTIFIC_CONFIG)
 RUN_DIR = RUNS_ROOT / f"mmcountry_real_{SCIENTIFIC_DIGEST.split(':')[1][:12]}"
@@ -688,6 +698,32 @@ if LENS_PATH.is_file():
     if LENS.source_layers != list(LAYERS) or LENS.n_prompts != 99 or LENS.d_model != EXPECT_D_MODEL:
         raise RuntimeError("completed lens has the wrong layers, population size, or width")
     print("reused completed lens", LENS_PATH)
+elif (PARENT_V1_RUN_DIR / "lenses" / LENS_PATH.name).is_file():
+    from jlens.lens import JacobianLens
+    from jlens.mmpilot.backend import file_checksum
+    parent_lens_path = PARENT_V1_RUN_DIR / "lenses" / LENS_PATH.name
+    parent_provenance_path = (
+        PARENT_V1_RUN_DIR / "lenses" / LENS_PROVENANCE_PATH.name
+    )
+    if not parent_provenance_path.is_file():
+        raise RuntimeError("the v1 parent lens has no provenance record")
+    lens_provenance = json.loads(
+        parent_provenance_path.read_text(encoding="utf-8")
+    )
+    actual_parent_checksum = file_checksum(str(parent_lens_path))
+    if actual_parent_checksum != PARENT_LENS_CHECKSUM:
+        raise RuntimeError(
+            "the v1 parent lens does not match the frozen checksum"
+        )
+    if lens_provenance.get("lens_checksum") != PARENT_LENS_CHECKSUM:
+        raise RuntimeError("the v1 parent provenance has the wrong checksum")
+    LENS_PATH = parent_lens_path
+    LENS_PROVENANCE_PATH = parent_provenance_path
+    LENS = JacobianLens.load(str(LENS_PATH))
+    if LENS.source_layers != list(LAYERS) or LENS.n_prompts != 99 or LENS.d_model != EXPECT_D_MODEL:
+        raise RuntimeError("the v1 parent lens has the wrong scientific shape")
+    print("reused checksum-pinned v1 lens", LENS_PATH)
+    print("lens checksum", actual_parent_checksum)
 elif RUN_STAGE1_FIT_POOLED_LENS:
     if not (MODEL_ENABLED and CONFIRM_LENS_FIT_BUDGET):
         raise RuntimeError("Stage 1 requires model, fp32 A100, and fit-budget confirmation")
@@ -824,8 +860,13 @@ CONFIRM_CONFIRMATION_BUDGET = False
 
 MODEL_REPO_ID = "google/gemma-4-E4B-it"
 MODEL_REVISION = "fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd"
-SCIENTIFIC_IMPLEMENTATION_COMMIT = (
-    "09283b7e3ba98fe49a21a284327e4eac2edf4d86"
+SCIENTIFIC_IMPLEMENTATION_ID = "country-direction-capability-v2.20260826"
+PARENT_V1_RUN_DIR = Path(
+    "/content/drive/MyDrive/jacobian-lens-gemma/runs/mmcountry/"
+    "mmcountry_real_91055b9ab807"
+)
+PARENT_LENS_CHECKSUM = (
+    "sha256:abfae7fdd9fb2cb66afe4c3d6ae0211a1b727001c882844e966883fcc0284ebe"
 )
 EXPECT_N_LAYERS, EXPECT_D_MODEL, EXPECT_VOCAB = 42, 2560, 262144
 AUDIO_PROTOCOL_FINGERPRINT = (

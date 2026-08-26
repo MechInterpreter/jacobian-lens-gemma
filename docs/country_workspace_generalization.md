@@ -62,6 +62,25 @@ The workflow stops without opening confirmation if clean capability, direct
 answer leverage, or development fails. This is a scientific outcome, not a
 notebook error.
 
+### Direction-scoped capability amendment
+
+The first capability run passed 34 of 36 cells. France, China, and Japan passed
+all source-evidence cells; two Egyptian flag images were confused with nearby
+flags and produced Riyadh instead of Cairo. The original implementation blocked
+the entire study unless all four countries were usable as source evidence.
+That was broader than the causal requirement: a failed Egyptian input can block
+`Egypt->Japan`, but it cannot invalidate `Japan->Egypt`, where Japan is the
+only supplied evidence and Egypt is the injected coordinate target.
+
+The versioned `mmpilot.country_direction_capability.v2` amendment therefore
+gates each direction by its source country. It admits `France->China`,
+`China->France`, and `Japan->Egypt`, which still cover both predeclared pairs.
+It opens confirmation only if development passes both properties for at least
+one direction in each pair. This amendment was frozen before localization,
+exact-swap development, or any confirmation output was opened. It creates a
+new run fingerprint and checksum-reuses the completed fp32 lens; it does not
+refit or reinterpret any causal outcome.
+
 ## Run order
 
 1. CPU: enable only Stage 0. This downloads the pinned dataset, audits images

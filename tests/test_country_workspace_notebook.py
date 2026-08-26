@@ -52,11 +52,9 @@ def test_default_configuration_spends_nothing() -> None:
     assert "RUN_STAGE4_FRESH_CONFIRMATION = False" in source
     assert "CONFIRM_MODEL_LOAD = False" in source
     assert "CONFIRM_FP32_A100 = False" in source
-    assert (
-        '"09283b7e3ba98fe49a21a284327e4eac2edf4d86"'
-        in source
-    )
-    assert '"commit": SCIENTIFIC_IMPLEMENTATION_COMMIT' in source
+    assert 'SCIENTIFIC_IMPLEMENTATION_ID = "country-direction-capability-v2.20260826"' in source
+    assert '"scientific_implementation_id": SCIENTIFIC_IMPLEMENTATION_ID' in source
+    assert "PARENT_LENS_CHECKSUM" in source
 
 
 def test_real_run_requires_fp32_80gb_a100() -> None:
@@ -95,8 +93,8 @@ def test_path_selection_cannot_read_exact_swap_results() -> None:
     assert "unrestricted_greedy_direct_answer_trial" in source
     assert '"condition": "direct_answer"' in source
     assert "selection_used_exact_swap_outcomes" not in source
-    assert "confirmation remains unopened: no direction passed both properties" in source
-    assert "DEVELOPMENT NOT LICENSED: clean capability did not pass" in source
+    assert "development did not pass both" in source
+    assert "clean source capability did not cover two pairs" in source
     assert "Stage 3 requires completed Stage 2 reports" not in source
 
 

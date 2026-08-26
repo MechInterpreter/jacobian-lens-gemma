@@ -92,6 +92,7 @@ def _localization_rows(*, passing_band: tuple[int, ...]) -> list[dict]:
                                 "unit_id": f"{source}-{index}",
                                 "source": source,
                                 "target": target,
+                                "direction": f"{source}->{target}",
                                 "property": property_name,
                                 "modality": modality,
                                 "condition": "direct_answer",
@@ -167,12 +168,31 @@ def test_media_plan_refuses_ocr_leakage_and_duplicate_audio() -> None:
 
 def test_capability_requires_every_country_property_modality_cell() -> None:
     report = capability_report(_capability_rows())
-    assert report["verdict"] == "COUNTRY_CAPABILITY_GO"
+    assert report["verdict"] == "COUNTRY_CAPABILITY_GENERALIZATION_GO"
+    assert report["generalization_ready"] is True
     rows = _capability_rows()
     for row in rows:
         if row["country"] == "Japan" and row["property"] == "capital" and row["modality"] == "image":
             row["success"] = False
-    assert capability_report(rows)["verdict"] == "COUNTRY_CAPABILITY_NO_GO"
+    amended = capability_report(rows)
+    assert amended["verdict"] == "COUNTRY_CAPABILITY_GENERALIZATION_GO"
+    assert "Japan->Egypt" not in amended["eligible_directions"]
+    assert "Egypt->Japan" in amended["eligible_directions"]
+
+
+def test_capability_failure_blocks_only_directions_with_that_source() -> None:
+    rows = _capability_rows()
+    for row in rows:
+        if row["country"] == "Egypt" and row["modality"] == "image":
+            row["success"] = False
+    report = capability_report(rows)
+    assert report["eligible_countries"] == ["France", "China", "Japan"]
+    assert report["eligible_directions"] == [
+        "France->China",
+        "China->France",
+        "Japan->Egypt",
+    ]
+    assert report["generalization_ready"] is True
 
 
 def test_path_selection_reads_only_direct_answer_outcomes() -> None:
@@ -190,6 +210,19 @@ def test_path_selection_reads_only_direct_answer_outcomes() -> None:
     bad[0]["condition"] = "exact"
     with pytest.raises(CountryWorkspaceRefused, match="non-direct-answer"):
         direct_answer_localization_report(bad)
+
+
+def test_path_selection_accepts_only_capability_eligible_directions() -> None:
+    passing = PATH_BANDS[1]
+    eligible = {"France->China", "China->France", "Japan->Egypt"}
+    rows = [
+        row
+        for row in _localization_rows(passing_band=passing)
+        if row["direction"] in eligible
+    ]
+    report = direct_answer_localization_report(rows)
+    assert report["verdict"] == "COUNTRY_DIRECT_PATHS_GO"
+    assert set(report["eligible_directions"]) == eligible
 
 
 def test_development_verdict_distinguishes_generalization_and_bidirectionality() -> None:
@@ -227,7 +260,10 @@ def test_confirmation_design_is_frozen_only_after_development_passes() -> None:
         _localization_rows(passing_band=PATH_BANDS[0])
     )
     development = causal_report(
-        _causal_rows(N_DEVELOPMENT_PER_COUNTRY, {"France->China"}),
+        _causal_rows(
+            N_DEVELOPMENT_PER_COUNTRY,
+            {"France->China", "Japan->Egypt"},
+        ),
         stage="development",
         expected_n=N_DEVELOPMENT_PER_COUNTRY,
     )
@@ -238,10 +274,11 @@ def test_confirmation_design_is_frozen_only_after_development_passes() -> None:
         localization=localization,
         development=development,
     )
-    assert design["directions"] == ["France->China"]
+    assert design["directions"] == ["France->China", "Japan->Egypt"]
     assert design["frozen_before_confirmation_outputs"] is True
     development["passing_directions_both_properties"] = []
-    with pytest.raises(CountryWorkspaceRefused, match="no direction"):
+    development["generalized_across_two_pairs"] = False
+    with pytest.raises(CountryWorkspaceRefused, match="two independent pairs"):
         freeze_confirmation_design(
             protocol=benchmark_spec(dataset_revision="pinned"),
             media_validation=media,
