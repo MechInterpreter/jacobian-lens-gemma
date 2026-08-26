@@ -52,6 +52,11 @@ def test_default_configuration_spends_nothing() -> None:
     assert "RUN_STAGE4_FRESH_CONFIRMATION = False" in source
     assert "CONFIRM_MODEL_LOAD = False" in source
     assert "CONFIRM_FP32_A100 = False" in source
+    assert (
+        '"09283b7e3ba98fe49a21a284327e4eac2edf4d86"'
+        in source
+    )
+    assert '"commit": SCIENTIFIC_IMPLEMENTATION_COMMIT' in source
 
 
 def test_real_run_requires_fp32_80gb_a100() -> None:

@@ -517,7 +517,9 @@ SCIENTIFIC_CONFIG = {
     "audio_protocol_fingerprint": AUDIO_PROTOCOL_FINGERPRINT,
     "max_new_tokens": MAX_NEW_TOKENS,
     "random_seed": RANDOM_SEED,
-    "commit": COMMIT,
+    # Engineering-only control-flow repairs do not create a new scientific
+    # run. Any scientific change must deliberately update this frozen pin.
+    "commit": SCIENTIFIC_IMPLEMENTATION_COMMIT,
 }
 SCIENTIFIC_DIGEST = payload_checksum(SCIENTIFIC_CONFIG)
 RUN_DIR = RUNS_ROOT / f"mmcountry_real_{SCIENTIFIC_DIGEST.split(':')[1][:12]}"
@@ -822,6 +824,9 @@ CONFIRM_CONFIRMATION_BUDGET = False
 
 MODEL_REPO_ID = "google/gemma-4-E4B-it"
 MODEL_REVISION = "fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd"
+SCIENTIFIC_IMPLEMENTATION_COMMIT = (
+    "09283b7e3ba98fe49a21a284327e4eac2edf4d86"
+)
 EXPECT_N_LAYERS, EXPECT_D_MODEL, EXPECT_VOCAB = 42, 2560, 262144
 AUDIO_PROTOCOL_FINGERPRINT = (
     "sha256:9ad8bcc9420a7983f6e3b75d5d7080c0e2fcf0a94a76431917fcde73ba777920"
