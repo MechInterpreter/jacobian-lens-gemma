@@ -52,6 +52,8 @@ def test_default_configuration_spends_nothing() -> None:
     assert "RUN_STAGE2_REFIT_TASK_MATCHED_LENS_IF_NEEDED = False" in source
     assert "RUN_STAGE3_DEVELOPMENT_SWAP = False" in source
     assert "RUN_STAGE4_FRESH_CONFIRMATION = False" in source
+    assert "RUN_STAGE3B_FRANCE_CHINA_DOWNSTREAM_DEVELOPMENT = False" in source
+    assert "RUN_STAGE4B_FRANCE_CHINA_FRESH_CONFIRMATION = False" in source
     assert "CONFIRM_MODEL_LOAD = False" in source
     assert "CONFIRM_FP32_A100 = False" in source
     assert 'SCIENTIFIC_IMPLEMENTATION_ID = "country-prompt-lens-band-debug-v4.20260826"' in source
@@ -88,6 +90,16 @@ def test_scientific_endpoint_and_exchange_are_literal() -> None:
     assert "alpha=1.0" in source
     assert "teacher_forcing" not in source
     assert "candidate_ids" not in source
+
+
+def test_france_china_followup_is_fixed_and_preserves_parent_no_go() -> None:
+    source = _source()
+    assert '"France->China" not in full_band.get("passing_directions", ())' in source
+    assert 'layers=LAYERS, source=tokens["France"], target=tokens["China"]' in source
+    assert 'FRANCE_CHINA_DEVELOPMENT["verdict"] == "COUNTRY_FRANCE_CHINA_DEVELOPMENT_GO"' in source
+    assert "fresh confirmation remains unopened" in source
+    assert "PARENT TWO-PAIR COUNTRY VERDICT REMAINS UNCHANGED" in source
+    assert "RUN_STAGE2_REFIT_TASK_MATCHED_LENS_IF_NEEDED" in source
 
 
 def test_path_selection_cannot_read_exact_swap_results() -> None:

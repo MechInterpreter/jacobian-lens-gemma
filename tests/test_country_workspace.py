@@ -24,7 +24,9 @@ from jlens.mmpilot.country_workspace import (
     capability_report,
     causal_report,
     direct_answer_localization_report,
+    france_china_followup_report,
     freeze_confirmation_design,
+    freeze_france_china_followup_design,
     freeze_identity_calibrated_confirmation_design,
     identity_band_calibration_report,
     identity_lens_validation_report,
@@ -128,6 +130,85 @@ def _causal_rows(n: int, passing: set[str]) -> list[dict]:
                             }
                         )
     return rows
+
+
+def _france_china_rows(n: int, *, exact_success: bool = True) -> list[dict]:
+    return [
+        {
+            "unit_id": f"france-{index}",
+            "source": "France",
+            "target": "China",
+            "direction": "France->China",
+            "property": property_name,
+            "modality": modality,
+            "condition": condition,
+            "success": exact_success and condition == "exact",
+            "integrity_pass": True,
+        }
+        for property_name in PROPERTIES
+        for modality in MODALITIES
+        for index in range(n)
+        for condition in ("exact", "zero", "random", "unrelated")
+    ]
+
+
+def test_france_china_followup_requires_both_properties_every_modality() -> None:
+    report = france_china_followup_report(
+        _france_china_rows(N_DEVELOPMENT_PER_COUNTRY),
+        stage="development",
+        expected_n=N_DEVELOPMENT_PER_COUNTRY,
+    )
+    assert report["verdict"] == "COUNTRY_FRANCE_CHINA_DEVELOPMENT_GO"
+    assert report["all_properties_every_modality_passed"] is True
+    assert report["parent_two_pair_verdict_unchanged"] is True
+
+    rows = _france_china_rows(N_DEVELOPMENT_PER_COUNTRY)
+    for row in rows:
+        if row["property"] == "continent" and row["modality"] == "image":
+            row["success"] = False
+    failed = france_china_followup_report(
+        rows, stage="development", expected_n=N_DEVELOPMENT_PER_COUNTRY
+    )
+    assert failed["verdict"] == "COUNTRY_FRANCE_CHINA_DEVELOPMENT_NO_GO"
+
+
+def test_freeze_france_china_followup_pins_full_band_and_lens() -> None:
+    development = france_china_followup_report(
+        _france_china_rows(N_DEVELOPMENT_PER_COUNTRY),
+        stage="development",
+        expected_n=N_DEVELOPMENT_PER_COUNTRY,
+    )
+    identity_calibration = {
+        "report_checksum": "sha256:calibration",
+        "candidates": [{"band": list(LAYERS), "passing_directions": ["France->China"]}],
+    }
+    design = freeze_france_china_followup_design(
+        protocol={"protocol_digest": "sha256:protocol"},
+        media_validation={"passed": True, "population_digest": "sha256:population"},
+        capability={"report_checksum": "sha256:capability"},
+        lens_validation={
+            "verdict": "COUNTRY_IDENTITY_LENS_VALIDATION_GO",
+            "report_checksum": "sha256:lens-validation",
+        },
+        identity_calibration=identity_calibration,
+        lens_checksum="sha256:lens",
+        development=development,
+    )
+    assert design["direction"] == "France->China"
+    assert design["band"] == list(LAYERS)
+    assert design["fresh_confirmation_outputs_opened"] is False
+
+    identity_calibration["candidates"][0]["passing_directions"] = []
+    with pytest.raises(CountryWorkspaceRefused, match="does not establish"):
+        freeze_france_china_followup_design(
+            protocol={"protocol_digest": "sha256:protocol"},
+            media_validation={"passed": True},
+            capability={},
+            lens_validation={"verdict": "COUNTRY_IDENTITY_LENS_VALIDATION_GO"},
+            identity_calibration=identity_calibration,
+            lens_checksum="sha256:lens",
+            development=development,
+        )
 
 
 def test_dataset_counts_support_the_frozen_design() -> None:

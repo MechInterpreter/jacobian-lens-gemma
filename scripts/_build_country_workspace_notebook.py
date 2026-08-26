@@ -909,7 +909,205 @@ elif CONFIRMATION_REPORT is not None:
 '''
 )
 
-markdown("## 12. Final report and handoff")
+markdown("## 12. Prospective France-to-China downstream follow-up")
+code(
+    r'''
+FRANCE_CHINA_DEVELOPMENT_PATH = RUN_DIR / "france_china_downstream_development_report.json"
+FRANCE_CHINA_DESIGN_PATH = RUN_DIR / "france_china_confirmation_design.json"
+FRANCE_CHINA_CONFIRMATION_PATH = RUN_DIR / "france_china_fresh_confirmation_report.json"
+FRANCE_CHINA_DEVELOPMENT = (
+    json.loads(FRANCE_CHINA_DEVELOPMENT_PATH.read_text(encoding="utf-8"))
+    if FRANCE_CHINA_DEVELOPMENT_PATH.is_file() else None
+)
+FRANCE_CHINA_CONFIRMATION = (
+    json.loads(FRANCE_CHINA_CONFIRMATION_PATH.read_text(encoding="utf-8"))
+    if FRANCE_CHINA_CONFIRMATION_PATH.is_file() else None
+)
+
+def _france_china_trials(rows, *, stage, expected_n):
+    from jlens.mmpilot.country_workspace import france_china_followup_report
+    tokens = concept_tokens((*EVAL_COUNTRIES, *CONTROL_COUNTRIES))
+    unembed = BACKEND.unembedding_weight()
+    exact = build_swap_bases_for_lens(
+        LENS, unembed, layers=LAYERS, source=tokens["France"], target=tokens["China"]
+    )
+    random_bases = {
+        layer: random_two_direction_basis(basis, seed=RANDOM_SEED + 70000 + layer)
+        for layer, basis in exact.items()
+    }
+    unrelated = build_swap_bases_for_lens(
+        LENS, unembed, layers=LAYERS,
+        source=tokens[CONTROL_COUNTRIES[0]], target=tokens[CONTROL_COUNTRIES[1]],
+    )
+    trial_rows = []
+    for property_name in PROPERTIES:
+        expected = fact("China", property_name)
+        for row in rows:
+            for modality in MODALITIES:
+                for condition, alpha, bases in (
+                    ("exact", 1.0, exact), ("zero", 0.0, exact),
+                    ("random", 1.0, random_bases), ("unrelated", 1.0, unrelated),
+                ):
+                    key = safe_key(
+                        "france_china_followup", stage, property_name,
+                        row["unit_id"], modality, condition,
+                    )
+                    stored = STORE.load("intervention", key)
+                    if stored is None:
+                        inputs = build_task_inputs(row, modality, property_name)
+                        result = unrestricted_greedy_swap_trial(
+                            BACKEND, inputs, bases=bases, alpha=alpha,
+                            answer=expected, max_new_tokens=MAX_NEW_TOKENS,
+                            position_rule="all_prompt_positions",
+                            realization_policy=TEXT_MODEL_DTYPE_REALIZATION,
+                        )
+                        stored = {
+                            **result, "unit_id": row["unit_id"],
+                            "source": "France", "target": "China",
+                            "direction": "France->China", "property": property_name,
+                            "modality": modality, "condition": condition,
+                            "expected": expected,
+                            "success": answer_matches(result["generated_text"], expected),
+                            "integrity_pass": diagnostic_integrity(
+                                result, exact=(condition == "exact")
+                            ),
+                        }
+                        STORE.save("intervention", key, stored)
+                        work = "computed"
+                    else:
+                        work = "reused"
+                    trial_rows.append(stored)
+                    if len(trial_rows) == 1 or len(trial_rows) % 48 == 0:
+                        print("France-to-China", stage, len(trial_rows), work)
+    return france_china_followup_report(
+        trial_rows, stage=stage, expected_n=expected_n
+    )
+
+if RUN_STAGE3B_FRANCE_CHINA_DOWNSTREAM_DEVELOPMENT:
+    if not (
+        MODEL_ENABLED and CONFIRM_FRANCE_CHINA_DEVELOPMENT_BUDGET
+        and LENS is not None
+    ):
+        raise RuntimeError(
+            "France-to-China development requires the model, existing task-matched "
+            "lens, and its budget confirmation"
+        )
+    if ACTIVE_LENS_LABEL != "task_matched_pooled_j":
+        raise RuntimeError("the follow-up is pinned to the task-matched pooled J-lens")
+    if LENS_VALIDATION_REPORT is None or IDENTITY_CALIBRATION_REPORT is None:
+        raise RuntimeError("the follow-up requires the stored lens-validation artifacts")
+    full_band = next(
+        (candidate for candidate in IDENTITY_CALIBRATION_REPORT.get("candidates", ())
+         if tuple(candidate.get("band", ())) == LAYERS), None,
+    )
+    if full_band is None or "France->China" not in full_band.get("passing_directions", ()):
+        raise RuntimeError(
+            "the stored calibration does not pin France-to-China at L16-L40"
+        )
+    development_rows = sorted(
+        [row for row in MEDIA_ROWS if row["study_split"] == "development" and row["country"] == "France"],
+        key=lambda row: row["unit_id"],
+    )
+    FRANCE_CHINA_DEVELOPMENT = _france_china_trials(
+        development_rows, stage="development", expected_n=N_DEVELOPMENT_PER_COUNTRY
+    )
+    _write_report(FRANCE_CHINA_DEVELOPMENT_PATH, FRANCE_CHINA_DEVELOPMENT)
+    print("FRANCE-TO-CHINA DEVELOPMENT", FRANCE_CHINA_DEVELOPMENT["verdict"])
+    print("report", FRANCE_CHINA_DEVELOPMENT_PATH)
+    if FRANCE_CHINA_DEVELOPMENT["verdict"] == "COUNTRY_FRANCE_CHINA_DEVELOPMENT_GO":
+        from jlens.mmpilot.country_workspace import freeze_france_china_followup_design
+        design = freeze_france_china_followup_design(
+            protocol=PROTOCOL, media_validation=PREPARED["media_validation"],
+            capability=CAPABILITY_REPORT, lens_validation=LENS_VALIDATION_REPORT,
+            identity_calibration=IDENTITY_CALIBRATION_REPORT,
+            lens_checksum=LENS_VALIDATION_REPORT["lens_checksum"],
+            development=FRANCE_CHINA_DEVELOPMENT,
+        )
+        _write_report(FRANCE_CHINA_DESIGN_PATH, design)
+        print("fresh confirmation licensed", design["design_checksum"])
+    else:
+        print("fresh confirmation remains unopened")
+elif FRANCE_CHINA_DEVELOPMENT is not None:
+    print("reused France-to-China development", FRANCE_CHINA_DEVELOPMENT["verdict"])
+
+if RUN_STAGE4B_FRANCE_CHINA_FRESH_CONFIRMATION:
+    if not (
+        MODEL_ENABLED and CONFIRM_FRANCE_CHINA_CONFIRMATION_BUDGET
+        and LENS is not None
+    ):
+        raise RuntimeError(
+            "France-to-China confirmation requires the model, existing lens, "
+            "and its budget confirmation"
+        )
+    if not FRANCE_CHINA_DESIGN_PATH.is_file():
+        print("FRANCE-TO-CHINA CONFIRMATION NOT LICENSED: no frozen design")
+    else:
+        design = json.loads(FRANCE_CHINA_DESIGN_PATH.read_text(encoding="utf-8"))
+        confirmation_rows = sorted(
+            [row for row in MEDIA_ROWS if row["study_split"] == "confirmation" and row["country"] == "France"],
+            key=lambda row: row["unit_id"],
+        )
+        clean_rows = []
+        for property_name in PROPERTIES:
+            expected = fact("France", property_name)
+            for row in confirmation_rows:
+                for modality in MODALITIES:
+                    key = safe_key("france_china_capability", property_name, row["unit_id"], modality)
+                    stored = STORE.load("capability", key)
+                    if stored is None:
+                        result = unrestricted_greedy_completion(
+                            BACKEND, build_task_inputs(row, modality, property_name),
+                            answer=expected, max_new_tokens=MAX_NEW_TOKENS,
+                        )
+                        stored = {
+                            **result, "unit_id": row["unit_id"], "country": "France",
+                            "property": property_name, "modality": modality,
+                            "expected": expected,
+                            "success": answer_matches(result["generated_text"], expected),
+                        }
+                        STORE.save("capability", key, stored)
+                    clean_rows.append(stored)
+        clean_cells = []
+        for property_name in PROPERTIES:
+            for modality in MODALITIES:
+                cell = [row for row in clean_rows if row["property"] == property_name and row["modality"] == modality]
+                successes = sum(bool(row["success"]) for row in cell)
+                rate = successes / len(cell) if cell else 0.0
+                clean_cells.append({
+                    "property": property_name, "modality": modality,
+                    "n": len(cell), "successes": successes, "rate": rate,
+                    "passed": len(cell) == N_CONFIRMATION_PER_COUNTRY and rate >= MIN_CAPABILITY_RATE,
+                })
+        if not clean_cells or not all(cell["passed"] for cell in clean_cells):
+            FRANCE_CHINA_CONFIRMATION = {
+                "version": "country.france_china_followup.v1",
+                "verdict": "COUNTRY_FRANCE_CHINA_CONFIRMATION_CAPABILITY_NO_GO",
+                "design": design, "capability_rows": clean_rows,
+                "capability_cells": clean_cells, "interventions_run": False,
+                "parent_two_pair_verdict_unchanged": True,
+            }
+            FRANCE_CHINA_CONFIRMATION["report_checksum"] = payload_checksum(FRANCE_CHINA_CONFIRMATION)
+        else:
+            FRANCE_CHINA_CONFIRMATION = _france_china_trials(
+                confirmation_rows, stage="confirmation",
+                expected_n=N_CONFIRMATION_PER_COUNTRY,
+            )
+            FRANCE_CHINA_CONFIRMATION["design"] = design
+            FRANCE_CHINA_CONFIRMATION["capability_rows"] = clean_rows
+            FRANCE_CHINA_CONFIRMATION["capability_cells"] = clean_cells
+            body = {k: v for k, v in FRANCE_CHINA_CONFIRMATION.items() if k != "report_checksum"}
+            FRANCE_CHINA_CONFIRMATION["report_checksum"] = payload_checksum(body)
+        _write_report(FRANCE_CHINA_CONFIRMATION_PATH, FRANCE_CHINA_CONFIRMATION)
+        print("FRANCE-TO-CHINA FRESH CONFIRMATION", FRANCE_CHINA_CONFIRMATION["verdict"])
+        print("report", FRANCE_CHINA_CONFIRMATION_PATH)
+elif FRANCE_CHINA_CONFIRMATION is not None:
+    print("reused France-to-China confirmation", FRANCE_CHINA_CONFIRMATION["verdict"])
+
+print("PARENT TWO-PAIR COUNTRY VERDICT REMAINS UNCHANGED")
+'''
+)
+
+markdown("## 13. Final report and handoff")
 code(
     r'''
 if RUN_STAGE5_WRITE_REPORT:
@@ -929,6 +1127,8 @@ if RUN_STAGE5_WRITE_REPORT:
         "active_lens_label": ACTIVE_LENS_LABEL,
         "development": DEVELOPMENT_REPORT,
         "confirmation": CONFIRMATION_REPORT,
+        "france_china_downstream_development": FRANCE_CHINA_DEVELOPMENT,
+        "france_china_fresh_confirmation": FRANCE_CHINA_CONFIRMATION,
         "headline_verdict": (
             CONFIRMATION_REPORT.get("verdict") if CONFIRMATION_REPORT
             else DEVELOPMENT_REPORT.get("verdict") if DEVELOPMENT_REPORT
@@ -953,6 +1153,8 @@ if RUN_STAGE5_WRITE_REPORT:
 print("resume status", json.dumps(STORE.status_report(), indent=2))
 print("Send back country_workspace_generalization_report.json and, if present,")
 print("country_fresh_confirmation_report.json.")
+print("Also send france_china_downstream_development_report.json and, if present,")
+print("france_china_fresh_confirmation_report.json.")
 '''
 )
 markdown("## 5. Open the fingerprinted run")
@@ -1093,7 +1295,8 @@ from jlens.mmpilot.coordinate_swap import (
 )
 from jlens.mmpilot.country_workspace import (
     CONTROL_COUNTRIES, COUNTRY_COMPLETION_INSTRUCTION, FACTS, answer_matches,
-    assistant_prefill, fact, identity_matches, speech_evidence, text_evidence,
+    MIN_CAPABILITY_RATE, assistant_prefill, fact, identity_matches,
+    speech_evidence, text_evidence,
 )
 from jlens.mmpilot.multimodal_lens import (
     build_swap_bases_for_lens, selected_lens_vector,
@@ -1333,6 +1536,8 @@ RUN_STAGE2_DEBUG_COUNTRY_INSTRUMENT = False
 RUN_STAGE2_REFIT_TASK_MATCHED_LENS_IF_NEEDED = False
 RUN_STAGE3_DEVELOPMENT_SWAP = False
 RUN_STAGE4_FRESH_CONFIRMATION = False
+RUN_STAGE3B_FRANCE_CHINA_DOWNSTREAM_DEVELOPMENT = False
+RUN_STAGE4B_FRANCE_CHINA_FRESH_CONFIRMATION = False
 RUN_STAGE5_WRITE_REPORT = False
 
 CONFIRM_MODEL_LOAD = False
@@ -1343,6 +1548,8 @@ CONFIRM_IDENTITY_CALIBRATION_BUDGET = False
 CONFIRM_TASK_MATCHED_REFIT_BUDGET = False
 CONFIRM_DEVELOPMENT_BUDGET = False
 CONFIRM_CONFIRMATION_BUDGET = False
+CONFIRM_FRANCE_CHINA_DEVELOPMENT_BUDGET = False
+CONFIRM_FRANCE_CHINA_CONFIRMATION_BUDGET = False
 
 MODEL_REPO_ID = "google/gemma-4-E4B-it"
 MODEL_REVISION = "fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd"
@@ -1387,6 +1594,8 @@ ANY_STAGE = any((
     RUN_STAGE2_REFIT_TASK_MATCHED_LENS_IF_NEEDED,
     RUN_STAGE3_DEVELOPMENT_SWAP,
     RUN_STAGE4_FRESH_CONFIRMATION,
+    RUN_STAGE3B_FRANCE_CHINA_DOWNSTREAM_DEVELOPMENT,
+    RUN_STAGE4B_FRANCE_CHINA_FRESH_CONFIRMATION,
     RUN_STAGE5_WRITE_REPORT,
 ))
 if not ANY_STAGE:
@@ -1401,6 +1610,8 @@ MODEL_STAGE = any((
     RUN_STAGE2_REFIT_TASK_MATCHED_LENS_IF_NEEDED,
     RUN_STAGE3_DEVELOPMENT_SWAP,
     RUN_STAGE4_FRESH_CONFIRMATION,
+    RUN_STAGE3B_FRANCE_CHINA_DOWNSTREAM_DEVELOPMENT,
+    RUN_STAGE4B_FRANCE_CHINA_FRESH_CONFIRMATION,
 ))
 if MODEL_STAGE and not CONFIRM_MODEL_LOAD:
     print("MODEL BLOCKED: set CONFIRM_MODEL_LOAD=True after reading the budget")
@@ -1438,6 +1649,8 @@ print("  identity band calibration maximum", 3 * len(PATH_BANDS) * len(MODALITIE
 print("  conditional task-matched refit", 99, "forwards plus", 99 * ((EXPECT_D_MODEL + DIM_BATCH - 1) // DIM_BATCH), "backward passes")
 print("  development", len(DIRECTIONS) * len(PROPERTIES) * len(MODALITIES) * 4 * N_DEVELOPMENT_PER_COUNTRY, "conditions")
 print("  confirmation maximum", len(DIRECTIONS) * len(PROPERTIES) * len(MODALITIES) * 4 * N_CONFIRMATION_PER_COUNTRY, "conditions")
+print("  France-to-China follow-up development", len(PROPERTIES) * len(MODALITIES) * 4 * N_DEVELOPMENT_PER_COUNTRY, "conditions")
+print("  France-to-China follow-up confirmation", len(PROPERTIES) * len(MODALITIES) * 4 * N_CONFIRMATION_PER_COUNTRY, "conditions plus clean capability")
 print("  model dtype float32; A100 80 GB required; no fallback")
 print("  resume fit checkpoint every", CHECKPOINT_EVERY, "examples; causal resume unit one condition")
 print("  expected wall time after CPU prep: approximately 8-16 A100 hours if every stage is licensed")

@@ -935,6 +935,123 @@ def causal_report(
     return {**body, "report_checksum": payload_checksum(body)}
 
 
+def france_china_followup_report(
+    rows: Sequence[Mapping],
+    *,
+    stage: str,
+    expected_n: int,
+) -> dict:
+    """Score the prospective France-to-China downstream-fact follow-up."""
+
+    if stage not in {"development", "confirmation"}:
+        raise CountryWorkspaceRefused(f"unknown follow-up stage {stage!r}")
+    records = [dict(row) for row in rows]
+    if any(
+        row.get("direction") != "France->China"
+        or row.get("property") not in PROPERTIES
+        or row.get("modality") not in MODALITIES
+        for row in records
+    ):
+        raise CountryWorkspaceRefused(
+            "the France-to-China follow-up contains an unfrozen direction, "
+            "property, or modality"
+        )
+    base = causal_report(
+        records,
+        stage=stage,
+        expected_n=expected_n,
+        frozen_directions=("France->China",),
+    )
+    passed = set(base["passing_direction_properties"])
+    required = {f"France->China:{property_name}" for property_name in PROPERTIES}
+    all_cells_pass = required <= passed
+    prefix = "COUNTRY_FRANCE_CHINA_" + stage.upper()
+    body = {
+        **{key: value for key, value in base.items() if key != "report_checksum"},
+        "version": f"{PROTOCOL_VERSION}.france_china_followup.v1",
+        "verdict": f"{prefix}_{'GO' if all_cells_pass else 'NO_GO'}",
+        "frozen_direction": "France->China",
+        "frozen_properties": list(PROPERTIES),
+        "frozen_modalities": list(MODALITIES),
+        "frozen_alpha": ALPHA,
+        "frozen_band": list(LAYERS),
+        "all_properties_every_modality_passed": all_cells_pass,
+        "parent_two_pair_verdict_unchanged": True,
+        "claim_boundary": (
+            "This prospective single-direction follow-up can support only "
+            "France-to-China downstream recomputation of capital and continent "
+            "in the measured modalities. It does not convert the parent "
+            "two-pair country-generalization NO_GO into a GO."
+        ),
+    }
+    return {**body, "report_checksum": payload_checksum(body)}
+
+
+def freeze_france_china_followup_design(
+    *,
+    protocol: Mapping,
+    media_validation: Mapping,
+    capability: Mapping,
+    lens_validation: Mapping,
+    identity_calibration: Mapping,
+    lens_checksum: str,
+    development: Mapping,
+) -> dict:
+    """Freeze fresh confirmation after the prospective development stage."""
+
+    if not bool(media_validation.get("passed")):
+        raise CountryWorkspaceRefused("media validation did not pass")
+    if lens_validation.get("verdict") != "COUNTRY_IDENTITY_LENS_VALIDATION_GO":
+        raise CountryWorkspaceRefused("country identity lens validation did not pass")
+    if not str(lens_checksum).startswith("sha256:"):
+        raise CountryWorkspaceRefused("the task-matched lens checksum is not pinned")
+    full_band = next(
+        (
+            candidate
+            for candidate in identity_calibration.get("candidates", ())
+            if tuple(candidate.get("band", ())) == LAYERS
+        ),
+        None,
+    )
+    if full_band is None or "France->China" not in full_band.get(
+        "passing_directions", ()
+    ):
+        raise CountryWorkspaceRefused(
+            "the stored identity calibration does not establish France-to-China "
+            "at the frozen L16-L40 band"
+        )
+    if development.get("verdict") != "COUNTRY_FRANCE_CHINA_DEVELOPMENT_GO":
+        raise CountryWorkspaceRefused(
+            "France-to-China downstream development did not pass"
+        )
+    body = {
+        "version": f"{PROTOCOL_VERSION}.france_china_followup_design.v1",
+        "protocol_digest": (
+            protocol.get("effective_protocol_digest")
+            or protocol.get("protocol_digest")
+        ),
+        "media_population_digest": media_validation.get("population_digest"),
+        "capability_report_checksum": capability.get("report_checksum"),
+        "lens_validation_report_checksum": lens_validation.get("report_checksum"),
+        "identity_calibration_report_checksum": identity_calibration.get(
+            "report_checksum"
+        ),
+        "task_matched_lens_checksum": lens_checksum,
+        "development_report_checksum": development.get("report_checksum"),
+        "direction": "France->China",
+        "properties": list(PROPERTIES),
+        "modalities": list(MODALITIES),
+        "band": list(LAYERS),
+        "alpha": ALPHA,
+        "position_rule": POSITION_RULE,
+        "confirmation_per_country": N_CONFIRMATION_PER_COUNTRY,
+        "selection_used_downstream_fact_outcomes": False,
+        "fresh_confirmation_outputs_opened": False,
+        "parent_two_pair_verdict_unchanged": True,
+    }
+    return {**body, "design_checksum": payload_checksum(body)}
+
+
 def freeze_confirmation_design(
     *,
     protocol: Mapping,
@@ -1117,7 +1234,9 @@ __all__ = [
     "direct_answer_localization_report",
     "fact",
     "freeze_confirmation_design",
+    "freeze_france_china_followup_design",
     "freeze_identity_calibrated_confirmation_design",
+    "france_china_followup_report",
     "identity_band_calibration_report",
     "identity_lens_validation_report",
     "identity_matches",
