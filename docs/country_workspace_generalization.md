@@ -62,6 +62,35 @@ The workflow stops without opening confirmation if clean capability, direct
 answer leverage, or development fails. This is a scientific outcome, not a
 notebook error.
 
+### No-refit causal-site diagnosis
+
+The broad France-to-China identity exchange changed the generated country name
+but did not reliably change its capital or continent. The exact intervention
+often reduced the answer to punctuation, even though its numerical integrity
+checks passed. This means the broad all-position L16-L40 exchange is not yet
+evidence that the internal country state used for fact lookup was replaced.
+
+The next diagnostic therefore performs no fitting and opens no fresh
+confirmation data. It divides the four France development examples before any
+new result is read:
+
+1. One example screens the six frozen contiguous bands at two declared sites:
+   the evidence endpoint and the final prompt token.
+2. A path passes only if an actual clean China activation and a norm-matched
+   direct-answer control both produce the correct capital and continent in
+   text, image, and spoken audio. Replacing the state with the original France
+   activation or an unrelated Italy activation must not do so.
+3. Path selection never reads an exact coordinate-swap outcome.
+4. If and only if the screen passes, the exact alpha-one France-to-China
+   coordinate exchange is tested on the remaining three development examples,
+   against zero, random-basis, and unrelated-country controls.
+
+Every screen and follow-up condition is checksum-bound and atomically saved.
+The CPU planning stage hashes the completed balanced-task lens but does not
+load it. The GPU stages reuse that lens and perform zero backward passes. A
+successful development diagnostic can motivate a separately frozen fresh
+confirmation study; it does not itself reclassify the completed country result.
+
 ### Direction-scoped capability amendment
 
 The first capability run passed 34 of 36 cells. France, China, and Japan passed
@@ -92,6 +121,11 @@ refit or reinterpret any causal outcome.
    pass both properties across all three modalities.
 5. Enable Stage 4 only when the design file exists. Then enable Stage 5 to write
    the consolidated report.
+
+For the no-refit diagnosis, run Stage 6A alone on CPU to seal the plan. Then run
+Stage 6B on an fp32 80 GB A100. Run Stage 6C only if Stage 6B prints
+`COUNTRY_CAUSAL_SITE_SCREEN_GO`. Stages 6A-6C must never be combined with a lens
+fit toggle.
 
 The canonical notebook is
 `notebooks/multimodal_country_workspace_generalization_colab.ipynb`.

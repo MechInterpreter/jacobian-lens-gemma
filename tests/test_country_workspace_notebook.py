@@ -55,6 +55,9 @@ def test_default_configuration_spends_nothing() -> None:
     assert "RUN_STAGE4_FRESH_CONFIRMATION = False" in source
     assert "RUN_STAGE3B_FRANCE_CHINA_DOWNSTREAM_DEVELOPMENT = False" in source
     assert "RUN_STAGE4B_FRANCE_CHINA_FRESH_CONFIRMATION = False" in source
+    assert "RUN_STAGE6A_CPU_CAUSAL_SITE_PLAN = False" in source
+    assert "RUN_STAGE6B_CAUSAL_SITE_SCREEN = False" in source
+    assert "RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT = False" in source
     assert "CONFIRM_MODEL_LOAD = False" in source
     assert "CONFIRM_FP32_A100 = False" in source
     assert 'SCIENTIFIC_IMPLEMENTATION_ID = "country-prompt-lens-band-debug-v4.20260826"' in source
@@ -165,3 +168,18 @@ def test_every_expensive_unit_has_atomic_resume() -> None:
     assert 'STORE.load("intervention", key)' in source
     assert 'STORE.save("intervention", key, stored)' in source
     assert "STORE.status_report()" in source
+
+
+def test_no_refit_causal_site_diagnostic_is_prospective_and_resumable() -> None:
+    source = _source()
+    assert '"selection_reads_coordinate_swap_outcomes": False' in source
+    assert '"fresh_confirmation_opened": False' in source
+    assert '"fitting_performed": False, "backward_passes": 0' in source
+    assert '_screen_source_rows = _development_by_country["France"][:1]' in source
+    assert '_restricted_source_rows = _development_by_country["France"][1:]' in source
+    assert 'PATCH_STORE.load("intervention", key)' in source
+    assert 'PATCH_STORE.save("intervention", key, stored)' in source
+    assert "capture_activation_sites" in source
+    assert "unrestricted_greedy_activation_patch_trial" in source
+    assert 'position_rule="evidence_span_only"' in source
+    assert "fitting 0; backward passes 0; fresh confirmation opened False" in source

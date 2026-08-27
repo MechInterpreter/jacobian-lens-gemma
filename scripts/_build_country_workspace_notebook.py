@@ -260,7 +260,7 @@ if LENS_VALIDATION_PATH.is_file():
     LENS_VALIDATION_REPORT = json.loads(LENS_VALIDATION_PATH.read_text(encoding="utf-8"))
 if IDENTITY_CALIBRATION_PATH.is_file():
     IDENTITY_CALIBRATION_REPORT = json.loads(IDENTITY_CALIBRATION_PATH.read_text(encoding="utf-8"))
-if ACTIVE_LENS_PATH.is_file():
+if MODEL_STAGE and ACTIVE_LENS_PATH.is_file():
     _active = json.loads(ACTIVE_LENS_PATH.read_text(encoding="utf-8"))
     ACTIVE_LENS_LABEL = _active["label"]
     if ACTIVE_LENS_LABEL == "task_matched_pooled_j":
@@ -1269,6 +1269,8 @@ if RUN_STAGE5_WRITE_REPORT:
         "confirmation": CONFIRMATION_REPORT,
         "france_china_downstream_development": FRANCE_CHINA_DEVELOPMENT,
         "france_china_fresh_confirmation": FRANCE_CHINA_CONFIRMATION,
+        "causal_site_screen": CAUSAL_SITE_SCREEN,
+        "restricted_swap_development": RESTRICTED_SWAP_DEVELOPMENT,
         "headline_verdict": (
             CONFIRMATION_REPORT.get("verdict") if CONFIRMATION_REPORT
             else DEVELOPMENT_REPORT.get("verdict") if DEVELOPMENT_REPORT
@@ -1295,6 +1297,9 @@ print("Send back country_workspace_generalization_report.json and, if present,")
 print("country_fresh_confirmation_report.json.")
 print("Also send france_china_downstream_development_report.json and, if present,")
 print("france_china_fresh_confirmation_report.json.")
+print("For the no-refit diagnosis, send country_causal_site_plan.json,")
+print("country_causal_site_screen_report.json and, if licensed,")
+print("country_restricted_swap_development_report.json.")
 '''
 )
 markdown("## 5. Open the fingerprinted run")
@@ -1511,7 +1516,7 @@ code(
 LENS = None
 LENS_PATH = RUN_DIR / "lenses" / "lens.pooled.country.l16_l40.pt"
 LENS_PROVENANCE_PATH = RUN_DIR / "lenses" / "lens.pooled.country.l16_l40.json"
-if LENS_PATH.is_file():
+if MODEL_STAGE and LENS_PATH.is_file():
     from jlens.lens import JacobianLens
     from jlens.mmpilot.backend import file_checksum
     if not LENS_PROVENANCE_PATH.is_file():
@@ -1523,7 +1528,7 @@ if LENS_PATH.is_file():
     if LENS.source_layers != list(LAYERS) or LENS.n_prompts != 99 or LENS.d_model != EXPECT_D_MODEL:
         raise RuntimeError("completed lens has the wrong layers, population size, or width")
     print("reused completed lens", LENS_PATH)
-elif (PARENT_V1_RUN_DIR / "lenses" / LENS_PATH.name).is_file():
+elif MODEL_STAGE and (PARENT_V1_RUN_DIR / "lenses" / LENS_PATH.name).is_file():
     from jlens.lens import JacobianLens
     from jlens.mmpilot.backend import file_checksum
     parent_lens_path = PARENT_V1_RUN_DIR / "lenses" / LENS_PATH.name
@@ -1624,7 +1629,15 @@ elif RUN_STAGE1_FIT_POOLED_LENS:
     os.replace(provenance_tmp, LENS_PROVENANCE_PATH)
     print("lens completed", LENS_PATH)
     print("lens checksum", lens_provenance["lens_checksum"])
-elif any((RUN_STAGE2_CAPABILITY_AND_LOCALIZATION, RUN_STAGE3_DEVELOPMENT_SWAP, RUN_STAGE4_FRESH_CONFIRMATION)):
+elif any((
+    RUN_STAGE2_CAPABILITY_AND_LOCALIZATION,
+    RUN_STAGE3_DEVELOPMENT_SWAP,
+    RUN_STAGE4_FRESH_CONFIRMATION,
+    RUN_STAGE3B_FRANCE_CHINA_DOWNSTREAM_DEVELOPMENT,
+    RUN_STAGE4B_FRANCE_CHINA_FRESH_CONFIRMATION,
+    RUN_STAGE6B_CAUSAL_SITE_SCREEN,
+    RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT,
+)):
     raise RuntimeError("No completed lens exists. Run Stage 1 first.")
 '''
 )
@@ -1679,6 +1692,9 @@ RUN_STAGE3_DEVELOPMENT_SWAP = False
 RUN_STAGE4_FRESH_CONFIRMATION = False
 RUN_STAGE3B_FRANCE_CHINA_DOWNSTREAM_DEVELOPMENT = False
 RUN_STAGE4B_FRANCE_CHINA_FRESH_CONFIRMATION = False
+RUN_STAGE6A_CPU_CAUSAL_SITE_PLAN = False
+RUN_STAGE6B_CAUSAL_SITE_SCREEN = False
+RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT = False
 RUN_STAGE5_WRITE_REPORT = False
 
 CONFIRM_MODEL_LOAD = False
@@ -1692,6 +1708,8 @@ CONFIRM_DEVELOPMENT_BUDGET = False
 CONFIRM_CONFIRMATION_BUDGET = False
 CONFIRM_FRANCE_CHINA_DEVELOPMENT_BUDGET = False
 CONFIRM_FRANCE_CHINA_CONFIRMATION_BUDGET = False
+CONFIRM_CAUSAL_SITE_SCREEN_BUDGET = False
+CONFIRM_RESTRICTED_SWAP_BUDGET = False
 
 MODEL_REPO_ID = "google/gemma-4-E4B-it"
 MODEL_REVISION = "fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd"
@@ -1739,6 +1757,9 @@ ANY_STAGE = any((
     RUN_STAGE4_FRESH_CONFIRMATION,
     RUN_STAGE3B_FRANCE_CHINA_DOWNSTREAM_DEVELOPMENT,
     RUN_STAGE4B_FRANCE_CHINA_FRESH_CONFIRMATION,
+    RUN_STAGE6A_CPU_CAUSAL_SITE_PLAN,
+    RUN_STAGE6B_CAUSAL_SITE_SCREEN,
+    RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT,
     RUN_STAGE5_WRITE_REPORT,
 ))
 if not ANY_STAGE:
@@ -1756,6 +1777,8 @@ MODEL_STAGE = any((
     RUN_STAGE4_FRESH_CONFIRMATION,
     RUN_STAGE3B_FRANCE_CHINA_DOWNSTREAM_DEVELOPMENT,
     RUN_STAGE4B_FRANCE_CHINA_FRESH_CONFIRMATION,
+    RUN_STAGE6B_CAUSAL_SITE_SCREEN,
+    RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT,
 ))
 if MODEL_STAGE and not CONFIRM_MODEL_LOAD:
     print("MODEL BLOCKED: set CONFIRM_MODEL_LOAD=True after reading the budget")
@@ -1770,6 +1793,10 @@ if (
     print("TASK-MATCHED REFIT BLOCKED: confirm its backward-pass budget")
 if RUN_STAGE2C_FIT_BALANCED_TASK_LENS and not CONFIRM_BALANCED_TASK_FINAL_FIT_BUDGET:
     print("FINAL BALANCED FIT BLOCKED: confirm its one-time backward-pass budget")
+if RUN_STAGE6B_CAUSAL_SITE_SCREEN and not CONFIRM_CAUSAL_SITE_SCREEN_BUDGET:
+    print("CAUSAL-SITE SCREEN BLOCKED: confirm its forward-pass budget")
+if RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT and not CONFIRM_RESTRICTED_SWAP_BUDGET:
+    print("RESTRICTED SWAP BLOCKED: confirm its forward-pass budget")
 '''
 )
 
@@ -1799,6 +1826,10 @@ print("  development", len(DIRECTIONS) * len(PROPERTIES) * len(MODALITIES) * 4 *
 print("  confirmation maximum", len(DIRECTIONS) * len(PROPERTIES) * len(MODALITIES) * 4 * N_CONFIRMATION_PER_COUNTRY, "conditions")
 print("  France-to-China follow-up development", len(PROPERTIES) * len(MODALITIES) * 4 * N_DEVELOPMENT_PER_COUNTRY, "conditions")
 print("  France-to-China follow-up confirmation", len(PROPERTIES) * len(MODALITIES) * 4 * N_CONFIRMATION_PER_COUNTRY, "conditions plus clean capability")
+print("  no-refit causal-site screen", len(PATH_BANDS) * 2 * len(PROPERTIES) * len(MODALITIES) * 4, "development conditions")
+print("    selection reads actual-target-state and direct-answer controls only")
+print("  restricted exact swap after a passing screen", (N_DEVELOPMENT_PER_COUNTRY - 1) * len(PROPERTIES) * len(MODALITIES) * 4, "development conditions")
+print("  diagnostic fitting/backward passes 0; fresh confirmation examples opened 0")
 print("  model dtype float32; A100 80 GB required; no fallback")
 print("  resume fit checkpoint every", CHECKPOINT_EVERY, "examples; causal resume unit one condition")
 print("  expected wall time after CPU prep: approximately 8-16 A100 hours if every stage is licensed")
@@ -2050,6 +2081,356 @@ else:
 print("dataset revision", PREPARED["dataset_revision"])
 print("population digest", PREPARED["population_digest"])
 print("media validation", PREPARED["media_validation"]["passed"])
+'''
+)
+
+markdown("## 12.5 No-refit causal-site diagnosis")
+code(
+    r'''
+from jlens.mmpilot.backend import file_checksum
+from jlens.mmpilot.country_activation_patch import (
+    ACTIVATION_PATCH_VERSION, PATCH_SITES, SCREEN_CONDITIONS,
+    capture_activation_sites, causal_site_screen_report, patch_position,
+    restricted_swap_report, single_position_inputs,
+    unrestricted_greedy_activation_patch_trial,
+)
+
+CAUSAL_SITE_PLAN_PATH = RUN_DIR / "country_causal_site_plan.json"
+CAUSAL_SITE_ROOT = RUN_DIR / "diagnostics" / "country_causal_site_v1"
+CAUSAL_SITE_SCREEN_PATH = CAUSAL_SITE_ROOT / "country_causal_site_screen_report.json"
+RESTRICTED_SWAP_PATH = CAUSAL_SITE_ROOT / "country_restricted_swap_development_report.json"
+
+_development_by_country = {
+    country: sorted(
+        [
+            row for row in MEDIA_ROWS
+            if row["study_split"] == "development" and row["country"] == country
+        ],
+        key=lambda row: row["unit_id"],
+    )
+    for country in ("France", "China")
+}
+_italy_fit_rows = sorted(
+    [row for row in MEDIA_ROWS if row["study_split"] == "fit" and row["country"] == "Italy"],
+    key=lambda row: row["unit_id"],
+)
+if any(len(rows) != N_DEVELOPMENT_PER_COUNTRY for rows in _development_by_country.values()):
+    raise RuntimeError("the causal-site diagnostic requires all frozen development rows")
+if not _italy_fit_rows:
+    raise RuntimeError("the causal-site diagnostic requires its frozen unrelated Italy donor")
+
+_screen_source_rows = _development_by_country["France"][:1]
+_restricted_source_rows = _development_by_country["France"][1:]
+_target_donor_row = _development_by_country["China"][0]
+_unrelated_donor_row = _italy_fit_rows[0]
+_causal_plan_body = {
+    "version": "mmpilot.country_causal_site_plan.v1",
+    "purpose": "locate causal leverage before another fit or any fresh confirmation",
+    "source": "France", "target": "China", "unrelated_donor": "Italy",
+    "properties": list(PROPERTIES), "modalities": list(MODALITIES),
+    "bands": [list(band) for band in PATH_BANDS], "sites": list(PATCH_SITES),
+    "screen_conditions": list(SCREEN_CONDITIONS),
+    "screen_source_units": [row["unit_id"] for row in _screen_source_rows],
+    "restricted_swap_units": [row["unit_id"] for row in _restricted_source_rows],
+    "target_donor_unit": _target_donor_row["unit_id"],
+    "unrelated_donor_unit": _unrelated_donor_row["unit_id"],
+    "selection_reads_coordinate_swap_outcomes": False,
+    "fresh_confirmation_opened": False,
+    "fitting_performed": False, "backward_passes": 0,
+    "screen_generation_conditions": len(PATH_BANDS) * len(PATCH_SITES)
+        * len(PROPERTIES) * len(MODALITIES) * len(SCREEN_CONDITIONS),
+    "restricted_generation_conditions_if_licensed": len(_restricted_source_rows)
+        * len(PROPERTIES) * len(MODALITIES) * 4,
+}
+_causal_site_requested = any((
+    RUN_STAGE6A_CPU_CAUSAL_SITE_PLAN,
+    RUN_STAGE6B_CAUSAL_SITE_SCREEN,
+    RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT,
+))
+if _causal_site_requested:
+    if not BALANCED_LENS_PATH.is_file():
+        raise RuntimeError(
+            "the no-refit diagnostic requires the completed balanced-task lens"
+        )
+    _causal_plan_body["balanced_lens_checksum"] = file_checksum(
+        str(BALANCED_LENS_PATH)
+    )
+_causal_plan_body["plan_digest"] = payload_checksum(_causal_plan_body)
+
+if RUN_STAGE6A_CPU_CAUSAL_SITE_PLAN:
+    _write_report(CAUSAL_SITE_PLAN_PATH, _causal_plan_body)
+    print("CAUSAL-SITE PLAN FROZEN")
+    print("  plan", CAUSAL_SITE_PLAN_PATH)
+    print("  digest", _causal_plan_body["plan_digest"])
+    print("  screen", _causal_plan_body["screen_generation_conditions"], "generation conditions")
+    print("  restricted follow-up", _causal_plan_body["restricted_generation_conditions_if_licensed"], "conditions")
+    print("  fitting 0; backward passes 0; fresh confirmation opened False")
+
+CAUSAL_SITE_SCREEN = (
+    json.loads(CAUSAL_SITE_SCREEN_PATH.read_text(encoding="utf-8"))
+    if CAUSAL_SITE_SCREEN_PATH.is_file() else None
+)
+RESTRICTED_SWAP_DEVELOPMENT = (
+    json.loads(RESTRICTED_SWAP_PATH.read_text(encoding="utf-8"))
+    if RESTRICTED_SWAP_PATH.is_file() else None
+)
+
+if RUN_STAGE6B_CAUSAL_SITE_SCREEN or RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT:
+    if not MODEL_ENABLED:
+        raise RuntimeError("causal-site GPU stages require the loaded fp32 model")
+    if ACTIVE_LENS_LABEL != "balanced_task_pooled_j":
+        raise RuntimeError("causal-site diagnosis is pinned to the final balanced-task lens")
+    _balanced_checksum = _causal_plan_body["balanced_lens_checksum"]
+    _patch_fingerprint = RunFingerprint(
+        mode="real", model_repo_id=MODEL_REPO_ID, model_revision=MODEL_REVISION,
+        processor_revision=MODEL_REVISION, layers=tuple(LAYERS),
+        lens_checksum=_balanced_checksum,
+        manifest_checksum=PREPARED["population_digest"],
+        split_id=payload_checksum({
+            "screen": _causal_plan_body["screen_source_units"],
+            "restricted": _causal_plan_body["restricted_swap_units"],
+        }),
+        intervention_config={
+            "version": ACTIVATION_PATCH_VERSION,
+            "bands": [list(band) for band in PATH_BANDS],
+            "sites": list(PATCH_SITES),
+            "screen_conditions": list(SCREEN_CONDITIONS),
+            "restricted_conditions": ["exact", "zero", "random", "unrelated"],
+            "selection_reads_coordinate_swap_outcomes": False,
+            "fresh_confirmation_opened": False,
+        },
+        extra={
+            "parent_scientific_digest": SCIENTIFIC_DIGEST,
+            "plan_digest": _causal_plan_body["plan_digest"],
+            "fitting_performed": False,
+        },
+    )
+    PATCH_STORE = UnitStore(CAUSAL_SITE_ROOT, _patch_fingerprint)
+    print("causal-site run", CAUSAL_SITE_ROOT)
+    print("resume", PATCH_STORE.open())
+
+if RUN_STAGE6B_CAUSAL_SITE_SCREEN:
+    if not CONFIRM_CAUSAL_SITE_SCREEN_BUDGET:
+        raise RuntimeError("causal-site screen budget is not confirmed")
+    if CAUSAL_SITE_PLAN_PATH.is_file():
+        _stored_plan = json.loads(CAUSAL_SITE_PLAN_PATH.read_text(encoding="utf-8"))
+        if _stored_plan.get("plan_digest") != _causal_plan_body["plan_digest"]:
+            raise RuntimeError("the stored causal-site plan differs from this run")
+    else:
+        _write_report(CAUSAL_SITE_PLAN_PATH, _causal_plan_body)
+
+    _country_tokens = concept_tokens(("France", "China", "Italy"))
+    _capture_cache = {}
+
+    def _captured(row, property_name, modality):
+        cache_key = (row["unit_id"], property_name, modality)
+        if cache_key not in _capture_cache:
+            inputs = build_task_inputs(row, modality, property_name)
+            positions = {
+                site: patch_position(
+                    inputs, site,
+                    country_token_id=(
+                        _country_tokens[row["country"]].token_id
+                        if modality == "text" else None
+                    ),
+                )
+                for site in PATCH_SITES
+            }
+            _capture_cache[cache_key] = {
+                "inputs": inputs,
+                "positions": positions,
+                "activations": capture_activation_sites(
+                    BACKEND, inputs, layers=LAYERS, positions=positions,
+                ),
+            }
+        return _capture_cache[cache_key]
+
+    _screen_rows = []
+    _unembed = BACKEND.unembedding_weight()
+    for source_row in _screen_source_rows:
+        for property_name in PROPERTIES:
+            expected = fact("China", property_name)
+            for modality in MODALITIES:
+                source_capture = _captured(source_row, property_name, modality)
+                target_capture = _captured(_target_donor_row, property_name, modality)
+                unrelated_capture = _captured(_unrelated_donor_row, property_name, modality)
+                for band in PATH_BANDS:
+                    exact_bases = build_swap_bases_for_lens(
+                        ACTIVE_LENS, _unembed, layers=band,
+                        source=_country_tokens["France"], target=_country_tokens["China"],
+                    )
+                    direct_vectors = answer_vectors(ACTIVE_LENS, expected, band)
+                    for site in PATCH_SITES:
+                        source_position = source_capture["positions"][site]
+                        site_inputs = single_position_inputs(
+                            source_capture["inputs"], source_position
+                        )
+                        donor_conditions = {
+                            "target_state": target_capture["activations"][site],
+                            "self_state": source_capture["activations"][site],
+                            "unrelated_state": unrelated_capture["activations"][site],
+                        }
+                        for condition in SCREEN_CONDITIONS:
+                            key = safe_key(
+                                "country_causal_site_v1", property_name, modality,
+                                band[0], band[-1], site, source_row["unit_id"], condition,
+                            )
+                            stored = PATCH_STORE.load("intervention", key)
+                            if stored is None:
+                                if condition == "direct_answer":
+                                    result = unrestricted_greedy_direct_answer_trial(
+                                        BACKEND, site_inputs, bases=exact_bases,
+                                        answer_vectors=direct_vectors, answer=expected,
+                                        max_new_tokens=MAX_NEW_TOKENS,
+                                        position_rule="evidence_span_only",
+                                        realization_policy=TEXT_MODEL_DTYPE_REALIZATION,
+                                        alpha=1.0,
+                                    )
+                                    integrity = diagnostic_integrity(result)
+                                else:
+                                    donor = {
+                                        layer: donor_conditions[condition][layer]
+                                        for layer in band
+                                    }
+                                    result = unrestricted_greedy_activation_patch_trial(
+                                        BACKEND, source_capture["inputs"],
+                                        donor_by_layer=donor,
+                                        source_position=source_position,
+                                        answer=expected, max_new_tokens=MAX_NEW_TOKENS,
+                                    )
+                                    patch_diag = result["activation_patch_diagnostics"]
+                                    integrity = bool(
+                                        patch_diag["all_hooks_fired"]
+                                        and patch_diag["all_finite"]
+                                    )
+                                stored = {
+                                    **result, "unit_id": source_row["unit_id"],
+                                    "source": "France", "target": "China",
+                                    "property": property_name, "modality": modality,
+                                    "condition": condition, "site": site,
+                                    "layers_patched": list(band), "expected": expected,
+                                    "success": answer_matches(result["generated_text"], expected),
+                                    "integrity_pass": integrity,
+                                }
+                                PATCH_STORE.save("intervention", key, stored)
+                                work = "computed"
+                            else:
+                                work = "reused"
+                            _screen_rows.append(stored)
+                            if len(_screen_rows) == 1 or len(_screen_rows) % 48 == 0:
+                                print("causal-site screen", len(_screen_rows), work)
+    CAUSAL_SITE_SCREEN = causal_site_screen_report(
+        _screen_rows, bands=PATH_BANDS, expected_n=1,
+        properties=PROPERTIES, modalities=MODALITIES,
+    )
+    _write_report(CAUSAL_SITE_SCREEN_PATH, CAUSAL_SITE_SCREEN)
+    print("CAUSAL-SITE SCREEN", CAUSAL_SITE_SCREEN["verdict"])
+    print("selected", CAUSAL_SITE_SCREEN["selected"])
+    print("selection read coordinate-swap outcomes", CAUSAL_SITE_SCREEN["selection_used_coordinate_swap_outcomes"])
+    print("report", CAUSAL_SITE_SCREEN_PATH)
+
+if RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT:
+    if not CONFIRM_RESTRICTED_SWAP_BUDGET:
+        raise RuntimeError("restricted-swap development budget is not confirmed")
+    if CAUSAL_SITE_SCREEN is None:
+        raise RuntimeError("run or load the causal-site screen first")
+    if CAUSAL_SITE_SCREEN["verdict"] != "COUNTRY_CAUSAL_SITE_SCREEN_GO":
+        print("RESTRICTED SWAP NOT LICENSED:", CAUSAL_SITE_SCREEN["verdict"])
+    else:
+        selection = CAUSAL_SITE_SCREEN["selected"]
+        band = tuple(map(int, selection["band"]))
+        site = selection["site"]
+        _country_tokens = concept_tokens((*EVAL_COUNTRIES, *CONTROL_COUNTRIES))
+        _unembed = BACKEND.unembedding_weight()
+        exact_bases = build_swap_bases_for_lens(
+            ACTIVE_LENS, _unembed, layers=band,
+            source=_country_tokens["France"], target=_country_tokens["China"],
+        )
+        random_bases = {
+            layer: random_two_direction_basis(
+                basis, seed=RANDOM_SEED + 91000 + layer
+            )
+            for layer, basis in exact_bases.items()
+        }
+        unrelated_bases = build_swap_bases_for_lens(
+            ACTIVE_LENS, _unembed, layers=band,
+            source=_country_tokens[CONTROL_COUNTRIES[0]],
+            target=_country_tokens[CONTROL_COUNTRIES[1]],
+        )
+        _restricted_rows = []
+        for source_row in _restricted_source_rows:
+            for property_name in PROPERTIES:
+                expected = fact("China", property_name)
+                for modality in MODALITIES:
+                    inputs = build_task_inputs(source_row, modality, property_name)
+                    position = patch_position(
+                        inputs, site,
+                        country_token_id=(
+                            _country_tokens["France"].token_id
+                            if modality == "text" else None
+                        ),
+                    )
+                    site_inputs = single_position_inputs(inputs, position)
+                    for condition, alpha, bases in (
+                        ("exact", 1.0, exact_bases),
+                        ("zero", 0.0, exact_bases),
+                        ("random", 1.0, random_bases),
+                        ("unrelated", 1.0, unrelated_bases),
+                    ):
+                        key = safe_key(
+                            "country_restricted_swap_v1",
+                            CAUSAL_SITE_SCREEN["report_checksum"],
+                            property_name, modality, source_row["unit_id"], condition,
+                        )
+                        stored = PATCH_STORE.load("intervention", key)
+                        if stored is None:
+                            result = unrestricted_greedy_swap_trial(
+                                BACKEND, site_inputs, bases=bases, alpha=alpha,
+                                answer=expected, max_new_tokens=MAX_NEW_TOKENS,
+                                position_rule="evidence_span_only",
+                                realization_policy=TEXT_MODEL_DTYPE_REALIZATION,
+                            )
+                            stored = {
+                                **result, "unit_id": source_row["unit_id"],
+                                "source": "France", "target": "China",
+                                "property": property_name, "modality": modality,
+                                "condition": condition, "site": site,
+                                "expected": expected,
+                                "success": answer_matches(result["generated_text"], expected),
+                                "integrity_pass": diagnostic_integrity(
+                                    result, exact=(condition == "exact")
+                                ),
+                            }
+                            PATCH_STORE.save("intervention", key, stored)
+                            work = "computed"
+                        else:
+                            work = "reused"
+                        _restricted_rows.append(stored)
+                        if len(_restricted_rows) == 1 or len(_restricted_rows) % 24 == 0:
+                            print("restricted swap", len(_restricted_rows), work)
+        RESTRICTED_SWAP_DEVELOPMENT = restricted_swap_report(
+            _restricted_rows, expected_n=len(_restricted_source_rows),
+            properties=PROPERTIES, modalities=MODALITIES,
+            band=band, site=site,
+        )
+        _write_report(RESTRICTED_SWAP_PATH, RESTRICTED_SWAP_DEVELOPMENT)
+        print("RESTRICTED SWAP", RESTRICTED_SWAP_DEVELOPMENT["verdict"])
+        for cell in RESTRICTED_SWAP_DEVELOPMENT["cells"]:
+            exact = cell["conditions"]["exact"]
+            print(
+                cell["property"], cell["modality"],
+                f"exact {exact['successes']}/{exact['n']}",
+                "controls", {
+                    name: cell["conditions"][name]["successes"]
+                    for name in ("zero", "random", "unrelated")
+                },
+            )
+        print("report", RESTRICTED_SWAP_PATH)
+
+if RUN_STAGE6A_CPU_CAUSAL_SITE_PLAN and not (
+    RUN_STAGE6B_CAUSAL_SITE_SCREEN or RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT
+):
+    print("CPU PLAN COMPLETE. Stop this runtime before the fp32 A100 stages.")
 '''
 )
 
