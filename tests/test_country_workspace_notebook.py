@@ -59,6 +59,7 @@ def test_default_configuration_spends_nothing() -> None:
     assert "RUN_STAGE6B_CAUSAL_SITE_SCREEN = False" in source
     assert "RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT = False" in source
     assert "RUN_STAGE6D_SEALED_EVIDENCE_DEVELOPMENT = False" in source
+    assert "RUN_STAGE6E_MATCHED_SCAFFOLD_DEVELOPMENT = False" in source
     assert "CONFIRM_MODEL_LOAD = False" in source
     assert "CONFIRM_FP32_A100 = False" in source
     assert 'SCIENTIFIC_IMPLEMENTATION_ID = "country-prompt-lens-band-debug-v4.20260826"' in source
@@ -215,3 +216,19 @@ def test_sealed_evidence_stage_encodes_then_blocks_rereading_without_refit() -> 
     assert "COUNTRY_SEALED_EVIDENCE" not in source.split(
         "if RUN_STAGE6D_SEALED_EVIDENCE_DEVELOPMENT:", 1
     )[0]
+
+
+def test_matched_scaffold_stage_holds_full_state_constant_before_exchange() -> None:
+    source = _source()
+    assert "RUN_STAGE6E_MATCHED_SCAFFOLD_DEVELOPMENT = False" in source
+    assert "CONFIRM_MATCHED_SCAFFOLD_BUDGET = False" in source
+    assert "unrestricted_greedy_sealed_scaffolded_swap_trial" in source
+    assert '"hook_order": "source_state_scaffold_then_coordinate_exchange"' in source
+    assert '"identical_source_scaffold_in_every_coordinate_condition": True' in source
+    assert '"layer_search_performed": False' in source
+    assert '"alpha_search_performed": False' in source
+    assert 'scaffold_by_layer=source_state' in source
+    assert 'MATCHED_STORE.load("intervention", key)' in source
+    assert 'MATCHED_STORE.save("intervention", key, stored)' in source
+    assert "no fitting fallback is permitted" in source
+    assert "Stage 6E must run alone; every other stage toggle must be False" in source

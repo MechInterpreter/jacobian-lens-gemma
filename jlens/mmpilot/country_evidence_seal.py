@@ -22,6 +22,7 @@ from jlens.mmpilot.store import payload_checksum
 
 EVIDENCE_SEAL_VERSION = "mmpilot.country_evidence_seal.v1"
 SEALED_DEVELOPMENT_VERSION = "mmpilot.country_sealed_evidence_development.v1"
+MATCHED_SCAFFOLD_VERSION = "mmpilot.country_matched_scaffold_development.v1"
 SEALED_STATE_CONDITIONS = ("clean_sealed", "target_state", "unrelated_state")
 SEALED_COORDINATE_CONDITIONS = ("exact", "zero", "random", "unrelated")
 
@@ -343,6 +344,78 @@ def unrestricted_greedy_sealed_swap_trial(
     return _with_seal_diagnostics(result, stats)
 
 
+@torch.no_grad()
+def unrestricted_greedy_sealed_scaffolded_swap_trial(
+    backend,
+    inputs,
+    *,
+    scaffold_by_layer: Mapping[int, torch.Tensor],
+    source_position: int,
+    bases: Mapping,
+    alpha: float,
+    evidence_token_positions: Sequence[int],
+    bottleneck_layer: int,
+    answer: str,
+    max_new_tokens: int,
+    position_rule: str,
+    realization_policy,
+) -> dict:
+    """Restore one matched source state, then vary only swap coordinates.
+
+    Forward hooks run in registration order.  The source-state scaffold is
+    registered first; the coordinate hook is registered inside it and thus
+    receives the restored source activation.  Every coordinate condition uses
+    the identical scaffold and evidence seal.
+    """
+
+    from jlens.mmpilot.country_activation_patch import activation_patch_band
+    from jlens.mmpilot.workspace_replication import unrestricted_greedy_swap_trial
+
+    with seal_evidence_attention(
+        backend.blocks,
+        evidence_token_positions=evidence_token_positions,
+        prompt_len=int(inputs.prompt_len),
+        bottleneck_layer=int(bottleneck_layer),
+    ) as seal_stats:
+        with activation_patch_band(
+            backend.blocks,
+            scaffold_by_layer,
+            source_position=int(source_position),
+            prompt_len=int(inputs.prompt_len),
+        ) as scaffold_stats:
+            result = unrestricted_greedy_swap_trial(
+                backend,
+                inputs,
+                bases=bases,
+                alpha=float(alpha),
+                answer=str(answer),
+                max_new_tokens=int(max_new_tokens),
+                position_rule=str(position_rule),
+                realization_policy=realization_policy,
+            )
+    expected = int(result["n_forward_passes"])
+    scaffold_by_layer_record = {
+        str(layer): dict(scaffold_stats[layer]) for layer in sorted(scaffold_stats)
+    }
+    scaffold_diagnostics = {
+        "hook_order": "source_state_scaffold_then_coordinate_exchange",
+        "expected_forward_passes": expected,
+        "by_layer": scaffold_by_layer_record,
+        "all_hooks_fired": bool(scaffold_by_layer_record)
+        and all(
+            int(row["n_forward_passes"]) == expected
+            for row in scaffold_by_layer_record.values()
+        ),
+        "all_finite": bool(scaffold_by_layer_record)
+        and all(bool(row["all_finite"]) for row in scaffold_by_layer_record.values()),
+    }
+    return {
+        **_with_seal_diagnostics(result, seal_stats),
+        "matched_scaffold_version": MATCHED_SCAFFOLD_VERSION,
+        "matched_scaffold_diagnostics": scaffold_diagnostics,
+    }
+
+
 def sealed_integrity(result: Mapping, *, require_intervention: bool = False) -> bool:
     seal = result.get("evidence_seal_diagnostics") or {}
     passed = bool(
@@ -361,7 +434,17 @@ def sealed_integrity(result: Mapping, *, require_intervention: bool = False) -> 
             and intervention.get("all_finite")
         )
     swap = result.get("intervention_diagnostics") or {}
-    return bool(passed and swap.get("all_hooks_fired") and swap.get("all_finite"))
+    scaffold = result.get("matched_scaffold_diagnostics")
+    scaffold_passed = bool(
+        scaffold is None
+        or (scaffold.get("all_hooks_fired") and scaffold.get("all_finite"))
+    )
+    return bool(
+        passed
+        and scaffold_passed
+        and swap.get("all_hooks_fired")
+        and swap.get("all_finite")
+    )
 
 
 def _summary(rows: Sequence[Mapping], condition: str) -> dict:
@@ -479,17 +562,130 @@ def sealed_development_report(
     return {**body, "report_checksum": payload_checksum(body)}
 
 
+def matched_scaffold_report(
+    state_rows: Sequence[Mapping],
+    coordinate_rows: Sequence[Mapping],
+    *,
+    expected_n: int,
+    properties: Sequence[str],
+    modalities: Sequence[str],
+    band: Sequence[int],
+) -> dict:
+    """Score the fair bottleneck test with one identical source scaffold."""
+
+    state_records = [dict(row) for row in state_rows]
+    coordinate_records = [dict(row) for row in coordinate_rows]
+    state_cells = []
+    coordinate_cells = []
+    for property_name in map(str, properties):
+        for modality in map(str, modalities):
+            state_subset = [
+                row
+                for row in state_records
+                if row.get("property") == property_name
+                and row.get("modality") == modality
+            ]
+            state_conditions = {
+                name: _summary(state_subset, name)
+                for name in ("self_scaffold", "target_state", "unrelated_state")
+            }
+            state_pass = bool(
+                all(row["n"] == int(expected_n) for row in state_conditions.values())
+                and state_conditions["self_scaffold"]["rate"] == 1.0
+                and state_conditions["target_state"]["rate"] >= 0.75
+                and state_conditions["unrelated_state"]["rate"] == 0.0
+                and all(row["integrity_pass"] for row in state_conditions.values())
+            )
+            state_cells.append(
+                {
+                    "property": property_name,
+                    "modality": modality,
+                    "conditions": state_conditions,
+                    "passed": state_pass,
+                }
+            )
+
+            coordinate_subset = [
+                row
+                for row in coordinate_records
+                if row.get("property") == property_name
+                and row.get("modality") == modality
+            ]
+            conditions = {
+                name: _summary(coordinate_subset, name)
+                for name in SEALED_COORDINATE_CONDITIONS
+            }
+            exact = conditions["exact"]
+            margins = {
+                name: exact["rate"] - conditions[name]["rate"]
+                for name in ("zero", "random", "unrelated")
+            }
+            coordinate_pass = bool(
+                all(row["n"] == int(expected_n) for row in conditions.values())
+                and exact["rate"] >= 0.75
+                and min(margins.values()) >= 0.25
+                and all(row["integrity_pass"] for row in conditions.values())
+            )
+            coordinate_cells.append(
+                {
+                    "property": property_name,
+                    "modality": modality,
+                    "conditions": conditions,
+                    "margins": margins,
+                    "passed": coordinate_pass,
+                }
+            )
+
+    state_passed = bool(state_cells) and all(row["passed"] for row in state_cells)
+    coordinate_passed = bool(coordinate_cells) and all(
+        row["passed"] for row in coordinate_cells
+    )
+    if state_passed and coordinate_passed:
+        verdict = "COUNTRY_MATCHED_SCAFFOLD_BOTH_GO"
+    elif state_passed:
+        verdict = "COUNTRY_MATCHED_SCAFFOLD_STATE_ONLY_GO"
+    elif coordinate_passed:
+        verdict = "COUNTRY_MATCHED_SCAFFOLD_JLENS_ONLY_GO"
+    else:
+        verdict = "COUNTRY_MATCHED_SCAFFOLD_NO_GO"
+    body = {
+        "version": MATCHED_SCAFFOLD_VERSION,
+        "verdict": verdict,
+        "stage": "development",
+        "method_role": "matched_state_scaffold_bottleneck_diagnostic",
+        "fitting_performed": False,
+        "backward_passes": 0,
+        "fresh_confirmation_opened": False,
+        "only_coordinate_condition_varies_after_source_scaffold": True,
+        "band": list(map(int, band)),
+        "state_arm": {
+            "passed": state_passed,
+            "cells": state_cells,
+            "rows": state_records,
+        },
+        "j_lens_coordinate_arm": {
+            "passed": coordinate_passed,
+            "cells": coordinate_cells,
+            "rows": coordinate_records,
+        },
+    }
+    return {**body, "report_checksum": payload_checksum(body)}
+
+
 __all__ = [
     "EVIDENCE_SEAL_VERSION",
+    "MATCHED_SCAFFOLD_VERSION",
     "SEALED_COORDINATE_CONDITIONS",
     "SEALED_DEVELOPMENT_VERSION",
     "SEALED_STATE_CONDITIONS",
     "CountryEvidenceSealRefused",
     "evidence_positions",
+    "matched_scaffold_report",
     "seal_evidence_attention",
     "sealed_development_report",
     "sealed_integrity",
     "unrestricted_greedy_sealed_activation_patch_trial",
     "unrestricted_greedy_sealed_completion",
+    "unrestricted_greedy_sealed_scaffolded_swap_trial",
     "unrestricted_greedy_sealed_swap_trial",
 ]

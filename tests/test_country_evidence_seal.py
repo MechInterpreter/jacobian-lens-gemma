@@ -7,9 +7,16 @@ import pytest
 import torch
 
 from jlens.mmpilot.backend import BuiltInputs
+from jlens.mmpilot.coordinate_swap import (
+    ConceptToken,
+    build_swap_basis_from_vectors,
+    coordinate_swap_band,
+)
+from jlens.mmpilot.country_activation_patch import activation_patch_band
 from jlens.mmpilot.country_evidence_seal import (
     CountryEvidenceSealRefused,
     evidence_positions,
+    matched_scaffold_report,
     seal_evidence_attention,
     sealed_development_report,
 )
@@ -102,6 +109,38 @@ def test_seal_materializes_sdpa_causal_mask_when_transformers_omits_it() -> None
     assert all(row["n_base_masks_materialized"] == 1 for row in stats.values())
 
 
+def test_matched_scaffold_hook_runs_before_coordinate_exchange() -> None:
+    block = torch.nn.Identity()
+    blocks = torch.nn.ModuleList([block])
+    source = ConceptToken("France", 1, " France", " {}")
+    target = ConceptToken("China", 2, " China", " {}")
+    basis = build_swap_basis_from_vectors(
+        torch.tensor([1.0, 0.0]),
+        torch.tensor([0.0, 1.0]),
+        layer=0,
+        source=source,
+        target=target,
+    )
+    hidden = torch.tensor([[[0.0, 0.0], [9.0, 9.0]]])
+    with activation_patch_band(
+        blocks,
+        {0: torch.tensor([1.0, 0.0])},
+        source_position=1,
+        prompt_len=2,
+    ):
+        with coordinate_swap_band(
+            blocks,
+            {0: basis},
+            alpha=1.0,
+            prompt_len=2,
+            position_rule="evidence_span_only",
+            evidence_span=[1, 2],
+            require_frozen=False,
+        ):
+            output = block(hidden)
+    assert output[0, 1].tolist() == pytest.approx([0.0, 1.0], abs=1e-6)
+
+
 def _rows(conditions, *, exact_success=True):
     rows = []
     for property_name in ("capital", "continent"):
@@ -152,3 +191,22 @@ def test_sealed_report_can_return_state_only() -> None:
         band=tuple(range(24, 32)),
     )
     assert report["verdict"] == "COUNTRY_SEALED_EVIDENCE_STATE_ONLY_GO"
+
+
+def test_matched_scaffold_report_requires_source_capability_and_exact_effect() -> None:
+    state = _rows(("self_scaffold", "target_state", "unrelated_state"))
+    for row in state:
+        row["success"] = row["condition"] in ("self_scaffold", "target_state")
+    coordinate = _rows(("exact", "zero", "random", "unrelated"))
+    report = matched_scaffold_report(
+        state,
+        coordinate,
+        expected_n=3,
+        properties=("capital", "continent"),
+        modalities=("text", "image", "spoken_audio"),
+        band=tuple(range(24, 32)),
+    )
+    assert report["verdict"] == "COUNTRY_MATCHED_SCAFFOLD_BOTH_GO"
+    assert report["only_coordinate_condition_varies_after_source_scaffold"] is True
+    assert report["fitting_performed"] is False
+    assert report["fresh_confirmation_opened"] is False

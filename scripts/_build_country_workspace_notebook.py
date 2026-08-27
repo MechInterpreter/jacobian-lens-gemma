@@ -1696,6 +1696,7 @@ RUN_STAGE6A_CPU_CAUSAL_SITE_PLAN = False
 RUN_STAGE6B_CAUSAL_SITE_SCREEN = False
 RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT = False
 RUN_STAGE6D_SEALED_EVIDENCE_DEVELOPMENT = False
+RUN_STAGE6E_MATCHED_SCAFFOLD_DEVELOPMENT = False
 RUN_STAGE5_WRITE_REPORT = False
 
 CONFIRM_MODEL_LOAD = False
@@ -1712,6 +1713,7 @@ CONFIRM_FRANCE_CHINA_CONFIRMATION_BUDGET = False
 CONFIRM_CAUSAL_SITE_SCREEN_BUDGET = False
 CONFIRM_RESTRICTED_SWAP_BUDGET = False
 CONFIRM_SEALED_EVIDENCE_BUDGET = False
+CONFIRM_MATCHED_SCAFFOLD_BUDGET = False
 
 MODEL_REPO_ID = "google/gemma-4-E4B-it"
 MODEL_REVISION = "fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd"
@@ -1763,6 +1765,7 @@ ANY_STAGE = any((
     RUN_STAGE6B_CAUSAL_SITE_SCREEN,
     RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT,
     RUN_STAGE6D_SEALED_EVIDENCE_DEVELOPMENT,
+    RUN_STAGE6E_MATCHED_SCAFFOLD_DEVELOPMENT,
     RUN_STAGE5_WRITE_REPORT,
 ))
 if not ANY_STAGE:
@@ -1783,6 +1786,7 @@ MODEL_STAGE = any((
     RUN_STAGE6B_CAUSAL_SITE_SCREEN,
     RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT,
     RUN_STAGE6D_SEALED_EVIDENCE_DEVELOPMENT,
+    RUN_STAGE6E_MATCHED_SCAFFOLD_DEVELOPMENT,
 ))
 if MODEL_STAGE and not CONFIRM_MODEL_LOAD:
     print("MODEL BLOCKED: set CONFIRM_MODEL_LOAD=True after reading the budget")
@@ -1811,6 +1815,31 @@ if RUN_STAGE6D_SEALED_EVIDENCE_DEVELOPMENT and any((
     raise RuntimeError(
         "Stage 6D is a no-refit diagnostic; every lens-fit toggle must be False"
     )
+if RUN_STAGE6E_MATCHED_SCAFFOLD_DEVELOPMENT and not CONFIRM_MATCHED_SCAFFOLD_BUDGET:
+    print("MATCHED-SCAFFOLD DEVELOPMENT BLOCKED: confirm its forward-pass budget")
+if RUN_STAGE6E_MATCHED_SCAFFOLD_DEVELOPMENT and any((
+    RUN_STAGE1_FIT_POOLED_LENS,
+    RUN_STAGE2_REFIT_TASK_MATCHED_LENS_IF_NEEDED,
+    RUN_STAGE2C_FIT_BALANCED_TASK_LENS,
+)):
+    raise RuntimeError(
+        "Stage 6E is a no-refit diagnostic; every lens-fit toggle must be False"
+    )
+if RUN_STAGE6E_MATCHED_SCAFFOLD_DEVELOPMENT and any((
+    RUN_STAGE0_PREPARE_DATA,
+    RUN_STAGE2_CAPABILITY_AND_LOCALIZATION,
+    RUN_STAGE2_DEBUG_COUNTRY_INSTRUMENT,
+    RUN_STAGE3_DEVELOPMENT_SWAP,
+    RUN_STAGE4_FRESH_CONFIRMATION,
+    RUN_STAGE3B_FRANCE_CHINA_DOWNSTREAM_DEVELOPMENT,
+    RUN_STAGE4B_FRANCE_CHINA_FRESH_CONFIRMATION,
+    RUN_STAGE6A_CPU_CAUSAL_SITE_PLAN,
+    RUN_STAGE6B_CAUSAL_SITE_SCREEN,
+    RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT,
+    RUN_STAGE6D_SEALED_EVIDENCE_DEVELOPMENT,
+    RUN_STAGE5_WRITE_REPORT,
+)):
+    raise RuntimeError("Stage 6E must run alone; every other stage toggle must be False")
 '''
 )
 
@@ -1847,6 +1876,8 @@ print("  localized exact J-lens exchange", (N_DEVELOPMENT_PER_COUNTRY - 1) * len
 print("    combined localized development", (N_DEVELOPMENT_PER_COUNTRY - 1) * len(PROPERTIES) * len(MODALITIES) * 7, "conditions")
 print("  sealed-evidence bottleneck", (N_DEVELOPMENT_PER_COUNTRY - 1) * len(PROPERTIES) * len(MODALITIES) * 7, "development conditions")
 print("    evidence encodes below L24; the final prompt token becomes the sole prefix bottleneck")
+print("  matched-scaffold bottleneck", (N_DEVELOPMENT_PER_COUNTRY - 1) * len(PROPERTIES) * len(MODALITIES) * 7, "development conditions")
+print("    every coordinate arm restores the identical unsealed France state before changing coordinates")
 print("  diagnostic fitting/backward passes 0; fresh confirmation examples opened 0")
 print("  model dtype float32; A100 80 GB required; no fallback")
 print("  resume fit checkpoint every", CHECKPOINT_EVERY, "examples; causal resume unit one condition")
@@ -2172,6 +2203,7 @@ _causal_site_requested = any((
     RUN_STAGE6B_CAUSAL_SITE_SCREEN,
     RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT,
     RUN_STAGE6D_SEALED_EVIDENCE_DEVELOPMENT,
+    RUN_STAGE6E_MATCHED_SCAFFOLD_DEVELOPMENT,
 ))
 if _causal_site_requested:
     if not BALANCED_LENS_PATH.is_file():
@@ -2206,6 +2238,7 @@ if any((
     RUN_STAGE6B_CAUSAL_SITE_SCREEN,
     RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT,
     RUN_STAGE6D_SEALED_EVIDENCE_DEVELOPMENT,
+    RUN_STAGE6E_MATCHED_SCAFFOLD_DEVELOPMENT,
 )):
     if not MODEL_ENABLED:
         raise RuntimeError("causal-site GPU stages require the loaded fp32 model")
@@ -2842,10 +2875,255 @@ if RUN_STAGE6D_SEALED_EVIDENCE_DEVELOPMENT:
         )
     print("report", _sealed_path)
 
+if RUN_STAGE6E_MATCHED_SCAFFOLD_DEVELOPMENT:
+    if not CONFIRM_MATCHED_SCAFFOLD_BUDGET:
+        raise RuntimeError("matched-scaffold development budget is not confirmed")
+    if ACTIVE_LENS_LABEL != "balanced_task_pooled_j":
+        raise RuntimeError(
+            "matched-scaffold development requires the completed balanced-task "
+            "pooled J-lens; no fitting fallback is permitted"
+        )
+    _failed_seal_path = (
+        RUN_DIR / "diagnostics" / "country_sealed_evidence_v1"
+        / "country_sealed_evidence_development_report.json"
+    )
+    if CAUSAL_SITE_SCREEN is None or not RESTRICTED_SWAP_PATH.is_file():
+        raise RuntimeError("matched-scaffold development requires Stages 6B and 6C")
+    if not _failed_seal_path.is_file():
+        raise RuntimeError("matched-scaffold development requires the completed Stage 6D diagnostic")
+    _failed_seal_report = json.loads(_failed_seal_path.read_text(encoding="utf-8"))
+    if _failed_seal_report.get("verdict") != "COUNTRY_SEALED_EVIDENCE_NO_GO":
+        raise RuntimeError("Stage 6E is the frozen repair of the recorded Stage 6D NO_GO")
+    _state_choice = state_validated_selection(CAUSAL_SITE_SCREEN)
+    _selection = _state_choice.get("selected")
+    if _selection != {
+        "path_id": "L24-31:final_prompt_token",
+        "band": list(range(24, 32)),
+        "site": "final_prompt_token",
+    }:
+        raise RuntimeError("matched-scaffold development is frozen to L24-L31 final prompt token")
+
+    from jlens.mmpilot.country_evidence_seal import (
+        MATCHED_SCAFFOLD_VERSION, evidence_positions, matched_scaffold_report,
+        sealed_integrity, unrestricted_greedy_sealed_activation_patch_trial,
+        unrestricted_greedy_sealed_scaffolded_swap_trial,
+    )
+
+    _matched_band = tuple(range(24, 32))
+    _matched_bottleneck = 24
+    _matched_root = RUN_DIR / "diagnostics" / "country_matched_scaffold_v1"
+    _matched_path = _matched_root / "country_matched_scaffold_development_report.json"
+    _country_tokens = concept_tokens((*EVAL_COUNTRIES, *CONTROL_COUNTRIES))
+    _unembed = BACKEND.unembedding_weight()
+    _exact_bases = build_swap_bases_for_lens(
+        ACTIVE_LENS, _unembed, layers=_matched_band,
+        source=_country_tokens["France"], target=_country_tokens["China"],
+    )
+    _random_bases = {
+        layer: random_two_direction_basis(
+            basis, seed=RANDOM_SEED + 93000 + layer
+        )
+        for layer, basis in _exact_bases.items()
+    }
+    _unrelated_bases = build_swap_bases_for_lens(
+        ACTIVE_LENS, _unembed, layers=_matched_band,
+        source=_country_tokens[CONTROL_COUNTRIES[0]],
+        target=_country_tokens[CONTROL_COUNTRIES[1]],
+    )
+    _matched_source_rows = _development_by_country["France"][1:]
+    _matched_target_rows = _development_by_country["China"][1:]
+    _matched_unrelated_rows = _italy_fit_rows[:len(_matched_source_rows)]
+    if not (
+        len(_matched_source_rows)
+        == len(_matched_target_rows)
+        == len(_matched_unrelated_rows)
+        == N_DEVELOPMENT_PER_COUNTRY - 1
+    ):
+        raise RuntimeError("matched-scaffold donor pairing is incomplete")
+
+    _matched_fingerprint = RunFingerprint(
+        mode="real", model_repo_id=MODEL_REPO_ID,
+        model_revision=MODEL_REVISION, processor_revision=MODEL_REVISION,
+        layers=_matched_band, lens_checksum=_balanced_checksum,
+        manifest_checksum=PREPARED["population_digest"],
+        split_id=payload_checksum({
+            "source": [row["unit_id"] for row in _matched_source_rows],
+            "target": [row["unit_id"] for row in _matched_target_rows],
+            "unrelated": [row["unit_id"] for row in _matched_unrelated_rows],
+        }),
+        intervention_config={
+            "version": MATCHED_SCAFFOLD_VERSION,
+            "band": list(_matched_band),
+            "bottleneck_layer": _matched_bottleneck,
+            "site": "final_prompt_token",
+            "hook_order": "source_state_scaffold_then_coordinate_exchange",
+            "identical_source_scaffold_in_every_coordinate_condition": True,
+            "state_conditions": [
+                "self_scaffold", "target_state", "unrelated_state",
+            ],
+            "coordinate_conditions": ["exact", "zero", "random", "unrelated"],
+            "alpha": 1.0,
+            "layer_search_performed": False,
+            "alpha_search_performed": False,
+            "fresh_confirmation_opened": False,
+        },
+        extra={
+            "failed_seal_checksum": _failed_seal_report["report_checksum"],
+            "causal_site_screen_checksum": CAUSAL_SITE_SCREEN["report_checksum"],
+            "selection_checksum": _state_choice["record_checksum"],
+            "fitting_performed": False, "backward_passes": 0,
+        },
+    )
+    MATCHED_STORE = UnitStore(_matched_root, _matched_fingerprint)
+    print("matched-scaffold run", _matched_root)
+    print("resume", MATCHED_STORE.open())
+    print("fitting performed False; backward passes 0")
+    print("layer search False; alpha search False; fresh confirmation opened False")
+
+    def _matched_capture(row, property_name, modality):
+        inputs = build_task_inputs(row, modality, property_name)
+        position = int(inputs.prompt_len) - 1
+        evidence = evidence_positions(
+            inputs,
+            country_token_id=(
+                _country_tokens[row["country"]].token_id
+                if modality == "text" else None
+            ),
+        )
+        captured = capture_activation_sites(
+            BACKEND, inputs, layers=_matched_band,
+            positions={"final_prompt_token": position},
+        )
+        return inputs, position, evidence, captured["final_prompt_token"]
+
+    _matched_state_rows = []
+    _matched_coordinate_rows = []
+    for row_index, source_row in enumerate(_matched_source_rows):
+        target_row = _matched_target_rows[row_index]
+        unrelated_row = _matched_unrelated_rows[row_index]
+        for property_name in PROPERTIES:
+            source_expected = fact("France", property_name)
+            target_expected = fact("China", property_name)
+            for modality in MODALITIES:
+                inputs, position, evidence, source_state = _matched_capture(
+                    source_row, property_name, modality
+                )
+                _, _, _, target_state = _matched_capture(
+                    target_row, property_name, modality
+                )
+                _, _, _, unrelated_state = _matched_capture(
+                    unrelated_row, property_name, modality
+                )
+                for condition, donor_state, expected in (
+                    ("self_scaffold", source_state, source_expected),
+                    ("target_state", target_state, target_expected),
+                    ("unrelated_state", unrelated_state, target_expected),
+                ):
+                    key = safe_key(
+                        "country_matched_state_v1", _failed_seal_report["report_checksum"],
+                        property_name, modality, source_row["unit_id"], condition,
+                    )
+                    stored = MATCHED_STORE.load("intervention", key)
+                    if stored is None:
+                        result = unrestricted_greedy_sealed_activation_patch_trial(
+                            BACKEND, inputs, donor_by_layer=donor_state,
+                            source_position=position,
+                            evidence_token_positions=evidence,
+                            bottleneck_layer=_matched_bottleneck,
+                            answer=expected, max_new_tokens=MAX_NEW_TOKENS,
+                        )
+                        stored = {
+                            **result, "unit_id": source_row["unit_id"],
+                            "source": "France", "target": "China",
+                            "property": property_name, "modality": modality,
+                            "condition": condition, "expected": expected,
+                            "success": answer_matches(result["generated_text"], expected),
+                            "integrity_pass": sealed_integrity(
+                                result, require_intervention=True
+                            ),
+                        }
+                        MATCHED_STORE.save("intervention", key, stored)
+                        work = "computed"
+                    else:
+                        work = "reused"
+                    _matched_state_rows.append(stored)
+                    if len(_matched_state_rows) == 1 or len(_matched_state_rows) % 18 == 0:
+                        print("matched state", len(_matched_state_rows), work)
+
+                site_inputs = single_position_inputs(inputs, position)
+                for condition, alpha, bases in (
+                    ("exact", 1.0, _exact_bases),
+                    ("zero", 0.0, _exact_bases),
+                    ("random", 1.0, _random_bases),
+                    ("unrelated", 1.0, _unrelated_bases),
+                ):
+                    key = safe_key(
+                        "country_matched_swap_v1", _failed_seal_report["report_checksum"],
+                        property_name, modality, source_row["unit_id"], condition,
+                    )
+                    stored = MATCHED_STORE.load("intervention", key)
+                    if stored is None:
+                        result = unrestricted_greedy_sealed_scaffolded_swap_trial(
+                            BACKEND, site_inputs, scaffold_by_layer=source_state,
+                            source_position=position, bases=bases, alpha=alpha,
+                            evidence_token_positions=evidence,
+                            bottleneck_layer=_matched_bottleneck,
+                            answer=target_expected, max_new_tokens=MAX_NEW_TOKENS,
+                            position_rule="evidence_span_only",
+                            realization_policy=TEXT_MODEL_DTYPE_REALIZATION,
+                        )
+                        stored = {
+                            **result, "unit_id": source_row["unit_id"],
+                            "source": "France", "target": "China",
+                            "property": property_name, "modality": modality,
+                            "condition": condition, "expected": target_expected,
+                            "success": answer_matches(
+                                result["generated_text"], target_expected
+                            ),
+                            "integrity_pass": bool(
+                                sealed_integrity(result, require_intervention=True)
+                                and diagnostic_integrity(
+                                    result, exact=(condition == "exact")
+                                )
+                            ),
+                        }
+                        MATCHED_STORE.save("intervention", key, stored)
+                        work = "computed"
+                    else:
+                        work = "reused"
+                    _matched_coordinate_rows.append(stored)
+                    if (
+                        len(_matched_coordinate_rows) == 1
+                        or len(_matched_coordinate_rows) % 24 == 0
+                    ):
+                        print("matched J-lens", len(_matched_coordinate_rows), work)
+
+    MATCHED_DEVELOPMENT = matched_scaffold_report(
+        _matched_state_rows, _matched_coordinate_rows,
+        expected_n=len(_matched_source_rows),
+        properties=PROPERTIES, modalities=MODALITIES, band=_matched_band,
+    )
+    _write_report(_matched_path, MATCHED_DEVELOPMENT)
+    print("MATCHED-SCAFFOLD DEVELOPMENT", MATCHED_DEVELOPMENT["verdict"])
+    for cell in MATCHED_DEVELOPMENT["state_arm"]["cells"]:
+        print(
+            "state", cell["property"], cell["modality"],
+            {name: f"{row['successes']}/{row['n']}"
+             for name, row in cell["conditions"].items()},
+        )
+    for cell in MATCHED_DEVELOPMENT["j_lens_coordinate_arm"]["cells"]:
+        print(
+            "J-lens", cell["property"], cell["modality"],
+            {name: f"{row['successes']}/{row['n']}"
+             for name, row in cell["conditions"].items()},
+        )
+    print("report", _matched_path)
+
 if RUN_STAGE6A_CPU_CAUSAL_SITE_PLAN and not (
     RUN_STAGE6B_CAUSAL_SITE_SCREEN
     or RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT
     or RUN_STAGE6D_SEALED_EVIDENCE_DEVELOPMENT
+    or RUN_STAGE6E_MATCHED_SCAFFOLD_DEVELOPMENT
 ):
     print("CPU PLAN COMPLETE. Stop this runtime before the fp32 A100 stages.")
 '''

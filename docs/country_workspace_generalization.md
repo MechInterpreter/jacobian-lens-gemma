@@ -126,6 +126,25 @@ diagnostic, not a relabeling of the paper method. It uses only the already-open
 development examples, writes one atomic unit per condition, performs zero
 backward passes, and cannot open confirmation.
 
+Stage 6D itself returned `COUNTRY_SEALED_EVIDENCE_NO_GO`, but its arms were not
+comparable. The seal destroyed ordinary completion: the clean France baseline
+was 0/18 and generated fragments such as `called`, `not`, and repeated `the`.
+Meanwhile, the target-state arm repeatedly restored an unsealed China state at
+every layer and reached 16/18. The result therefore diagnoses a destructive
+bottleneck and an unmatched state scaffold; it is not evidence that the
+J-lens failed under a capability-preserving bottleneck.
+
+Stage 6E is the single frozen repair. Under the same seal and L24-L31 path, it
+restores the same unsealed France final-token state in every coordinate arm.
+Forward hooks are ordered and audited so that the source-state scaffold runs
+first and the coordinate exchange runs second. The exact, zero, random, and
+unrelated conditions therefore differ only in the declared two-coordinate
+operation. Separate self-, target-, and unrelated-state arms require the
+scaffold to preserve Paris/Europe and retain full-state causal leverage. There
+is no layer search, alpha search, refit, backward pass, or fresh confirmation
+access. This makes the outcome decisive for this specific matched-scaffold
+bottleneck rather than guaranteeing a positive result.
+
 ### Direction-scoped capability amendment
 
 The first capability run passed 34 of 36 cells. France, China, and Japan passed
@@ -168,6 +187,10 @@ After Stage 6C, Stage 6D can be run by itself on the same fp32 A100. It adds
 126 forward-only development conditions and reuses the checksum-pinned
 balanced pooled J-lens. All fit toggles must remain false. A runtime restart
 checksum-reuses every completed condition.
+
+After the recorded Stage 6D failure, run Stage 6E alone. It adds 126
+forward-only development conditions and atomically resumes each condition.
+Every fitting toggle and every earlier scientific stage must remain false.
 
 The canonical notebook is
 `notebooks/multimodal_country_workspace_generalization_colab.ipynb`.
