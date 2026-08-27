@@ -70,6 +70,20 @@ def test_development_selects_only_passing_novel_targets():
     assert report["fresh_confirmation_opened"] is False
 
 
+def test_answer_leverage_null_does_not_veto_identity_recomputation():
+    leverage, trials = _rows(n=6, successes=5)
+    for row in leverage:
+        row["success"] = False
+    report = development_report(leverage, trials, expected_n=6)
+    assert report["verdict"] == "LEG_COUNT_GENERALIZATION_DEVELOPMENT_GO"
+    assert report["calibration_passed"] is True
+    assert report["selected_novel_targets"] == ["ant"]
+    assert all(
+        row["answer_leverage_is_diagnostic_only"]
+        for row in report["target_results"]
+    )
+
+
 def test_confirmation_requires_calibration_and_holm_passing_novel_target():
     leverage, trials = _rows(n=12, successes=9)
     report = confirmation_report(

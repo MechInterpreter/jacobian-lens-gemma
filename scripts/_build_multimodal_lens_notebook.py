@@ -7481,8 +7481,9 @@ downstream answers are 4, 6, and 8, so success on a novel target cannot be
 explained by merely deleting the bird coordinate.
 
 Stage 7A freezes disjoint development and confirmation photographs on CPU.
-Stage 7B first checks clean bird capability and direct answer-coordinate
-leverage, then runs the exact identity exchanges on development.  Stage 7C
+Stage 7B first checks clean bird capability and reports direct answer-coordinate
+leverage as a non-gating diagnostic. It then runs cat as a calibration and
+only spends on ant and spider if cat passes. Stage 7C
 freezes every passing novel target without opening confirmation outputs.
 Stage 7D tests the frozen targets once on the untouched population with Holm
 familywise correction.  No stage fits a lens or searches alpha, layers, or
@@ -7680,7 +7681,7 @@ if REAL_MODE and LEG_GENERALIZATION_DEVELOPMENT_ENABLED:
     if _lens.source_layers != list(BROAD_POOLED_BAND):
         raise RuntimeError("Stage 7 requires the checksum-pinned L16-L40 lens")
     _development_config = {
-        "study": "multimodal_distinct_leg_count_generalization_development.v1",
+        "study": "multimodal_distinct_leg_count_generalization_development.v2",
         "design_digest": LEG_GENERALIZATION_DESIGN["design_digest"],
         "population_digest": _population["population_digest"],
         "lens_checksum": EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
@@ -7693,6 +7694,8 @@ if REAL_MODE and LEG_GENERALIZATION_DEVELOPMENT_ENABLED:
         "positions": "every_original_prompt_position",
         "answer_matching": "digit_or_english_number_word.v1",
         "answer_basis_surfaces": dict(LEG_NUMBER_WORDS),
+        "answer_leverage_role": "reported_diagnostic_not_an_admission_gate",
+        "spending_order": "cat_calibration_then_ant_and_spider_if_cat_passes",
         "fresh_confirmation_opened": False,
         "fitting_performed": False,
         "commit": COMMIT,
@@ -7854,26 +7857,8 @@ if REAL_MODE and LEG_GENERALIZATION_DEVELOPMENT_ENABLED:
                 _leverage_rows.append(_row)
                 if len(_leverage_rows) == 1 or len(_leverage_rows) % 18 == 0:
                     print("answer leverage", len(_leverage_rows), "of", 54, _work)
-    _leverage_targets = {
-        target for target in LEG_TARGET_ANSWERS
-        if all(
-            sum(
-                row["success"] for row in _leverage_rows
-                if row["target"] == target and row["modality"] == modality
-            ) >= 5
-            and all(
-                row["integrity_pass"] for row in _leverage_rows
-                if row["target"] == target and row["modality"] == modality
-            )
-            for modality in LEG_MODALITIES
-        )
-    }
-    print("targets with answer leverage", sorted(_leverage_targets))
-
     _trial_rows = []
-    for _target in LEG_TARGET_ANSWERS:
-        if _target not in _leverage_targets:
-            continue
+    def _run_identity_target(_target):
         _conditions = (
             ("exact", 1.0, _concept_bases[_target]),
             ("zero", 0.0, _concept_bases[_target]),
@@ -7890,6 +7875,18 @@ if REAL_MODE and LEG_GENERALIZATION_DEVELOPMENT_ENABLED:
                     _trial_rows.append(_row)
                     if len(_trial_rows) == 1 or len(_trial_rows) % 48 == 0:
                         print("leg development trials", len(_trial_rows), _work)
+
+    print("answer leverage is diagnostic only; identity outcomes decide admission")
+    _run_identity_target("cat")
+    _calibration_report = development_report(
+        _leverage_rows, _trial_rows, expected_n=6,
+    )
+    if _calibration_report["calibration_passed"]:
+        print("cat calibration passed; running both frozen novel targets")
+        _run_identity_target("ant")
+        _run_identity_target("spider")
+    else:
+        print("cat calibration failed; novel targets not opened")
 
     LEG_GENERALIZATION_DEVELOPMENT_REPORT = development_report(
         _leverage_rows, _trial_rows, expected_n=6,
