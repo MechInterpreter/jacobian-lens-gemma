@@ -348,6 +348,44 @@ def test_freshness_audit_reports_progress_through_a_callback(tmp_path) -> None:
     assert {call[0] for call in calls} == {1, 2}
 
 
+def test_freshness_audit_concurrent_reads_are_deterministic_and_complete(
+    tmp_path,
+) -> None:
+    """Parallel reads must not drop, duplicate, or reorder any candidate."""
+    candidate = tmp_path / "run-1"
+    candidate.mkdir()
+    (candidate / "fingerprint.json").write_text(
+        '{"manifest_checksum":"population-1","split_id":"other"}',
+        encoding="utf-8",
+    )
+    n_files = 60
+    for index in range(n_files):
+        (candidate / f"unit_{index:03d}.json").write_text(
+            '{"unit_id":"unrelated"}', encoding="utf-8"
+        )
+    (candidate / "unit_030.json").write_text(
+        '{"unit_id":"fresh-1","generated_text":"Asia"}', encoding="utf-8"
+    )
+    calls = []
+    report = audit_unopened_confirmation_outputs(
+        tmp_path,
+        ("fresh-1",),
+        manifest_checksum="population-1",
+        split_id="confirmation-1",
+        on_candidate_scanned=lambda index, total, path, size: calls.append(
+            (index, path.name)
+        ),
+    )
+    assert report["fresh"] is False
+    assert report["fingerprints_scanned"] == 1
+    assert report["candidate_json_files"] == n_files
+    assert len(calls) == n_files
+    assert [index for index, _ in calls] == list(range(1, n_files + 1))
+    assert [name for _, name in calls] == sorted(
+        f"unit_{index:03d}.json" for index in range(n_files)
+    )
+
+
 def test_fresh_confirmation_report_accepts_pooled_cross_modal_effect() -> None:
     state = []
     coordinate = []

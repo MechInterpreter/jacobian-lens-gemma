@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Any
@@ -793,10 +794,28 @@ def audit_unopened_confirmation_outputs(
     candidate_bytes_read = 0
     largest_candidate_file_bytes = 0
     total_candidates = len(candidate_paths)
-    for index, path in enumerate(candidate_paths, start=1):
+
+    # Reading thousands of small files one at a time over a networked mount
+    # (Drive FUSE) is dominated by per-file round-trip latency, not bytes --
+    # a single population's own run can easily produce several thousand
+    # candidates, since every diagnostic sub-stage of one busy pipeline run
+    # shares that population's digest. The reads are independent and
+    # I/O-bound (each releases the GIL), so a thread pool turns thousands of
+    # serial round-trips into a bounded number of concurrent ones without
+    # changing which bytes are read or what is checked in them.
+    def _read_bytes(path: Path) -> bytes | None:
         try:
-            raw_bytes = path.read_bytes()
+            return path.read_bytes()
         except OSError:
+            return None
+
+    with ThreadPoolExecutor(max_workers=32) as pool:
+        prefetched = list(pool.map(_read_bytes, candidate_paths))
+
+    for index, (path, raw_bytes) in enumerate(
+        zip(candidate_paths, prefetched), start=1
+    ):
+        if raw_bytes is None:
             continue
         candidate_bytes_read += len(raw_bytes)
         largest_candidate_file_bytes = max(largest_candidate_file_bytes, len(raw_bytes))
