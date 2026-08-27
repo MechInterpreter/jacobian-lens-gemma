@@ -3182,7 +3182,41 @@ _matched_confirmation_report_path = (
     _matched_confirmation_root / "country_matched_scaffold_fresh_confirmation_report.json"
 )
 
-if RUN_STAGE6F_CPU_FREEZE_MATCHED_CONFIRMATION:
+_stage6f_resumed = False
+if RUN_STAGE6F_CPU_FREEZE_MATCHED_CONFIRMATION and _matched_confirmation_design_path.is_file():
+    # Every other stage in this notebook resumes from a checksum-verified
+    # prior result instead of recomputing; this one rescanned from scratch on
+    # every rerun. A rerun of this exact population never needs to reopen a
+    # single JSON file: the frozen design already carries a fresh:true
+    # freshness audit, its own checksum, and the population digest it was
+    # computed under. Trust it again only if all three still agree with
+    # today's population -- anything else falls through to a full rescan.
+    _existing_design = json.loads(
+        _matched_confirmation_design_path.read_text(encoding="utf-8")
+    )
+    _existing_design_body = {
+        key: value for key, value in _existing_design.items()
+        if key != "design_checksum"
+    }
+    if (
+        _existing_design.get("design_checksum")
+        == payload_checksum(_existing_design_body)
+        and _existing_design.get("population_digest")
+        == PREPARED["population_digest"]
+        and _existing_design.get("freshness_audit", {}).get("fresh") is True
+    ):
+        _stage6f_resumed = True
+        print("MATCHED-SCAFFOLD CONFIRMATION DESIGN ALREADY FROZEN (resumed)")
+        print("  design", _matched_confirmation_design_path)
+        print("  checksum", _existing_design["design_checksum"])
+        print(
+            "  freshness", _existing_design["freshness_audit"]["fresh"],
+            "findings", _existing_design["freshness_audit"]["n_json_findings"],
+            "(not re-scanned; matches the frozen design's own audit)",
+        )
+        print("STOP THIS CPU RUNTIME. Run Stage 6G alone on an 80 GB A100.")
+
+if RUN_STAGE6F_CPU_FREEZE_MATCHED_CONFIRMATION and not _stage6f_resumed:
     from jlens.mmpilot.backend import file_checksum
     from jlens.mmpilot.country_evidence_seal import (
         MATCHED_CONFIRMATION_VERSION,
@@ -3237,11 +3271,19 @@ if RUN_STAGE6F_CPU_FREEZE_MATCHED_CONFIRMATION:
     if len(_confirmation_rows) != 2 * N_CONFIRMATION_PER_COUNTRY:
         raise RuntimeError("the frozen country confirmation population is incomplete")
     _confirmation_split_id = payload_checksum(_confirmation_ids)
+
+    def _print_scan_progress(index, total, path, file_bytes):
+        print(
+            f"  scanning {index}/{total}", path.name,
+            f"({file_bytes / 1e6:.1f} MB)",
+        )
+
     _freshness = audit_unopened_confirmation_outputs(
         RUNS_ROOT,
         _confirmation_ids,
         manifest_checksum=PREPARED["population_digest"],
         split_id=_confirmation_split_id,
+        on_candidate_scanned=_print_scan_progress,
     )
     if not _freshness["fresh"]:
         raise RuntimeError(

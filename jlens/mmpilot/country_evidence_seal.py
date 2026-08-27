@@ -13,7 +13,7 @@ does not fit a lens and it never opens the untouched confirmation population.
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Any
@@ -681,8 +681,18 @@ def audit_unopened_confirmation_outputs(
     *,
     manifest_checksum: str | None = None,
     split_id: str | None = None,
+    on_candidate_scanned: Callable[[int, int, Path, int], None] | None = None,
 ) -> dict:
-    """Find stored generated outputs tied to any proposed confirmation unit."""
+    """Find stored generated outputs tied to any proposed confirmation unit.
+
+    Args:
+        on_candidate_scanned: Optional progress callback invoked after each
+            candidate file is read, as ``(index, total, path, file_bytes)``
+            (1-indexed). This function returns nothing until every candidate
+            is scanned, which for a large report is otherwise indistinguishable
+            from being hung; callers that print from this run it live rather
+            than reporting progress after the fact.
+    """
 
     wanted = {str(value) for value in confirmation_unit_ids}
     if not wanted:
@@ -782,13 +792,16 @@ def audit_unopened_confirmation_outputs(
     json_files_read = 0
     candidate_bytes_read = 0
     largest_candidate_file_bytes = 0
-    for path in candidate_paths:
+    total_candidates = len(candidate_paths)
+    for index, path in enumerate(candidate_paths, start=1):
         try:
             raw_bytes = path.read_bytes()
         except OSError:
             continue
         candidate_bytes_read += len(raw_bytes)
         largest_candidate_file_bytes = max(largest_candidate_file_bytes, len(raw_bytes))
+        if on_candidate_scanned is not None:
+            on_candidate_scanned(index, total_candidates, path, len(raw_bytes))
         if not any(needle in raw_bytes for needle in wanted_bytes):
             continue
         try:

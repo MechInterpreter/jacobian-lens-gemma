@@ -318,6 +318,36 @@ def test_freshness_audit_scans_bytes_without_a_full_text_decode(tmp_path) -> Non
     assert report["largest_candidate_file_bytes"] >= len(padding)
 
 
+def test_freshness_audit_reports_progress_through_a_callback(tmp_path) -> None:
+    """A caller can print live progress instead of waiting on a silent call."""
+    candidate = tmp_path / "run-1"
+    candidate.mkdir()
+    (candidate / "fingerprint.json").write_text(
+        '{"manifest_checksum":"population-1","split_id":"other"}',
+        encoding="utf-8",
+    )
+    (candidate / "one.json").write_text(
+        '{"unit_id":"fresh-1","generated_text":"Asia"}', encoding="utf-8"
+    )
+    (candidate / "two.json").write_text(
+        '{"unit_id":"unrelated"}', encoding="utf-8"
+    )
+    calls = []
+    audit_unopened_confirmation_outputs(
+        tmp_path,
+        ("fresh-1",),
+        manifest_checksum="population-1",
+        split_id="confirmation-1",
+        on_candidate_scanned=lambda index, total, path, size: calls.append(
+            (index, total, path.name, size)
+        ),
+    )
+    assert len(calls) == 2
+    assert {call[2] for call in calls} == {"one.json", "two.json"}
+    assert all(call[1] == 2 for call in calls)
+    assert {call[0] for call in calls} == {1, 2}
+
+
 def test_fresh_confirmation_report_accepts_pooled_cross_modal_effect() -> None:
     state = []
     coordinate = []
