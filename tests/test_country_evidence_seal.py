@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 import torch
 
@@ -292,6 +294,28 @@ def test_freshness_audit_surfaces_a_store_under_a_different_population(
     assert report["distinct_unmatched_manifest_checksums"] == [
         "population-0-stale"
     ]
+
+
+def test_freshness_audit_scans_bytes_without_a_full_text_decode(tmp_path) -> None:
+    """A large non-matching candidate is read once, in bytes, and cleared."""
+    candidate = tmp_path / "run-1"
+    candidate.mkdir()
+    (candidate / "fingerprint.json").write_text(
+        '{"manifest_checksum":"population-1","split_id":"other"}',
+        encoding="utf-8",
+    )
+    padding = json.dumps({"note": "x" * 2_000_000, "unit_id": "not-a-match"})
+    (candidate / "big_report.json").write_text(padding, encoding="utf-8")
+    report = audit_unopened_confirmation_outputs(
+        tmp_path,
+        ("fresh-1",),
+        manifest_checksum="population-1",
+        split_id="confirmation-1",
+    )
+    assert report["fresh"] is True
+    assert report["matching_json_files_read"] == 0
+    assert report["candidate_bytes_read"] >= len(padding)
+    assert report["largest_candidate_file_bytes"] >= len(padding)
 
 
 def test_fresh_confirmation_report_accepts_pooled_cross_modal_effect() -> None:

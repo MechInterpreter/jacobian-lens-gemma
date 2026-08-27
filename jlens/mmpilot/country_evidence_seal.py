@@ -772,17 +772,28 @@ def audit_unopened_confirmation_outputs(
     else:
         candidate_paths = sorted(root.rglob("*.json")) if root.is_dir() else []
 
+    # Checked as raw bytes first, not decoded text: a full UTF-8 decode of a
+    # multi-hundred-MB report is real, avoidable CPU cost paid on every
+    # candidate file whether or not it turns out to mention any confirmation
+    # id. The unit ids are plain ASCII, so a byte-level substring search finds
+    # every occurrence a text search would; decoding only happens for a file
+    # that already matched and therefore needs walking.
+    wanted_bytes = [unit_id.encode("utf-8") for unit_id in wanted]
     json_files_read = 0
+    candidate_bytes_read = 0
+    largest_candidate_file_bytes = 0
     for path in candidate_paths:
         try:
-            raw = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            raw_bytes = path.read_bytes()
+        except OSError:
             continue
-        if not any(unit_id in raw for unit_id in wanted):
+        candidate_bytes_read += len(raw_bytes)
+        largest_candidate_file_bytes = max(largest_candidate_file_bytes, len(raw_bytes))
+        if not any(needle in raw_bytes for needle in wanted_bytes):
             continue
         try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError:
+            payload = json.loads(raw_bytes.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
             continue
         json_files_read += 1
         walk(payload, path)
@@ -802,6 +813,8 @@ def audit_unopened_confirmation_outputs(
         "candidate_stores": candidate_stores,
         "candidate_json_files": len(candidate_paths),
         "matching_json_files_read": json_files_read,
+        "candidate_bytes_read": candidate_bytes_read,
+        "largest_candidate_file_bytes": largest_candidate_file_bytes,
         # Fingerprints this scan actually opened but excluded, because their
         # manifest_checksum/split_id disagreed with today's. A run legitimately
         # belonging to this population should never appear here; if one does,

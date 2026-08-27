@@ -3288,7 +3288,9 @@ if RUN_STAGE6F_CPU_FREEZE_MATCHED_CONFIRMATION:
     print("  freshness", _freshness["fresh"], "findings", _freshness["n_json_findings"])
     print(
         "  bounded audit", _freshness["fingerprints_scanned"], "fingerprints,",
-        _freshness["candidate_json_files"], "candidate JSON files",
+        _freshness["candidate_json_files"], "candidate JSON files,",
+        round(_freshness["candidate_bytes_read"] / 1e6, 1), "MB read,",
+        "largest", round(_freshness["largest_candidate_file_bytes"] / 1e6, 1), "MB",
     )
     if _freshness["distinct_unmatched_manifest_checksums"]:
         # Every run store this study writes should carry today's population
