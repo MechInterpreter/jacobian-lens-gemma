@@ -2371,7 +2371,7 @@ if RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT:
             target=_country_tokens[CONTROL_COUNTRIES[1]],
         )
         _restricted_target_rows = _development_by_country["China"][1:]
-        _restricted_unrelated_rows = _italy_fit_rows[1:1 + len(_restricted_source_rows)]
+        _restricted_unrelated_rows = _italy_fit_rows[:len(_restricted_source_rows)]
         if not (
             len(_restricted_source_rows)
             == len(_restricted_target_rows)

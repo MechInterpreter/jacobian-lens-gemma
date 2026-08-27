@@ -188,3 +188,4 @@ def test_no_refit_causal_site_diagnostic_is_prospective_and_resumable() -> None:
     assert "localized_development_report" in source
     assert '"target_state", target_state' in source
     assert "SOURCE SCREEN VERDICT UNCHANGED" in source
+    assert "_italy_fit_rows[:len(_restricted_source_rows)]" in source
