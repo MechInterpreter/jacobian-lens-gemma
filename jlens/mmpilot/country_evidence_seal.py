@@ -12,8 +12,10 @@ does not fit a lens and it never opens the untouched confirmation population.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from contextlib import ExitStack, contextmanager
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -23,6 +25,7 @@ from jlens.mmpilot.store import payload_checksum
 EVIDENCE_SEAL_VERSION = "mmpilot.country_evidence_seal.v1"
 SEALED_DEVELOPMENT_VERSION = "mmpilot.country_sealed_evidence_development.v1"
 MATCHED_SCAFFOLD_VERSION = "mmpilot.country_matched_scaffold_development.v1"
+MATCHED_CONFIRMATION_VERSION = "mmpilot.country_matched_scaffold_confirmation.v1"
 SEALED_STATE_CONDITIONS = ("clean_sealed", "target_state", "unrelated_state")
 SEALED_COORDINATE_CONDITIONS = ("exact", "zero", "random", "unrelated")
 
@@ -672,14 +675,245 @@ def matched_scaffold_report(
     return {**body, "report_checksum": payload_checksum(body)}
 
 
+def audit_unopened_confirmation_outputs(
+    runs_root: str | Path, confirmation_unit_ids: Sequence[str]
+) -> dict:
+    """Find stored generated outputs tied to any proposed confirmation unit."""
+
+    wanted = {str(value) for value in confirmation_unit_ids}
+    if not wanted:
+        raise CountryEvidenceSealRefused("confirmation freshness audit needs unit ids")
+    output_keys = {
+        "generated_text",
+        "generated_token_ids",
+        "answer_match",
+        "success",
+    }
+    findings = []
+
+    def walk(value, path: Path) -> None:
+        if isinstance(value, Mapping):
+            unit_id = str(value.get("unit_id") or "")
+            if unit_id in wanted and any(key in value for key in output_keys):
+                findings.append(
+                    {
+                        "path": str(path),
+                        "unit_id": unit_id,
+                        "output_keys": sorted(output_keys.intersection(value)),
+                    }
+                )
+            for child in value.values():
+                walk(child, path)
+        elif isinstance(value, list):
+            for child in value:
+                walk(child, path)
+
+    root = Path(runs_root)
+    for path in sorted(root.rglob("*.json")) if root.is_dir() else ():
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        walk(payload, path)
+    body = {
+        "version": "mmpilot.country_confirmation_freshness_audit.v1",
+        "runs_root": str(root),
+        "confirmation_unit_ids": sorted(wanted),
+        "n_json_findings": len(findings),
+        "findings": findings,
+        "fresh": not findings,
+    }
+    return {**body, "audit_checksum": payload_checksum(body)}
+
+
+def matched_scaffold_confirmation_report(
+    state_rows: Sequence[Mapping],
+    coordinate_rows: Sequence[Mapping],
+    *,
+    expected_n: int,
+    primary_modalities: Sequence[str] = ("image", "spoken_audio"),
+    secondary_modalities: Sequence[str] = ("text",),
+    familywise_alpha: float = 0.05,
+) -> dict:
+    """Confirm the frozen pooled continent signal on untouched examples."""
+
+    from jlens.mmpilot.multimodal_lens import (
+        holm_adjust,
+        paired_binary_one_sided_p,
+    )
+
+    state_records = [dict(row) for row in state_rows]
+    coordinate_records = [dict(row) for row in coordinate_rows]
+    all_modalities = tuple(map(str, (*primary_modalities, *secondary_modalities)))
+    state_cells = []
+    coordinate_cells = []
+    for modality in all_modalities:
+        state_subset = [row for row in state_records if row.get("modality") == modality]
+        for condition in ("self_scaffold", "target_state", "unrelated_state"):
+            unit_ids = [
+                str(row.get("unit_id"))
+                for row in state_subset
+                if row.get("condition") == condition
+            ]
+            if len(unit_ids) != int(expected_n) or len(set(unit_ids)) != int(expected_n):
+                raise CountryEvidenceSealRefused(
+                    f"confirmation {modality}/{condition} is not exactly "
+                    f"{expected_n} distinct units"
+                )
+        state_conditions = {
+            name: _summary(state_subset, name)
+            for name in ("self_scaffold", "target_state", "unrelated_state")
+        }
+        state_cells.append({"modality": modality, "conditions": state_conditions})
+        coordinate_subset = [
+            row for row in coordinate_records if row.get("modality") == modality
+        ]
+        for condition in SEALED_COORDINATE_CONDITIONS:
+            unit_ids = [
+                str(row.get("unit_id"))
+                for row in coordinate_subset
+                if row.get("condition") == condition
+            ]
+            if len(unit_ids) != int(expected_n) or len(set(unit_ids)) != int(expected_n):
+                raise CountryEvidenceSealRefused(
+                    f"confirmation {modality}/{condition} is not exactly "
+                    f"{expected_n} distinct units"
+                )
+        conditions = {
+            name: _summary(coordinate_subset, name)
+            for name in SEALED_COORDINATE_CONDITIONS
+        }
+        coordinate_cells.append({"modality": modality, "conditions": conditions})
+
+    primary_set = set(map(str, primary_modalities))
+    primary_state = [row for row in state_records if row.get("modality") in primary_set]
+    primary_coordinate = [
+        row for row in coordinate_records if row.get("modality") in primary_set
+    ]
+    exact_by_key = {
+        (row["unit_id"], row["modality"]): bool(row.get("success"))
+        for row in primary_coordinate
+        if row.get("condition") == "exact"
+    }
+    comparisons = []
+    for control_name in ("zero", "random", "unrelated"):
+        control_by_key = {
+            (row["unit_id"], row["modality"]): bool(row.get("success"))
+            for row in primary_coordinate
+            if row.get("condition") == control_name
+        }
+        if set(exact_by_key) != set(control_by_key):
+            raise CountryEvidenceSealRefused(
+                f"confirmation {control_name} outcomes are not paired to exact"
+            )
+        ordered = sorted(exact_by_key)
+        comparisons.append(
+            {
+                "control": control_name,
+                **paired_binary_one_sided_p(
+                    [exact_by_key[key] for key in ordered],
+                    [control_by_key[key] for key in ordered],
+                ),
+            }
+        )
+    adjusted = holm_adjust(comparisons)
+
+    pooled_exact = _summary(primary_coordinate, "exact")
+    pooled_controls = {
+        name: _summary(primary_coordinate, name)
+        for name in ("zero", "random", "unrelated")
+    }
+    modality_presence = {}
+    for modality in map(str, primary_modalities):
+        subset = [row for row in primary_coordinate if row.get("modality") == modality]
+        exact = _summary(subset, "exact")
+        controls = {name: _summary(subset, name) for name in pooled_controls}
+        modality_presence[modality] = {
+            "exact": exact,
+            "controls": controls,
+            "passed": bool(
+                exact["n"] == int(expected_n)
+                and exact["rate"] >= 0.25
+                and exact["rate"] > max(row["rate"] for row in controls.values())
+                and exact["integrity_pass"]
+                and all(row["integrity_pass"] for row in controls.values())
+            ),
+        }
+    state_gate = bool(primary_state) and all(
+        cell["conditions"]["self_scaffold"]["n"] == int(expected_n)
+        and cell["conditions"]["target_state"]["n"] == int(expected_n)
+        and cell["conditions"]["unrelated_state"]["n"] == int(expected_n)
+        and cell["conditions"]["self_scaffold"]["rate"] == 1.0
+        and cell["conditions"]["target_state"]["rate"] >= 0.75
+        and cell["conditions"]["unrelated_state"]["rate"] == 0.0
+        and all(row["integrity_pass"] for row in cell["conditions"].values())
+        for cell in state_cells
+        if cell["modality"] in primary_set
+    )
+    pooled_gate = bool(
+        pooled_exact["n"] == int(expected_n) * len(primary_set)
+        and pooled_exact["rate"] >= 0.50
+        and all(
+            row["n"] == pooled_exact["n"]
+            and pooled_exact["rate"] - row["rate"] >= 0.25
+            for row in pooled_controls.values()
+        )
+        and pooled_exact["integrity_pass"]
+        and all(row["integrity_pass"] for row in pooled_controls.values())
+    )
+    statistics_gate = bool(adjusted) and all(
+        float(row["holm_adjusted_p"]) <= float(familywise_alpha)
+        for row in adjusted
+    )
+    passed = bool(
+        state_gate
+        and pooled_gate
+        and statistics_gate
+        and all(row["passed"] for row in modality_presence.values())
+    )
+    body = {
+        "version": MATCHED_CONFIRMATION_VERSION,
+        "verdict": (
+            "COUNTRY_MATCHED_SCAFFOLD_FRESH_CONFIRMATION_GO"
+            if passed
+            else "COUNTRY_MATCHED_SCAFFOLD_FRESH_CONFIRMATION_NO_GO"
+        ),
+        "stage": "fresh_confirmation",
+        "property": "continent",
+        "direction": "France->China",
+        "primary_modalities": list(map(str, primary_modalities)),
+        "secondary_modalities": list(map(str, secondary_modalities)),
+        "pooled_primary": {
+            "exact": pooled_exact,
+            "controls": pooled_controls,
+            "paired_comparisons": adjusted,
+        },
+        "primary_modality_presence": modality_presence,
+        "state_gate_passed": state_gate,
+        "pooled_effect_gate_passed": pooled_gate,
+        "familywise_statistics_gate_passed": statistics_gate,
+        "familywise_alpha": float(familywise_alpha),
+        "state_cells": state_cells,
+        "coordinate_cells": coordinate_cells,
+        "state_rows": state_records,
+        "coordinate_rows": coordinate_records,
+        "fitting_performed": False,
+        "backward_passes": 0,
+    }
+    return {**body, "report_checksum": payload_checksum(body)}
+
+
 __all__ = [
     "EVIDENCE_SEAL_VERSION",
     "MATCHED_SCAFFOLD_VERSION",
+    "MATCHED_CONFIRMATION_VERSION",
     "SEALED_COORDINATE_CONDITIONS",
     "SEALED_DEVELOPMENT_VERSION",
     "SEALED_STATE_CONDITIONS",
     "CountryEvidenceSealRefused",
     "evidence_positions",
+    "audit_unopened_confirmation_outputs",
+    "matched_scaffold_confirmation_report",
     "matched_scaffold_report",
     "seal_evidence_attention",
     "sealed_development_report",

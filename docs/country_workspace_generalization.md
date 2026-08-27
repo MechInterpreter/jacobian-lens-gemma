@@ -145,6 +145,30 @@ is no layer search, alpha search, refit, backward pass, or fresh confirmation
 access. This makes the outcome decisive for this specific matched-scaffold
 bottleneck rather than guaranteeing a positive result.
 
+Stage 6E preserved the full-state controls and produced the first coordinate
+signal in this country study. For continent, the exact France-to-China
+exchange produced Asia in 0/3 text, 1/3 image, and 2/3 spoken-audio examples;
+zero, random-coordinate, and unrelated-country controls were 0/3 in every
+cell. Every hook, numerical, scaffold-order, and exact-exchange check passed.
+Capital remained 0/3 in every coordinate arm. The aggregate Stage 6E verdict
+therefore remains `COUNTRY_MATCHED_SCAFFOLD_NO_GO`, but the pooled image plus
+spoken-audio continent result is a prespecified candidate for one fresh test,
+not another development search.
+
+Stage 6F freezes that test on CPU before reading any output associated with
+the 28 reserved France and China confirmation examples. It records their unit
+IDs, audits every JSON artifact under the run root for prior generated output,
+and pins France-to-China, continent, exact alpha one, L24-L31, the final prompt
+token, and the matched France scaffold. Image and spoken audio form the pooled
+primary endpoint; text is reported as secondary because development showed no
+text success. The primary gate requires at least 50% pooled exact success, a
+25-point margin over each of zero, random, and unrelated controls, evidence in
+both primary modalities, familywise-corrected paired significance, intact
+coordinate diagnostics, and successful real-state controls. Stage 6G runs
+that frozen design once. It performs no fitting or search and saves every
+condition atomically so a disconnected runtime can resume without repeating
+completed work.
+
 ### Direction-scoped capability amendment
 
 The first capability run passed 34 of 36 cells. France, China, and Japan passed
@@ -191,6 +215,12 @@ checksum-reuses every completed condition.
 After the recorded Stage 6D failure, run Stage 6E alone. It adds 126
 forward-only development conditions and atomically resumes each condition.
 Every fitting toggle and every earlier scientific stage must remain false.
+
+After Stage 6E, run Stage 6F alone on CPU. If its freshness audit is clean,
+stop that runtime. Run Stage 6G alone on an fp32 80 GB A100 with the model and
+fresh-confirmation budget confirmations enabled. Stage 6G runs 294
+forward-only conditions, performs zero backward passes, and resumes at the
+individual-condition level.
 
 The canonical notebook is
 `notebooks/multimodal_country_workspace_generalization_colab.ipynb`.

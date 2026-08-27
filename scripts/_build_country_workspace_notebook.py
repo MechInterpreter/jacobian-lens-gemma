@@ -1697,6 +1697,8 @@ RUN_STAGE6B_CAUSAL_SITE_SCREEN = False
 RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT = False
 RUN_STAGE6D_SEALED_EVIDENCE_DEVELOPMENT = False
 RUN_STAGE6E_MATCHED_SCAFFOLD_DEVELOPMENT = False
+RUN_STAGE6F_CPU_FREEZE_MATCHED_CONFIRMATION = False
+RUN_STAGE6G_FRESH_MATCHED_CONFIRMATION = False
 RUN_STAGE5_WRITE_REPORT = False
 
 CONFIRM_MODEL_LOAD = False
@@ -1714,6 +1716,7 @@ CONFIRM_CAUSAL_SITE_SCREEN_BUDGET = False
 CONFIRM_RESTRICTED_SWAP_BUDGET = False
 CONFIRM_SEALED_EVIDENCE_BUDGET = False
 CONFIRM_MATCHED_SCAFFOLD_BUDGET = False
+CONFIRM_FRESH_MATCHED_CONFIRMATION_BUDGET = False
 
 MODEL_REPO_ID = "google/gemma-4-E4B-it"
 MODEL_REVISION = "fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd"
@@ -1766,6 +1769,8 @@ ANY_STAGE = any((
     RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT,
     RUN_STAGE6D_SEALED_EVIDENCE_DEVELOPMENT,
     RUN_STAGE6E_MATCHED_SCAFFOLD_DEVELOPMENT,
+    RUN_STAGE6F_CPU_FREEZE_MATCHED_CONFIRMATION,
+    RUN_STAGE6G_FRESH_MATCHED_CONFIRMATION,
     RUN_STAGE5_WRITE_REPORT,
 ))
 if not ANY_STAGE:
@@ -1787,6 +1792,7 @@ MODEL_STAGE = any((
     RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT,
     RUN_STAGE6D_SEALED_EVIDENCE_DEVELOPMENT,
     RUN_STAGE6E_MATCHED_SCAFFOLD_DEVELOPMENT,
+    RUN_STAGE6G_FRESH_MATCHED_CONFIRMATION,
 ))
 if MODEL_STAGE and not CONFIRM_MODEL_LOAD:
     print("MODEL BLOCKED: set CONFIRM_MODEL_LOAD=True after reading the budget")
@@ -1840,6 +1846,48 @@ if RUN_STAGE6E_MATCHED_SCAFFOLD_DEVELOPMENT and any((
     RUN_STAGE5_WRITE_REPORT,
 )):
     raise RuntimeError("Stage 6E must run alone; every other stage toggle must be False")
+if RUN_STAGE6F_CPU_FREEZE_MATCHED_CONFIRMATION and any((
+    RUN_STAGE0_PREPARE_DATA,
+    RUN_STAGE1_FIT_POOLED_LENS,
+    RUN_STAGE2_CAPABILITY_AND_LOCALIZATION,
+    RUN_STAGE2_DEBUG_COUNTRY_INSTRUMENT,
+    RUN_STAGE2_REFIT_TASK_MATCHED_LENS_IF_NEEDED,
+    RUN_STAGE2C_FIT_BALANCED_TASK_LENS,
+    RUN_STAGE3_DEVELOPMENT_SWAP,
+    RUN_STAGE4_FRESH_CONFIRMATION,
+    RUN_STAGE3B_FRANCE_CHINA_DOWNSTREAM_DEVELOPMENT,
+    RUN_STAGE4B_FRANCE_CHINA_FRESH_CONFIRMATION,
+    RUN_STAGE6A_CPU_CAUSAL_SITE_PLAN,
+    RUN_STAGE6B_CAUSAL_SITE_SCREEN,
+    RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT,
+    RUN_STAGE6D_SEALED_EVIDENCE_DEVELOPMENT,
+    RUN_STAGE6E_MATCHED_SCAFFOLD_DEVELOPMENT,
+    RUN_STAGE6G_FRESH_MATCHED_CONFIRMATION,
+    RUN_STAGE5_WRITE_REPORT,
+)):
+    raise RuntimeError("Stage 6F is CPU-only and must run alone")
+if RUN_STAGE6G_FRESH_MATCHED_CONFIRMATION and not CONFIRM_FRESH_MATCHED_CONFIRMATION_BUDGET:
+    print("FRESH MATCHED CONFIRMATION BLOCKED: confirm its forward-pass budget")
+if RUN_STAGE6G_FRESH_MATCHED_CONFIRMATION and any((
+    RUN_STAGE0_PREPARE_DATA,
+    RUN_STAGE1_FIT_POOLED_LENS,
+    RUN_STAGE2_CAPABILITY_AND_LOCALIZATION,
+    RUN_STAGE2_DEBUG_COUNTRY_INSTRUMENT,
+    RUN_STAGE2_REFIT_TASK_MATCHED_LENS_IF_NEEDED,
+    RUN_STAGE2C_FIT_BALANCED_TASK_LENS,
+    RUN_STAGE3_DEVELOPMENT_SWAP,
+    RUN_STAGE4_FRESH_CONFIRMATION,
+    RUN_STAGE3B_FRANCE_CHINA_DOWNSTREAM_DEVELOPMENT,
+    RUN_STAGE4B_FRANCE_CHINA_FRESH_CONFIRMATION,
+    RUN_STAGE6A_CPU_CAUSAL_SITE_PLAN,
+    RUN_STAGE6B_CAUSAL_SITE_SCREEN,
+    RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT,
+    RUN_STAGE6D_SEALED_EVIDENCE_DEVELOPMENT,
+    RUN_STAGE6E_MATCHED_SCAFFOLD_DEVELOPMENT,
+    RUN_STAGE6F_CPU_FREEZE_MATCHED_CONFIRMATION,
+    RUN_STAGE5_WRITE_REPORT,
+)):
+    raise RuntimeError("Stage 6G must run alone; every other stage toggle must be False")
 '''
 )
 
@@ -1878,6 +1926,8 @@ print("  sealed-evidence bottleneck", (N_DEVELOPMENT_PER_COUNTRY - 1) * len(PROP
 print("    evidence encodes below L24; the final prompt token becomes the sole prefix bottleneck")
 print("  matched-scaffold bottleneck", (N_DEVELOPMENT_PER_COUNTRY - 1) * len(PROPERTIES) * len(MODALITIES) * 7, "development conditions")
 print("    every coordinate arm restores the identical unsealed France state before changing coordinates")
+print("  fresh matched confirmation", N_CONFIRMATION_PER_COUNTRY * 3 * 7, "conditions")
+print("    primary pooled image+spoken_audio; text secondary; continent only")
 print("  diagnostic fitting/backward passes 0; fresh confirmation examples opened 0")
 print("  model dtype float32; A100 80 GB required; no fallback")
 print("  resume fit checkpoint every", CHECKPOINT_EVERY, "examples; causal resume unit one condition")
@@ -2204,6 +2254,8 @@ _causal_site_requested = any((
     RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT,
     RUN_STAGE6D_SEALED_EVIDENCE_DEVELOPMENT,
     RUN_STAGE6E_MATCHED_SCAFFOLD_DEVELOPMENT,
+    RUN_STAGE6F_CPU_FREEZE_MATCHED_CONFIRMATION,
+    RUN_STAGE6G_FRESH_MATCHED_CONFIRMATION,
 ))
 if _causal_site_requested:
     if not BALANCED_LENS_PATH.is_file():
@@ -2239,6 +2291,7 @@ if any((
     RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT,
     RUN_STAGE6D_SEALED_EVIDENCE_DEVELOPMENT,
     RUN_STAGE6E_MATCHED_SCAFFOLD_DEVELOPMENT,
+    RUN_STAGE6G_FRESH_MATCHED_CONFIRMATION,
 )):
     if not MODEL_ENABLED:
         raise RuntimeError("causal-site GPU stages require the loaded fp32 model")
@@ -3119,11 +3172,322 @@ if RUN_STAGE6E_MATCHED_SCAFFOLD_DEVELOPMENT:
         )
     print("report", _matched_path)
 
+_matched_confirmation_root = (
+    RUN_DIR / "diagnostics" / "country_matched_scaffold_confirmation_v1"
+)
+_matched_confirmation_design_path = (
+    _matched_confirmation_root / "confirmation_design.json"
+)
+_matched_confirmation_report_path = (
+    _matched_confirmation_root / "country_matched_scaffold_fresh_confirmation_report.json"
+)
+
+if RUN_STAGE6F_CPU_FREEZE_MATCHED_CONFIRMATION:
+    from jlens.mmpilot.backend import file_checksum
+    from jlens.mmpilot.country_evidence_seal import (
+        MATCHED_CONFIRMATION_VERSION,
+        audit_unopened_confirmation_outputs,
+    )
+
+    _development_path = (
+        RUN_DIR / "diagnostics" / "country_matched_scaffold_v1"
+        / "country_matched_scaffold_development_report.json"
+    )
+    if not _development_path.is_file():
+        raise RuntimeError("Stage 6F requires the completed matched-scaffold development report")
+    _development = json.loads(_development_path.read_text(encoding="utf-8"))
+    if _development.get("version") != "mmpilot.country_matched_scaffold_development.v1":
+        raise RuntimeError("the matched-scaffold development report has the wrong version")
+    _coordinate_cells = {
+        (cell["property"], cell["modality"]): cell
+        for cell in _development["j_lens_coordinate_arm"]["cells"]
+    }
+    _expected_signal = {"text": 0, "image": 1, "spoken_audio": 2}
+    for modality, successes in _expected_signal.items():
+        cell = _coordinate_cells.get(("continent", modality))
+        if cell is None:
+            raise RuntimeError(f"development has no continent/{modality} cell")
+        conditions = cell["conditions"]
+        if conditions["exact"]["n"] != 3 or conditions["exact"]["successes"] != successes:
+            raise RuntimeError(f"development continent/{modality} signal changed")
+        if any(conditions[name]["successes"] != 0 for name in ("zero", "random", "unrelated")):
+            raise RuntimeError(f"development continent/{modality} controls are not zero")
+        if not all(conditions[name]["integrity_pass"] for name in conditions):
+            raise RuntimeError(f"development continent/{modality} integrity failed")
+
+    _confirmation_rows = [
+        *sorted(
+            [
+                row for row in MEDIA_ROWS
+                if row["study_split"] == "confirmation"
+                and row["country"] == "France"
+            ],
+            key=lambda row: row["unit_id"],
+        ),
+        *sorted(
+            [
+                row for row in MEDIA_ROWS
+                if row["study_split"] == "confirmation"
+                and row["country"] == "China"
+            ],
+            key=lambda row: row["unit_id"],
+        ),
+    ]
+    _confirmation_ids = [row["unit_id"] for row in _confirmation_rows]
+    if len(_confirmation_rows) != 2 * N_CONFIRMATION_PER_COUNTRY:
+        raise RuntimeError("the frozen country confirmation population is incomplete")
+    _freshness = audit_unopened_confirmation_outputs(RUNS_ROOT, _confirmation_ids)
+    if not _freshness["fresh"]:
+        raise RuntimeError(
+            "proposed confirmation outputs were previously opened:\n"
+            + json.dumps(_freshness["findings"], indent=2)
+        )
+    _design = {
+        "version": MATCHED_CONFIRMATION_VERSION,
+        "source_development_report": str(_development_path),
+        "source_development_checksum": _development["report_checksum"],
+        "balanced_lens_checksum": file_checksum(str(BALANCED_LENS_PATH)),
+        "population_digest": PREPARED["population_digest"],
+        "direction": "France->China",
+        "property": "continent",
+        "band": list(range(24, 32)),
+        "site": "final_prompt_token",
+        "alpha": 1.0,
+        "state_conditions": ["self_scaffold", "target_state", "unrelated_state"],
+        "coordinate_conditions": ["exact", "zero", "random", "unrelated"],
+        "primary_modalities": ["image", "spoken_audio"],
+        "secondary_modalities": ["text"],
+        "primary_analysis": "pooled paired image plus spoken_audio",
+        "minimum_pooled_exact_rate": 0.50,
+        "minimum_pooled_control_margin": 0.25,
+        "minimum_each_primary_modality_rate": 0.25,
+        "minimum_target_state_rate_each_primary_modality": 0.75,
+        "familywise_alpha": 0.05,
+        "familywise_tests": "Holm across pooled exact vs zero, random, unrelated",
+        "confirmation_units": _confirmation_ids,
+        "confirmation_per_source_country": N_CONFIRMATION_PER_COUNTRY,
+        "freshness_audit": _freshness,
+        "frozen_before_confirmation_outputs": True,
+        "fitting_performed": False,
+        "backward_passes": 0,
+        "layer_search_performed": False,
+        "alpha_search_performed": False,
+    }
+    _design["design_checksum"] = payload_checksum(_design)
+    _write_report(_matched_confirmation_design_path, _design)
+    print("MATCHED-SCAFFOLD CONFIRMATION DESIGN FROZEN")
+    print("  design", _matched_confirmation_design_path)
+    print("  checksum", _design["design_checksum"])
+    print("  freshness", _freshness["fresh"], "findings", _freshness["n_json_findings"])
+    print("  primary pooled image+spoken_audio; text secondary")
+    print("  fitting 0; backward passes 0; model forwards 0")
+    print("STOP THIS CPU RUNTIME. Run Stage 6G alone on an 80 GB A100.")
+
+if RUN_STAGE6G_FRESH_MATCHED_CONFIRMATION:
+    if not CONFIRM_FRESH_MATCHED_CONFIRMATION_BUDGET:
+        raise RuntimeError("fresh matched confirmation budget is not confirmed")
+    if not _matched_confirmation_design_path.is_file():
+        raise RuntimeError("run Stage 6F on CPU before opening confirmation outputs")
+    _design = json.loads(_matched_confirmation_design_path.read_text(encoding="utf-8"))
+    _design_body = {key: value for key, value in _design.items() if key != "design_checksum"}
+    if _design.get("design_checksum") != payload_checksum(_design_body):
+        raise RuntimeError("the frozen matched confirmation design failed its checksum")
+    if _design.get("frozen_before_confirmation_outputs") is not True:
+        raise RuntimeError("the matched confirmation design was not frozen prospectively")
+    if ACTIVE_LENS_LABEL != "balanced_task_pooled_j":
+        raise RuntimeError("fresh matched confirmation requires the frozen balanced lens")
+
+    from jlens.mmpilot.country_evidence_seal import (
+        evidence_positions,
+        matched_scaffold_confirmation_report,
+        sealed_integrity,
+        unrestricted_greedy_sealed_activation_patch_trial,
+        unrestricted_greedy_sealed_scaffolded_swap_trial,
+    )
+
+    _confirmation_source_rows = sorted(
+        [row for row in MEDIA_ROWS if row["study_split"] == "confirmation" and row["country"] == "France"],
+        key=lambda row: row["unit_id"],
+    )
+    _confirmation_target_rows = sorted(
+        [row for row in MEDIA_ROWS if row["study_split"] == "confirmation" and row["country"] == "China"],
+        key=lambda row: row["unit_id"],
+    )
+    if [row["unit_id"] for row in (*_confirmation_source_rows, *_confirmation_target_rows)] != _design["confirmation_units"]:
+        raise RuntimeError("the confirmation population differs from the frozen design")
+    _confirmation_unrelated_rows = [
+        _italy_fit_rows[index % len(_italy_fit_rows)]
+        for index in range(N_CONFIRMATION_PER_COUNTRY)
+    ]
+    _band = tuple(_design["band"])
+    _bottleneck = int(_band[0])
+    _country_tokens = concept_tokens((*EVAL_COUNTRIES, *CONTROL_COUNTRIES))
+    _unembed = BACKEND.unembedding_weight()
+    _exact_bases = build_swap_bases_for_lens(
+        ACTIVE_LENS, _unembed, layers=_band,
+        source=_country_tokens["France"], target=_country_tokens["China"],
+    )
+    _random_bases = {
+        layer: random_two_direction_basis(basis, seed=RANDOM_SEED + 94000 + layer)
+        for layer, basis in _exact_bases.items()
+    }
+    _unrelated_bases = build_swap_bases_for_lens(
+        ACTIVE_LENS, _unembed, layers=_band,
+        source=_country_tokens[CONTROL_COUNTRIES[0]],
+        target=_country_tokens[CONTROL_COUNTRIES[1]],
+    )
+    _confirmation_fingerprint = RunFingerprint(
+        mode="real", model_repo_id=MODEL_REPO_ID,
+        model_revision=MODEL_REVISION, processor_revision=MODEL_REVISION,
+        layers=_band, lens_checksum=_design["balanced_lens_checksum"],
+        manifest_checksum=PREPARED["population_digest"],
+        split_id=payload_checksum(_design["confirmation_units"]),
+        intervention_config={
+            "design_checksum": _design["design_checksum"],
+            "direction": _design["direction"], "property": _design["property"],
+            "band": list(_band), "site": _design["site"], "alpha": 1.0,
+            "state_conditions": _design["state_conditions"],
+            "coordinate_conditions": _design["coordinate_conditions"],
+            "primary_modalities": _design["primary_modalities"],
+            "secondary_modalities": _design["secondary_modalities"],
+        },
+        extra={"fitting_performed": False, "backward_passes": 0},
+    )
+    CONFIRMATION_STORE = UnitStore(_matched_confirmation_root, _confirmation_fingerprint)
+    print("fresh matched confirmation run", _matched_confirmation_root)
+    print("resume", CONFIRMATION_STORE.open())
+    print("design", _design["design_checksum"])
+    print("fitting performed False; backward passes 0")
+
+    def _confirmation_capture(row, modality):
+        inputs = build_task_inputs(row, modality, "continent")
+        position = int(inputs.prompt_len) - 1
+        evidence = evidence_positions(
+            inputs,
+            country_token_id=(
+                _country_tokens[row["country"]].token_id if modality == "text" else None
+            ),
+        )
+        captured = capture_activation_sites(
+            BACKEND, inputs, layers=_band,
+            positions={"final_prompt_token": position},
+        )
+        return inputs, position, evidence, captured["final_prompt_token"]
+
+    _confirmation_state_rows = []
+    _confirmation_coordinate_rows = []
+    for index, source_row in enumerate(_confirmation_source_rows):
+        target_row = _confirmation_target_rows[index]
+        unrelated_row = _confirmation_unrelated_rows[index]
+        for modality in (*_design["primary_modalities"], *_design["secondary_modalities"]):
+            inputs, position, evidence, source_state = _confirmation_capture(source_row, modality)
+            _, _, _, target_state = _confirmation_capture(target_row, modality)
+            _, _, _, unrelated_state = _confirmation_capture(unrelated_row, modality)
+            for condition, donor_state, expected in (
+                ("self_scaffold", source_state, "Europe"),
+                ("target_state", target_state, "Asia"),
+                ("unrelated_state", unrelated_state, "Asia"),
+            ):
+                key = safe_key("country_matched_confirmation_state_v1", _design["design_checksum"], source_row["unit_id"], modality, condition)
+                stored = CONFIRMATION_STORE.load("intervention", key)
+                if stored is None:
+                    result = unrestricted_greedy_sealed_activation_patch_trial(
+                        BACKEND, inputs, donor_by_layer=donor_state,
+                        source_position=position, evidence_token_positions=evidence,
+                        bottleneck_layer=_bottleneck, answer=expected,
+                        max_new_tokens=MAX_NEW_TOKENS,
+                    )
+                    stored = {
+                        **result, "unit_id": source_row["unit_id"],
+                        "donor_unit_id": (
+                            source_row["unit_id"] if condition == "self_scaffold"
+                            else target_row["unit_id"] if condition == "target_state"
+                            else unrelated_row["unit_id"]
+                        ),
+                        "property": "continent", "modality": modality,
+                        "condition": condition, "expected": expected,
+                        "success": answer_matches(result["generated_text"], expected),
+                        "integrity_pass": sealed_integrity(result, require_intervention=True),
+                    }
+                    CONFIRMATION_STORE.save("intervention", key, stored)
+                    work = "computed"
+                else:
+                    work = "reused"
+                _confirmation_state_rows.append(stored)
+
+            site_inputs = single_position_inputs(inputs, position)
+            for condition, alpha, bases in (
+                ("exact", 1.0, _exact_bases),
+                ("zero", 0.0, _exact_bases),
+                ("random", 1.0, _random_bases),
+                ("unrelated", 1.0, _unrelated_bases),
+            ):
+                key = safe_key("country_matched_confirmation_swap_v1", _design["design_checksum"], source_row["unit_id"], modality, condition)
+                stored = CONFIRMATION_STORE.load("intervention", key)
+                if stored is None:
+                    result = unrestricted_greedy_sealed_scaffolded_swap_trial(
+                        BACKEND, site_inputs, scaffold_by_layer=source_state,
+                        source_position=position, bases=bases, alpha=alpha,
+                        evidence_token_positions=evidence,
+                        bottleneck_layer=_bottleneck, answer="Asia",
+                        max_new_tokens=MAX_NEW_TOKENS,
+                        position_rule="evidence_span_only",
+                        realization_policy=TEXT_MODEL_DTYPE_REALIZATION,
+                    )
+                    stored = {
+                        **result, "unit_id": source_row["unit_id"],
+                        "property": "continent", "modality": modality,
+                        "condition": condition, "expected": "Asia",
+                        "success": answer_matches(result["generated_text"], "Asia"),
+                        "integrity_pass": bool(
+                            sealed_integrity(result, require_intervention=True)
+                            and diagnostic_integrity(result, exact=(condition == "exact"))
+                        ),
+                    }
+                    CONFIRMATION_STORE.save("intervention", key, stored)
+                    work = "computed"
+                else:
+                    work = "reused"
+                _confirmation_coordinate_rows.append(stored)
+            completed = (index * 3 + list((*_design["primary_modalities"], *_design["secondary_modalities"])).index(modality) + 1) * 7
+            if completed == 7 or completed % 49 == 0 or completed == N_CONFIRMATION_PER_COUNTRY * 3 * 7:
+                print("fresh confirmation conditions", completed, "of", N_CONFIRMATION_PER_COUNTRY * 3 * 7, work)
+
+    FRESH_MATCHED_CONFIRMATION = matched_scaffold_confirmation_report(
+        _confirmation_state_rows, _confirmation_coordinate_rows,
+        expected_n=N_CONFIRMATION_PER_COUNTRY,
+        primary_modalities=_design["primary_modalities"],
+        secondary_modalities=_design["secondary_modalities"],
+        familywise_alpha=_design["familywise_alpha"],
+    )
+    _report_body = {
+        key: value for key, value in FRESH_MATCHED_CONFIRMATION.items()
+        if key != "report_checksum"
+    }
+    _report_body.update({
+        "design_checksum": _design["design_checksum"],
+        "source_development_checksum": _design["source_development_checksum"],
+        "freshness_audit_checksum": _design["freshness_audit"]["audit_checksum"],
+        "confirmation_population_digest": payload_checksum(_design["confirmation_units"]),
+    })
+    FRESH_MATCHED_CONFIRMATION = {
+        **_report_body, "report_checksum": payload_checksum(_report_body)
+    }
+    _write_report(_matched_confirmation_report_path, FRESH_MATCHED_CONFIRMATION)
+    print("FRESH MATCHED-SCAFFOLD CONFIRMATION", FRESH_MATCHED_CONFIRMATION["verdict"])
+    print("pooled exact", FRESH_MATCHED_CONFIRMATION["pooled_primary"]["exact"])
+    print("pooled controls", FRESH_MATCHED_CONFIRMATION["pooled_primary"]["controls"])
+    print("primary modalities", FRESH_MATCHED_CONFIRMATION["primary_modality_presence"])
+    print("text secondary", [cell for cell in FRESH_MATCHED_CONFIRMATION["coordinate_cells"] if cell["modality"] == "text"][0])
+    print("report", _matched_confirmation_report_path)
+
 if RUN_STAGE6A_CPU_CAUSAL_SITE_PLAN and not (
     RUN_STAGE6B_CAUSAL_SITE_SCREEN
     or RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT
     or RUN_STAGE6D_SEALED_EVIDENCE_DEVELOPMENT
     or RUN_STAGE6E_MATCHED_SCAFFOLD_DEVELOPMENT
+    or RUN_STAGE6F_CPU_FREEZE_MATCHED_CONFIRMATION
+    or RUN_STAGE6G_FRESH_MATCHED_CONFIRMATION
 ):
     print("CPU PLAN COMPLETE. Stop this runtime before the fp32 A100 stages.")
 '''

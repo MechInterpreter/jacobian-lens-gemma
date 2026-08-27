@@ -60,6 +60,8 @@ def test_default_configuration_spends_nothing() -> None:
     assert "RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT = False" in source
     assert "RUN_STAGE6D_SEALED_EVIDENCE_DEVELOPMENT = False" in source
     assert "RUN_STAGE6E_MATCHED_SCAFFOLD_DEVELOPMENT = False" in source
+    assert "RUN_STAGE6F_CPU_FREEZE_MATCHED_CONFIRMATION = False" in source
+    assert "RUN_STAGE6G_FRESH_MATCHED_CONFIRMATION = False" in source
     assert "CONFIRM_MODEL_LOAD = False" in source
     assert "CONFIRM_FP32_A100 = False" in source
     assert 'SCIENTIFIC_IMPLEMENTATION_ID = "country-prompt-lens-band-debug-v4.20260826"' in source
@@ -232,3 +234,24 @@ def test_matched_scaffold_stage_holds_full_state_constant_before_exchange() -> N
     assert 'MATCHED_STORE.save("intervention", key, stored)' in source
     assert "no fitting fallback is permitted" in source
     assert "Stage 6E must run alone; every other stage toggle must be False" in source
+
+
+def test_matched_scaffold_confirmation_is_frozen_fresh_and_resumable() -> None:
+    source = _source()
+    assert "audit_unopened_confirmation_outputs" in source
+    assert '"frozen_before_confirmation_outputs": True' in source
+    assert '"direction": "France->China"' in source
+    assert '"property": "continent"' in source
+    assert '"band": list(range(24, 32))' in source
+    assert '"primary_modalities": ["image", "spoken_audio"]' in source
+    assert '"secondary_modalities": ["text"]' in source
+    assert '"minimum_pooled_exact_rate": 0.50' in source
+    assert '"minimum_pooled_control_margin": 0.25' in source
+    assert '"layer_search_performed": False' in source
+    assert '"alpha_search_performed": False' in source
+    assert "Stage 6F is CPU-only and must run alone" in source
+    assert "Stage 6G must run alone" in source
+    assert 'CONFIRMATION_STORE.load("intervention", key)' in source
+    assert 'CONFIRMATION_STORE.save("intervention", key, stored)' in source
+    assert "matched_scaffold_confirmation_report" in source
+    assert "fitting performed False; backward passes 0" in source

@@ -15,7 +15,9 @@ from jlens.mmpilot.coordinate_swap import (
 from jlens.mmpilot.country_activation_patch import activation_patch_band
 from jlens.mmpilot.country_evidence_seal import (
     CountryEvidenceSealRefused,
+    audit_unopened_confirmation_outputs,
     evidence_positions,
+    matched_scaffold_confirmation_report,
     matched_scaffold_report,
     seal_evidence_attention,
     sealed_development_report,
@@ -210,3 +212,48 @@ def test_matched_scaffold_report_requires_source_capability_and_exact_effect() -
     assert report["only_coordinate_condition_varies_after_source_scaffold"] is True
     assert report["fitting_performed"] is False
     assert report["fresh_confirmation_opened"] is False
+
+
+def test_freshness_audit_detects_only_generated_confirmation_outputs(tmp_path) -> None:
+    (tmp_path / "design.json").write_text(
+        '{"unit_id":"fresh-1","selected":true}', encoding="utf-8"
+    )
+    clean = audit_unopened_confirmation_outputs(tmp_path, ("fresh-1",))
+    assert clean["fresh"] is True
+    (tmp_path / "unit.json").write_text(
+        '{"unit_id":"fresh-1","generated_text":"Asia"}', encoding="utf-8"
+    )
+    spent = audit_unopened_confirmation_outputs(tmp_path, ("fresh-1",))
+    assert spent["fresh"] is False
+    assert spent["findings"][0]["unit_id"] == "fresh-1"
+
+
+def test_fresh_confirmation_report_accepts_pooled_cross_modal_effect() -> None:
+    state = []
+    coordinate = []
+    for modality in ("image", "spoken_audio", "text"):
+        for index in range(14):
+            for condition in ("self_scaffold", "target_state", "unrelated_state"):
+                state.append({
+                    "unit_id": f"{modality}-{index}",
+                    "modality": modality,
+                    "condition": condition,
+                    "success": condition != "unrelated_state",
+                    "integrity_pass": True,
+                })
+            for condition in ("exact", "zero", "random", "unrelated"):
+                coordinate.append({
+                    "unit_id": f"{modality}-{index}",
+                    "modality": modality,
+                    "condition": condition,
+                    "success": condition == "exact" and (
+                        modality == "text" or index < 10
+                    ),
+                    "integrity_pass": True,
+                })
+    report = matched_scaffold_confirmation_report(
+        state, coordinate, expected_n=14
+    )
+    assert report["verdict"] == "COUNTRY_MATCHED_SCAFFOLD_FRESH_CONFIRMATION_GO"
+    assert report["pooled_primary"]["exact"]["successes"] == 20
+    assert report["familywise_statistics_gate_passed"] is True
