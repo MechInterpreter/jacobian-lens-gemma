@@ -236,6 +236,37 @@ def test_matched_scaffold_stage_holds_full_state_constant_before_exchange() -> N
     assert "Stage 6E must run alone; every other stage toggle must be False" in source
 
 
+def test_write_report_creates_its_directory_on_a_genuinely_fresh_run(
+    tmp_path,
+) -> None:
+    """Regression: Stage 6F's first write into a brand-new diagnostics
+    subdirectory failed with FileNotFoundError because _write_report assumed
+    a RunStore/UnitStore had already created the parent -- true for every
+    other caller, but not for a stage writing its first report there."""
+    notebook = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
+    cell_source = next(
+        "".join(cell["source"])
+        for cell in notebook["cells"]
+        if cell["cell_type"] == "code" and "def _write_report(path, report):" in "".join(cell["source"])
+    )
+    # The cell also assigns module-level names (RUN_DIR-dependent paths)
+    # this test has no reason to provide; isolate just the function body.
+    marker = "def _write_report(path, report):"
+    start = cell_source.index(marker)
+    end = cell_source.index("\ndef _verified_parent_report", start)
+    function_source = cell_source[start:end]
+    namespace = {"json": json, "os": __import__("os")}
+    exec(compile(function_source, "<write_report_fn>", "exec"), namespace)
+    write_report = namespace["_write_report"]
+
+    target = tmp_path / "diagnostics" / "country_matched_scaffold_confirmation_v1" / "confirmation_design.json"
+    assert not target.parent.is_dir()
+    write_report(target, {"fresh": True})
+    assert target.is_file()
+    assert json.loads(target.read_text(encoding="utf-8")) == {"fresh": True}
+    assert not target.with_name(target.name + ".tmp").exists()
+
+
 def test_matched_scaffold_confirmation_is_frozen_fresh_and_resumable() -> None:
     source = _source()
     assert "audit_unopened_confirmation_outputs" in source

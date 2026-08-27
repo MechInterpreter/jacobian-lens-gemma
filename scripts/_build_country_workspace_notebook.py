@@ -94,6 +94,12 @@ CAPABILITY_PATH = RUN_DIR / "country_capability_report.json"
 LOCALIZATION_PATH = RUN_DIR / "country_direct_answer_localization_report.json"
 
 def _write_report(path, report):
+    # Every other caller writes into a directory a RunStore/UnitStore already
+    # created by opening there first. A stage that writes its first report
+    # into a brand-new diagnostics subdirectory -- as Stage 6F does on a
+    # genuinely fresh run -- has no store to have done that. mkdir is a no-op
+    # when the directory already exists, so this is safe for every caller.
+    path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + ".tmp")
     temporary.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
     os.replace(temporary, path)
