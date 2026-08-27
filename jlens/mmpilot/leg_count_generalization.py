@@ -16,6 +16,7 @@ from jlens.mmpilot.store import payload_checksum
 VERSION = "mmpilot.multimodal_leg_count_generalization.v1"
 SOURCE = "bird"
 TARGET_ANSWERS = {"cat": "4", "ant": "6", "spider": "8"}
+NUMBER_WORDS = {"2": "two", "4": "four", "6": "six", "8": "eight"}
 CALIBRATION_TARGET = "cat"
 NOVEL_TARGETS = ("ant", "spider")
 MODALITIES = ("text", "image", "spoken_audio")
@@ -24,6 +25,19 @@ CONDITIONS = ("exact", "zero", "random", "unrelated")
 
 class LegCountGeneralizationRefused(RuntimeError):
     """The frozen study is incomplete or internally inconsistent."""
+
+
+def leg_count_answer_matches(observed: str, expected: str) -> bool:
+    """Match an unrestricted number answer without constraining generation.
+
+    The model is never shown these alternatives.  They are a predeclared
+    output-side equivalence between a digit and its ordinary English spelling.
+    """
+
+    normalized = " ".join(str(observed).strip().casefold().split())
+    expected_digit = str(expected).strip()
+    allowed = {expected_digit, NUMBER_WORDS[expected_digit]}
+    return normalized in allowed
 
 
 def frozen_design() -> dict:
@@ -351,6 +365,7 @@ __all__ = [
     "CALIBRATION_TARGET",
     "CONDITIONS",
     "MODALITIES",
+    "NUMBER_WORDS",
     "NOVEL_TARGETS",
     "SOURCE",
     "TARGET_ANSWERS",
@@ -359,4 +374,5 @@ __all__ = [
     "confirmation_report",
     "development_report",
     "frozen_design",
+    "leg_count_answer_matches",
 ]

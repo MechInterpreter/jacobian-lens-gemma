@@ -6,6 +6,7 @@ from jlens.mmpilot.leg_count_generalization import (
     confirmation_report,
     development_report,
     frozen_design,
+    leg_count_answer_matches,
 )
 
 
@@ -53,6 +54,12 @@ def test_frozen_design_uses_distinct_answers_and_no_refit():
     }
     assert design["confirmation"]["candidates"] == 22
     assert design["confirmation"]["recruited"] == 12
+
+
+def test_number_answers_accept_digit_or_word_without_candidate_scoring():
+    assert leg_count_answer_matches("6", "6")
+    assert leg_count_answer_matches(" six ", "6")
+    assert not leg_count_answer_matches("eight", "6")
 
 
 def test_development_selects_only_passing_novel_targets():

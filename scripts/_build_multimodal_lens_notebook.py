@@ -7651,19 +7651,19 @@ LEG_GENERALIZATION_DEVELOPMENT_REPORT = None
 if REAL_MODE and LEG_GENERALIZATION_DEVELOPMENT_ENABLED:
     from jlens.lens import JacobianLens
     from jlens.mmpilot.coordinate_swap import (
-        ConceptToken, random_two_direction_basis, resolve_concept_token,
+        random_two_direction_basis, resolve_concept_token,
     )
-    from jlens.mmpilot.full_vocabulary import answer_token_table
     from jlens.mmpilot.leg_count_generalization import (
         CONDITIONS as LEG_CONDITIONS,
         MODALITIES as LEG_MODALITIES,
+        NUMBER_WORDS as LEG_NUMBER_WORDS,
         TARGET_ANSWERS as LEG_TARGET_ANSWERS,
-        development_report,
+        development_report, leg_count_answer_matches,
     )
     from jlens.mmpilot.multimodal_instrument import MODEL_DTYPE_REALIZATION
     from jlens.mmpilot.multimodal_lens import (
         build_swap_bases_for_lens, confirmation_leg_count_prompt,
-        load_broad_pooled_development_source, open_answer_matches,
+        load_broad_pooled_development_source,
         unrestricted_swap_trial,
     )
     from jlens.mmpilot.store import RunFingerprint, UnitStore, safe_key
@@ -7691,17 +7691,23 @@ if REAL_MODE and LEG_GENERALIZATION_DEVELOPMENT_ENABLED:
         "layers": list(BROAD_POOLED_BAND),
         "alpha": 1.0,
         "positions": "every_original_prompt_position",
+        "answer_matching": "digit_or_english_number_word.v1",
+        "answer_basis_surfaces": dict(LEG_NUMBER_WORDS),
         "fresh_confirmation_opened": False,
         "fitting_performed": False,
         "commit": COMMIT,
     }
     _development_digest = payload_checksum(_development_config)
-    LEG_GENERALIZATION_DEVELOPMENT_ROOT.mkdir(parents=True, exist_ok=True)
-    (LEG_GENERALIZATION_DEVELOPMENT_ROOT / "scientific_config.json").write_text(
+    _development_run_root = (
+        LEG_GENERALIZATION_DEVELOPMENT_ROOT
+        / f"legdev_real_{_development_digest.removeprefix('sha256:')[:12]}"
+    )
+    _development_run_root.mkdir(parents=True, exist_ok=True)
+    (_development_run_root / "scientific_config.json").write_text(
         json.dumps(_development_config, indent=2), encoding="utf-8"
     )
     _development_store = UnitStore(
-        LEG_GENERALIZATION_DEVELOPMENT_ROOT,
+        _development_run_root,
         RunFingerprint(
             mode="real", model_repo_id=MODEL_REPO_ID,
             model_revision=MODEL_REVISION, processor_revision=MODEL_REVISION,
@@ -7742,7 +7748,7 @@ if REAL_MODE and LEG_GENERALIZATION_DEVELOPMENT_ENABLED:
                     "image_id": str(_group["image_id"]),
                     "modality": _modality, "expected": "2",
                     "generated": _surface,
-                    "pass": open_answer_matches(_surface, "2"),
+                    "pass": leg_count_answer_matches(_surface, "2"),
                 }
                 _development_store.save("capability", _key, _row)
             _capability_rows.append(_row)
@@ -7770,17 +7776,9 @@ if REAL_MODE and LEG_GENERALIZATION_DEVELOPMENT_ENABLED:
         name: resolve_concept_token(BACKEND.encode_candidate, name)
         for name in _concept_names
     }
-    _answer_table = answer_token_table(
-        BACKEND, ("2", "4", "6", "8"),
-        required=("2", "4", "6", "8"), leading_space=True,
-    )
     _answer_tokens = {
-        answer: ConceptToken(
-            concept=answer, token_id=int(token_id),
-            token_text=str(_answer_table["supported"][answer]["surface"]),
-            variant="single_token_space_prefixed_digit",
-        )
-        for answer, token_id in _answer_table["token_ids"].items()
+        answer: resolve_concept_token(BACKEND.encode_candidate, word)
+        for answer, word in LEG_NUMBER_WORDS.items()
     }
     _concept_bases = {
         target: build_swap_bases_for_lens(
@@ -7826,15 +7824,17 @@ if REAL_MODE and LEG_GENERALIZATION_DEVELOPMENT_ENABLED:
         ].float()
         trial = unrestricted_swap_trial(
             BACKEND, inputs, bases=bases, alpha=alpha,
-            target_token_id=int(_answer_table["token_ids"][LEG_TARGET_ANSWERS[target]]),
-            source_token_id=int(_answer_table["token_ids"]["2"]),
+            target_token_id=int(_answer_tokens[LEG_TARGET_ANSWERS[target]].token_id),
+            source_token_id=int(_answer_tokens["2"].token_id),
             clean_logits=clean_logits, compact_positions=True,
             realization_policy=MODEL_DTYPE_REALIZATION,
         )
         surface = BACKEND.decode_token(int(trial["patched_top_token_id"])).strip()
         trial = {
             **trial, "patched_surface": surface,
-            "success": open_answer_matches(surface, LEG_TARGET_ANSWERS[target]),
+            "success": leg_count_answer_matches(
+                surface, LEG_TARGET_ANSWERS[target]
+            ),
         }
         stored = _compact_leg_trial(
             trial, group=group, modality=modality, target=target,
@@ -7898,6 +7898,7 @@ if REAL_MODE and LEG_GENERALIZATION_DEVELOPMENT_ENABLED:
         **LEG_GENERALIZATION_DEVELOPMENT_REPORT,
         "scientific_config": _development_config,
         "population_digest": _population["population_digest"],
+        "run_dir": str(_development_run_root),
         "recruited_group_ids": [str(row["group_id"]) for row in _recruited],
     }
     LEG_GENERALIZATION_DEVELOPMENT_REPORT["report_checksum"] = payload_checksum({
@@ -7952,10 +7953,11 @@ if RUN_STAGE7C_FREEZE_LEG_GENERALIZATION_CONFIRMATION:
         _confirmation_ids = [
             str(row["group_id"]) for row in _confirmation_candidates
         ]
-        _development_unit_root = LEG_GENERALIZATION_DEVELOPMENT_ROOT / "units"
         _opened = []
-        if _development_unit_root.is_dir():
-            for _path in _development_unit_root.glob("*/*.json"):
+        if LEG_GENERALIZATION_DEVELOPMENT_ROOT.is_dir():
+            for _path in LEG_GENERALIZATION_DEVELOPMENT_ROOT.rglob(
+                "units/*/*.json"
+            ):
                 _raw = _path.read_text(encoding="utf-8")
                 if any(group_id in _raw for group_id in _confirmation_ids):
                     _opened.append(str(_path))
@@ -8007,19 +8009,19 @@ LEG_GENERALIZATION_CONFIRMATION_REPORT = None
 if REAL_MODE and LEG_GENERALIZATION_CONFIRMATION_ENABLED:
     from jlens.lens import JacobianLens
     from jlens.mmpilot.coordinate_swap import (
-        ConceptToken, random_two_direction_basis, resolve_concept_token,
+        random_two_direction_basis, resolve_concept_token,
     )
-    from jlens.mmpilot.full_vocabulary import answer_token_table
     from jlens.mmpilot.leg_count_generalization import (
         CONDITIONS as LEG_CONDITIONS,
         MODALITIES as LEG_MODALITIES,
+        NUMBER_WORDS as LEG_NUMBER_WORDS,
         TARGET_ANSWERS as LEG_TARGET_ANSWERS,
-        confirmation_report,
+        confirmation_report, leg_count_answer_matches,
     )
     from jlens.mmpilot.multimodal_instrument import MODEL_DTYPE_REALIZATION
     from jlens.mmpilot.multimodal_lens import (
         build_swap_bases_for_lens, confirmation_leg_count_prompt,
-        load_broad_pooled_development_source, open_answer_matches,
+        load_broad_pooled_development_source,
         unrestricted_swap_trial,
     )
     from jlens.mmpilot.store import RunFingerprint, UnitStore, safe_key
@@ -8060,16 +8062,24 @@ if REAL_MODE and LEG_GENERALIZATION_CONFIRMATION_ENABLED:
         "layers": list(BROAD_POOLED_BAND),
         "alpha": 1.0,
         "positions": "every_original_prompt_position",
+        "answer_matching": "digit_or_english_number_word.v1",
+        "answer_basis_surfaces": {
+            answer: LEG_NUMBER_WORDS[answer] for answer in ("2", "4", "6", "8")
+        },
         "fitting_performed": False,
         "commit": COMMIT,
     }
     _confirmation_digest = payload_checksum(_confirmation_config)
-    LEG_GENERALIZATION_CONFIRMATION_ROOT.mkdir(parents=True, exist_ok=True)
-    (LEG_GENERALIZATION_CONFIRMATION_ROOT / "scientific_config.json").write_text(
+    _confirmation_run_root = (
+        LEG_GENERALIZATION_CONFIRMATION_ROOT
+        / f"legconfirm_real_{_confirmation_digest.removeprefix('sha256:')[:12]}"
+    )
+    _confirmation_run_root.mkdir(parents=True, exist_ok=True)
+    (_confirmation_run_root / "scientific_config.json").write_text(
         json.dumps(_confirmation_config, indent=2), encoding="utf-8"
     )
     _confirmation_store = UnitStore(
-        LEG_GENERALIZATION_CONFIRMATION_ROOT,
+        _confirmation_run_root,
         RunFingerprint(
             mode="real", model_repo_id=MODEL_REPO_ID,
             model_revision=MODEL_REVISION, processor_revision=MODEL_REVISION,
@@ -8109,7 +8119,7 @@ if REAL_MODE and LEG_GENERALIZATION_CONFIRMATION_ENABLED:
                     "image_id": str(_group["image_id"]),
                     "modality": _modality, "expected": "2",
                     "generated": _surface,
-                    "pass": open_answer_matches(_surface, "2"),
+                    "pass": leg_count_answer_matches(_surface, "2"),
                 }
                 _confirmation_store.save("capability", _key, _row)
             _capability_rows.append(_row)
@@ -8137,17 +8147,9 @@ if REAL_MODE and LEG_GENERALIZATION_CONFIRMATION_ENABLED:
         name: resolve_concept_token(BACKEND.encode_candidate, name)
         for name in _concept_names
     }
-    _answer_table = answer_token_table(
-        BACKEND, ("2", "4", "6", "8"),
-        required=("2", "4", "6", "8"), leading_space=True,
-    )
     _answer_tokens = {
-        answer: ConceptToken(
-            concept=answer, token_id=int(token_id),
-            token_text=str(_answer_table["supported"][answer]["surface"]),
-            variant="single_token_space_prefixed_digit",
-        )
-        for answer, token_id in _answer_table["token_ids"].items()
+        answer: resolve_concept_token(BACKEND.encode_candidate, word)
+        for answer, word in LEG_NUMBER_WORDS.items()
     }
     _concept_bases = {
         target: build_swap_bases_for_lens(
@@ -8195,15 +8197,17 @@ if REAL_MODE and LEG_GENERALIZATION_CONFIRMATION_ENABLED:
         ].float()
         trial = unrestricted_swap_trial(
             BACKEND, inputs, bases=bases, alpha=alpha,
-            target_token_id=int(_answer_table["token_ids"][LEG_TARGET_ANSWERS[target]]),
-            source_token_id=int(_answer_table["token_ids"]["2"]),
+            target_token_id=int(_answer_tokens[LEG_TARGET_ANSWERS[target]].token_id),
+            source_token_id=int(_answer_tokens["2"].token_id),
             clean_logits=clean_logits, compact_positions=True,
             realization_policy=MODEL_DTYPE_REALIZATION,
         )
         surface = BACKEND.decode_token(int(trial["patched_top_token_id"])).strip()
         trial = {
             **trial, "patched_surface": surface,
-            "success": open_answer_matches(surface, LEG_TARGET_ANSWERS[target]),
+            "success": leg_count_answer_matches(
+                surface, LEG_TARGET_ANSWERS[target]
+            ),
         }
         stored = _compact_leg_trial(
             trial, group=group, modality=modality, target=target,
@@ -8251,6 +8255,7 @@ if REAL_MODE and LEG_GENERALIZATION_CONFIRMATION_ENABLED:
         "scientific_config": _confirmation_config,
         "confirmation_design": _confirmation_design,
         "population_digest": _population["population_digest"],
+        "run_dir": str(_confirmation_run_root),
         "recruited_group_ids": [str(row["group_id"]) for row in _recruited],
     }
     LEG_GENERALIZATION_CONFIRMATION_REPORT["report_checksum"] = payload_checksum({
