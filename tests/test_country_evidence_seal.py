@@ -228,6 +228,72 @@ def test_freshness_audit_detects_only_generated_confirmation_outputs(tmp_path) -
     assert spent["findings"][0]["unit_id"] == "fresh-1"
 
 
+def test_freshness_audit_uses_bounded_fingerprint_first_scan(tmp_path) -> None:
+    candidate = tmp_path / "run-1" / "diagnostics" / "confirmation"
+    candidate.mkdir(parents=True)
+    (candidate / "fingerprint.json").write_text(
+        '{"manifest_checksum":"population-1","split_id":"other"}',
+        encoding="utf-8",
+    )
+    units = candidate / "units" / "intervention"
+    units.mkdir(parents=True)
+    (units / "one.json").write_text(
+        '{"payload":{"unit_id":"fresh-1","generated_text":"Asia"}}',
+        encoding="utf-8",
+    )
+    irrelevant = tmp_path / "unbounded" / "deep" / "tree"
+    irrelevant.mkdir(parents=True)
+    (irrelevant / "hidden.json").write_text(
+        '{"unit_id":"fresh-1","generated_text":"ignored"}', encoding="utf-8"
+    )
+    report = audit_unopened_confirmation_outputs(
+        tmp_path,
+        ("fresh-1",),
+        manifest_checksum="population-1",
+        split_id="confirmation-1",
+    )
+    assert report["fresh"] is False
+    assert report["audit_strategy"] == "bounded_fingerprint_first_v1"
+    assert report["fingerprints_scanned"] == 1
+    assert report["candidate_json_files"] == 1
+
+
+def test_freshness_audit_surfaces_a_store_under_a_different_population(
+    tmp_path,
+) -> None:
+    """A run with a different manifest_checksum is excluded, not hidden."""
+    matching = tmp_path / "run-1"
+    matching.mkdir()
+    (matching / "fingerprint.json").write_text(
+        '{"manifest_checksum":"population-1","split_id":"other"}',
+        encoding="utf-8",
+    )
+    (matching / "report.json").write_text(
+        '{"unit_id":"unrelated","generated_text":"x"}', encoding="utf-8"
+    )
+    stale = tmp_path / "run-2"
+    stale.mkdir()
+    (stale / "fingerprint.json").write_text(
+        '{"manifest_checksum":"population-0-stale","split_id":"stale-split"}',
+        encoding="utf-8",
+    )
+    report = audit_unopened_confirmation_outputs(
+        tmp_path,
+        ("fresh-1",),
+        manifest_checksum="population-1",
+        split_id="confirmation-1",
+    )
+    assert report["fresh"] is True
+    assert report["fingerprints_scanned"] == 2
+    assert len(report["unmatched_fingerprints"]) == 1
+    assert report["unmatched_fingerprints"][0]["manifest_checksum"] == (
+        "population-0-stale"
+    )
+    assert report["distinct_unmatched_manifest_checksums"] == [
+        "population-0-stale"
+    ]
+
+
 def test_fresh_confirmation_report_accepts_pooled_cross_modal_effect() -> None:
     state = []
     coordinate = []

@@ -3236,7 +3236,13 @@ if RUN_STAGE6F_CPU_FREEZE_MATCHED_CONFIRMATION:
     _confirmation_ids = [row["unit_id"] for row in _confirmation_rows]
     if len(_confirmation_rows) != 2 * N_CONFIRMATION_PER_COUNTRY:
         raise RuntimeError("the frozen country confirmation population is incomplete")
-    _freshness = audit_unopened_confirmation_outputs(RUNS_ROOT, _confirmation_ids)
+    _confirmation_split_id = payload_checksum(_confirmation_ids)
+    _freshness = audit_unopened_confirmation_outputs(
+        RUNS_ROOT,
+        _confirmation_ids,
+        manifest_checksum=PREPARED["population_digest"],
+        split_id=_confirmation_split_id,
+    )
     if not _freshness["fresh"]:
         raise RuntimeError(
             "proposed confirmation outputs were previously opened:\n"
@@ -3265,6 +3271,7 @@ if RUN_STAGE6F_CPU_FREEZE_MATCHED_CONFIRMATION:
         "familywise_alpha": 0.05,
         "familywise_tests": "Holm across pooled exact vs zero, random, unrelated",
         "confirmation_units": _confirmation_ids,
+        "confirmation_split_id": _confirmation_split_id,
         "confirmation_per_source_country": N_CONFIRMATION_PER_COUNTRY,
         "freshness_audit": _freshness,
         "frozen_before_confirmation_outputs": True,
@@ -3279,6 +3286,28 @@ if RUN_STAGE6F_CPU_FREEZE_MATCHED_CONFIRMATION:
     print("  design", _matched_confirmation_design_path)
     print("  checksum", _design["design_checksum"])
     print("  freshness", _freshness["fresh"], "findings", _freshness["n_json_findings"])
+    print(
+        "  bounded audit", _freshness["fingerprints_scanned"], "fingerprints,",
+        _freshness["candidate_json_files"], "candidate JSON files",
+    )
+    if _freshness["distinct_unmatched_manifest_checksums"]:
+        # Every run store this study writes should carry today's population
+        # digest. One that doesn't was excluded from the bounded scan and
+        # never had its JSON opened -- unlike the old recursive scan, which
+        # would have read it regardless. This does not mean it is
+        # contaminating; it means it was never checked, so read it by hand
+        # before trusting "freshness True" from this run.
+        print(
+            "  WARNING", len(_freshness["unmatched_fingerprints"]),
+            "run store(s) under", RUNS_ROOT,
+            "carry a DIFFERENT population digest and were NOT scanned:",
+        )
+        for _entry in _freshness["unmatched_fingerprints"]:
+            print("   ", _entry["path"], "manifest_checksum=", _entry["manifest_checksum"])
+        print(
+            "  Inspect those stores by hand for the 28 confirmation unit ids "
+            "before trusting this freshness result."
+        )
     print("  primary pooled image+spoken_audio; text secondary")
     print("  fitting 0; backward passes 0; model forwards 0")
     print("STOP THIS CPU RUNTIME. Run Stage 6G alone on an 80 GB A100.")

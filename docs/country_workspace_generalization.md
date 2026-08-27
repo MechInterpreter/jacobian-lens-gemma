@@ -157,10 +157,16 @@ not another development search.
 
 Stage 6F freezes that test on CPU before reading any output associated with
 the 28 reserved France and China confirmation examples. It records their unit
-IDs, audits every JSON artifact under the run root for prior generated output,
+IDs, uses a bounded fingerprint-first audit to inspect only country unit stores
+bound to the prepared population or reserved split for prior generated output,
 and pins France-to-China, continent, exact alpha one, L24-L31, the final prompt
-token, and the matched France scaffold. Image and spoken audio form the pooled
-primary endpoint; text is reported as secondary because development showed no
+token, and the matched France scaffold. Every run under this study binds to
+the same population digest, so the bounded scan should find every prior store
+belonging to it; it cannot detect a session that ran under a different digest,
+so it also records every fingerprint it opens but excludes, and prints a
+warning naming any that disagree with today's, so a stale digest is visible
+rather than silently narrowing what was checked. Image and spoken audio form
+the pooled primary endpoint; text is reported as secondary because development showed no
 text success. The primary gate requires at least 50% pooled exact success, a
 25-point margin over each of zero, random, and unrelated controls, evidence in
 both primary modalities, familywise-corrected paired significance, intact

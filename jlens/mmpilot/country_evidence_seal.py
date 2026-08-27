@@ -676,7 +676,11 @@ def matched_scaffold_report(
 
 
 def audit_unopened_confirmation_outputs(
-    runs_root: str | Path, confirmation_unit_ids: Sequence[str]
+    runs_root: str | Path,
+    confirmation_unit_ids: Sequence[str],
+    *,
+    manifest_checksum: str | None = None,
+    split_id: str | None = None,
 ) -> dict:
     """Find stored generated outputs tied to any proposed confirmation unit."""
 
@@ -709,11 +713,78 @@ def audit_unopened_confirmation_outputs(
                 walk(child, path)
 
     root = Path(runs_root)
-    for path in sorted(root.rglob("*.json")) if root.is_dir() else ():
+    candidate_paths: list[Path]
+    fingerprints_scanned = 0
+    candidate_stores: list[str] = []
+    # Every run this study writes binds its fingerprint to the same
+    # manifest_checksum (the population digest), so a bounded scan that
+    # matches on it should find every prior store belonging to this
+    # population -- *provided* that digest never changed across sessions.
+    # It is not re-derived here (that would require reopening the population
+    # itself), so this cannot detect a session that ran under a different
+    # digest and would therefore fall outside the bounded scan. Every
+    # fingerprint this audit actually reads is recorded below regardless of
+    # whether it matched, specifically so a second, unexpected
+    # manifest_checksum among them is visible in the printed report rather
+    # than silently narrowing what got scanned.
+    unmatched_fingerprints: list[dict] = []
+    if manifest_checksum is not None and split_id is not None and root.is_dir():
+        fingerprint_paths = sorted(
+            {
+                *root.glob("*/fingerprint.json"),
+                *root.glob("*/diagnostics/*/fingerprint.json"),
+            }
+        )
+        stores = []
+        for fingerprint_path in fingerprint_paths:
+            fingerprints_scanned += 1
+            try:
+                fingerprint = json.loads(
+                    fingerprint_path.read_text(encoding="utf-8")
+                )
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                continue
+            if (
+                fingerprint.get("manifest_checksum") == manifest_checksum
+                or fingerprint.get("split_id") == split_id
+            ):
+                stores.append(fingerprint_path.parent)
+            else:
+                unmatched_fingerprints.append(
+                    {
+                        "path": str(fingerprint_path),
+                        "manifest_checksum": fingerprint.get("manifest_checksum"),
+                        "split_id": fingerprint.get("split_id"),
+                    }
+                )
+        candidate_stores = [str(path) for path in stores]
+        candidate_paths = sorted(
+            {
+                path
+                for store in stores
+                for path in (
+                    *store.glob("*.json"),
+                    *store.glob("units/*/*.json"),
+                )
+                if path.name != "fingerprint.json"
+            }
+        )
+    else:
+        candidate_paths = sorted(root.rglob("*.json")) if root.is_dir() else []
+
+    json_files_read = 0
+    for path in candidate_paths:
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            raw = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             continue
+        if not any(unit_id in raw for unit_id in wanted):
+            continue
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        json_files_read += 1
         walk(payload, path)
     body = {
         "version": "mmpilot.country_confirmation_freshness_audit.v1",
@@ -722,6 +793,28 @@ def audit_unopened_confirmation_outputs(
         "n_json_findings": len(findings),
         "findings": findings,
         "fresh": not findings,
+        "audit_strategy": (
+            "bounded_fingerprint_first_v1"
+            if manifest_checksum is not None and split_id is not None
+            else "recursive_compatibility_v1"
+        ),
+        "fingerprints_scanned": fingerprints_scanned,
+        "candidate_stores": candidate_stores,
+        "candidate_json_files": len(candidate_paths),
+        "matching_json_files_read": json_files_read,
+        # Fingerprints this scan actually opened but excluded, because their
+        # manifest_checksum/split_id disagreed with today's. A run legitimately
+        # belonging to this population should never appear here; if one does,
+        # this population's digest was not stable across sessions and the
+        # bounded scan cannot be trusted without reconciling it by hand.
+        "unmatched_fingerprints": unmatched_fingerprints,
+        "distinct_unmatched_manifest_checksums": sorted(
+            {
+                entry["manifest_checksum"]
+                for entry in unmatched_fingerprints
+                if entry["manifest_checksum"] is not None
+            }
+        ),
     }
     return {**body, "audit_checksum": payload_checksum(body)}
 
