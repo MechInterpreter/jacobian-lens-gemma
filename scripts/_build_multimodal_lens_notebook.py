@@ -293,6 +293,17 @@ RUN_STAGE6C1_CATDOG_INSTRUMENT_AMENDMENT = False
 RUN_STAGE6D_CATDOG_FREEZE = False
 RUN_STAGE6E_CATDOG_CONFIRMATION = False
 
+# Stage 7 is the final no-refit target-generalization study.  It keeps the
+# confirmed bird-source method fixed and asks whether distinct injected target
+# identities produce distinct leg-count answers: cat=4, ant=6, spider=8.
+RUN_STAGE7A_FREEZE_LEG_GENERALIZATION_POPULATION = False
+RUN_STAGE7B_LEG_GENERALIZATION_DEVELOPMENT = False
+RUN_STAGE7C_FREEZE_LEG_GENERALIZATION_CONFIRMATION = False
+RUN_STAGE7D_LEG_GENERALIZATION_CONFIRMATION = False
+CONFIRM_LEG_GENERALIZATION_DEVELOPMENT_BUDGET = False
+CONFIRM_LEG_GENERALIZATION_CONFIRMATION_BUDGET = False
+CONFIRM_LEG_GENERALIZATION_FP32_A100 = False
+
 # The frozen cat->dog scientific target and every tunable it uses. Declared
 # here, not in section 19's own cell, for the same reason the switches above
 # are: a later cell that redeclared these would silently discard whatever
@@ -633,6 +644,18 @@ FOLLOWUP_STAGES = {
     "6C1_catdog_instrument_amendment": RUN_STAGE6C1_CATDOG_INSTRUMENT_AMENDMENT,
     "6D_catdog_freeze": RUN_STAGE6D_CATDOG_FREEZE,
     "6E_catdog_confirmation": RUN_STAGE6E_CATDOG_CONFIRMATION,
+    "7A_leg_generalization_population": (
+        RUN_STAGE7A_FREEZE_LEG_GENERALIZATION_POPULATION
+    ),
+    "7B_leg_generalization_development": (
+        RUN_STAGE7B_LEG_GENERALIZATION_DEVELOPMENT
+    ),
+    "7C_leg_generalization_freeze": (
+        RUN_STAGE7C_FREEZE_LEG_GENERALIZATION_CONFIRMATION
+    ),
+    "7D_leg_generalization_confirmation": (
+        RUN_STAGE7D_LEG_GENERALIZATION_CONFIRMATION
+    ),
 }
 if sum(1 for value in FOLLOWUP_STAGES.values() if value) > 1:
     raise RuntimeError(
@@ -662,6 +685,8 @@ MODEL_STAGE = any((
     RUN_STAGE5B1RC_CORRECTED_EXPLORATORY,
     RUN_STAGE5B3_NEW_PROPERTY_CONFIRMATION,
     RUN_STAGE5C_ASYMMETRY_REPLICATION,
+    RUN_STAGE7B_LEG_GENERALIZATION_DEVELOPMENT,
+    RUN_STAGE7D_LEG_GENERALIZATION_CONFIRMATION,
 ))
 MODEL_ENABLED = bool(MODEL_STAGE and CONFIRM_MODEL_LOAD)
 FIT_ENABLED = bool(RUN_STAGE1_FIT_LENSES and MODEL_ENABLED and CONFIRM_FIT_BUDGET)
@@ -726,6 +751,18 @@ NEW_PROPERTY_CONFIRM_ENABLED = bool(
 ASYMMETRY_ENABLED = bool(
     RUN_STAGE5C_ASYMMETRY_REPLICATION and MODEL_ENABLED and CONFIRM_ASYMMETRY_BUDGET
 )
+LEG_GENERALIZATION_DEVELOPMENT_ENABLED = bool(
+    RUN_STAGE7B_LEG_GENERALIZATION_DEVELOPMENT
+    and MODEL_ENABLED
+    and CONFIRM_LEG_GENERALIZATION_DEVELOPMENT_BUDGET
+    and CONFIRM_LEG_GENERALIZATION_FP32_A100
+)
+LEG_GENERALIZATION_CONFIRMATION_ENABLED = bool(
+    RUN_STAGE7D_LEG_GENERALIZATION_CONFIRMATION
+    and MODEL_ENABLED
+    and CONFIRM_LEG_GENERALIZATION_CONFIRMATION_BUDGET
+    and CONFIRM_LEG_GENERALIZATION_FP32_A100
+)
 for _name, _requested, _enabled in (
     ("STAGE 5A LOCALIZATION", RUN_STAGE5A_BAND_LOCALIZATION, LOCALIZATION_ENABLED),
     ("STAGE 5B00 PROPERTY PROMPT SCREEN", RUN_STAGE5B00_PROPERTY_PROMPT_SCREEN, PROPERTY_PROMPT_SCREEN_ENABLED),
@@ -733,6 +770,8 @@ for _name, _requested, _enabled in (
     ("STAGE 5B1RC CORRECTED EXPLORATORY", RUN_STAGE5B1RC_CORRECTED_EXPLORATORY, CORRECTED_EXPLORATORY_ENABLED),
     ("STAGE 5B3 NEW-PROPERTY CONFIRMATION", RUN_STAGE5B3_NEW_PROPERTY_CONFIRMATION, NEW_PROPERTY_CONFIRM_ENABLED),
     ("STAGE 5C ASYMMETRY REPLICATION", RUN_STAGE5C_ASYMMETRY_REPLICATION, ASYMMETRY_ENABLED),
+    ("STAGE 7B LEG GENERALIZATION DEVELOPMENT", RUN_STAGE7B_LEG_GENERALIZATION_DEVELOPMENT, LEG_GENERALIZATION_DEVELOPMENT_ENABLED),
+    ("STAGE 7D LEG GENERALIZATION CONFIRMATION", RUN_STAGE7D_LEG_GENERALIZATION_CONFIRMATION, LEG_GENERALIZATION_CONFIRMATION_ENABLED),
 ):
     if REAL_MODE and _requested and not _enabled:
         print(f"{_name} BLOCKED: confirm its printed budget above")
@@ -825,6 +864,18 @@ print("  conditions                exact, zero, random, unrelated")
 print("  primary endpoint          unrestricted next-token top1 = 4")
 print("  inference                 paired exact sign tests; Holm FWER", CONFIRMATION_FAMILYWISE_ALPHA)
 print("  resume                    one checksum-valid JSON per completed forward")
+print()
+print("STAGE 7 NO-REFIT LEG-COUNT GENERALIZATION")
+print("  frozen source             bird")
+print("  calibration / novel       cat=4 / ant=6, spider=8")
+print("  lens / band / alpha       existing pooled lens / L16-L40 / exact alpha=1")
+print("  positions                 every original prompt position")
+print("  new bird candidates       24 development + 24 confirmation")
+print("  recruited                 8 development + 12 confirmation")
+print("  development maximum       72 capability + 72 answer-leverage + 288 causal")
+print("  confirmation maximum      72 capability + 108 answer-leverage + 432 causal")
+print("  fitting / backward        0 / 0")
+print("  runtime                   fp32 80 GB A100; one JSON per completed condition")
 print()
 print("STAGE 3DA CONFIRMATION REALIZATION REPLICATION BUDGET")
 print("  what it measures          whether the completed confirmation's exchange")
@@ -1216,15 +1267,27 @@ code(
 BACKEND = BUNDLE = AUDIO_RECORD = None
 if REAL_MODE and MODEL_ENABLED:
     import getpass
+    import torch
     if not os.environ.get("HF_TOKEN"):
         os.environ["HF_TOKEN"] = getpass.getpass("HF_TOKEN (input hidden): ").strip()
     from jlens.mmpilot.real_backend import build_real_backend
     from jlens.mmpilot.tri_modal import assert_audio_protocol
+    _leg_generalization_gpu = bool(
+        RUN_STAGE7B_LEG_GENERALIZATION_DEVELOPMENT
+        or RUN_STAGE7D_LEG_GENERALIZATION_CONFIRMATION
+    )
+    if _leg_generalization_gpu:
+        from jlens.mmpilot.fp32_preflight import preflight_fp32_or_refuse
+        _fp32_preflight = preflight_fp32_or_refuse(
+            workspace_fraction=0.10, safety_margin=1.10,
+        )
+        print("Stage 7 fp32 preflight", _fp32_preflight["device_name"])
     BUNDLE = build_real_backend(
         MODEL_REPO_ID, revision=MODEL_REVISION, token=os.environ["HF_TOKEN"],
         device="cuda", allow_model_load=True, resolve_audio=True,
         expect_n_layers=EXPECT_N_LAYERS, expect_d_model=EXPECT_D_MODEL,
         expect_vocab_size=EXPECT_VOCAB,
+        dtype=(torch.float32 if _leg_generalization_gpu else torch.bfloat16),
     )
     if BUNDLE.audio_interface is None:
         raise RuntimeError("native spoken audio did not resolve: " + BUNDLE.audio_blocked_reason)
@@ -1232,6 +1295,12 @@ if REAL_MODE and MODEL_ENABLED:
         BUNDLE.audio_interface, expected_fingerprint=AUDIO_PROTOCOL_FINGERPRINT
     )
     BACKEND = BUNDLE.backend
+    if _leg_generalization_gpu:
+        _observed_dtype = str(next(BACKEND.hf_model.parameters()).dtype)
+        if _observed_dtype != "torch.float32":
+            raise RuntimeError(
+                f"Stage 7 requested fp32 but loaded {_observed_dtype}"
+            )
 elif not REAL_MODE:
     from jlens.mmpilot.mock import MockPilotBackend, MockWorld
     BACKEND = MockPilotBackend(MockWorld(), n_layers=4)
@@ -7397,6 +7466,820 @@ if REAL_MODE and RUN_STAGE6E_CATDOG_CONFIRMATION and CATDOG_CONFIRM_MODEL_LOADED
     print("checksum ", CATDOG_CONFIRMATION_REPORT["report_checksum"])
 elif RUN_STAGE6E_CATDOG_CONFIRMATION:
     print("Stage 6E requested but blocked; confirm its printed budget.")
+'''
+)
+
+markdown(
+    r"""
+## 20. Stage 7: no-refit target generalization with distinct answers
+
+This is the final extension of the confirmed bird-to-cat method, not a new
+lens search.  The source evidence is always a fresh bird photograph, its
+caption, or its spoken caption.  The exact alpha-one exchange targets cat,
+ant, or spider under the already confirmed pooled L16-L40 lens.  Their
+downstream answers are 4, 6, and 8, so success on a novel target cannot be
+explained by merely deleting the bird coordinate.
+
+Stage 7A freezes disjoint development and confirmation photographs on CPU.
+Stage 7B first checks clean bird capability and direct answer-coordinate
+leverage, then runs the exact identity exchanges on development.  Stage 7C
+freezes every passing novel target without opening confirmation outputs.
+Stage 7D tests the frozen targets once on the untouched population with Holm
+familywise correction.  No stage fits a lens or searches alpha, layers, or
+positions.
+"""
+)
+code(
+    r'''
+from jlens.mmpilot.leg_count_generalization import frozen_design
+
+LEG_GENERALIZATION_DESIGN = frozen_design()
+LEG_GENERALIZATION_SOURCE = "bird"
+LEG_GENERALIZATION_TARGET_ANSWERS = {"cat": "4", "ant": "6", "spider": "8"}
+LEG_GENERALIZATION_LAYERS = tuple(range(16, 41))
+LEG_GENERALIZATION_ALPHA = 1.0
+if LEG_GENERALIZATION_DESIGN["source"] != LEG_GENERALIZATION_SOURCE:
+    raise RuntimeError("the frozen Stage 7 source changed")
+if LEG_GENERALIZATION_DESIGN["target_answers"] != LEG_GENERALIZATION_TARGET_ANSWERS:
+    raise RuntimeError("the frozen Stage 7 target answers changed")
+if tuple(LEG_GENERALIZATION_DESIGN["layers"]) != LEG_GENERALIZATION_LAYERS:
+    raise RuntimeError("the frozen Stage 7 layer band changed")
+if LEG_GENERALIZATION_LAYERS != tuple(BROAD_POOLED_BAND):
+    raise RuntimeError("Stage 7 must reuse the confirmed L16-L40 band")
+LEG_GENERALIZATION_ROOT = RUNS_ROOT / "mmleggeneralization"
+LEG_GENERALIZATION_POPULATION_PATH = (
+    LEG_GENERALIZATION_ROOT / "frozen_population.json"
+)
+LEG_GENERALIZATION_DEVELOPMENT_ROOT = LEG_GENERALIZATION_ROOT / "development"
+LEG_GENERALIZATION_DEVELOPMENT_REPORT_PATH = (
+    LEG_GENERALIZATION_DEVELOPMENT_ROOT / "leg_count_generalization_development_report.json"
+)
+LEG_GENERALIZATION_CONFIRMATION_DESIGN_PATH = (
+    LEG_GENERALIZATION_ROOT / "confirmation_design.json"
+)
+LEG_GENERALIZATION_CONFIRMATION_ROOT = LEG_GENERALIZATION_ROOT / "confirmation"
+LEG_GENERALIZATION_CONFIRMATION_REPORT_PATH = (
+    LEG_GENERALIZATION_CONFIRMATION_ROOT
+    / "fresh_multimodal_leg_count_generalization_report.json"
+)
+
+if RUN_STAGE7A_FREEZE_LEG_GENERALIZATION_POPULATION:
+    from jlens.mmpilot.multimodal_followup import artifact_exclusion_audit
+    from jlens.mmpilot.multimodal_lens import select_causal_groups
+
+    if EXCLUSION_UNIVERSE is None:
+        raise RuntimeError("Stage 7A requires the completed exclusion audit")
+    _selected = select_causal_groups(
+        GROUPS,
+        concepts=("bird",),
+        n_per_concept=48,
+        excluded_image_ids=EXCLUSION_UNIVERSE["excluded_image_ids"],
+        seed="multimodal-distinct-leg-count-generalization-20260827-v1",
+        forbidden_concepts={"bird": ("cat", "ant", "spider")},
+    )["bird"]
+    _population_audit = artifact_exclusion_audit(
+        _selected, universe=EXCLUSION_UNIVERSE,
+        label="leg_count_generalization_frozen_population",
+    )
+    _population_body = {
+        "version": "mmpilot.multimodal_leg_count_population.v1",
+        "design_digest": LEG_GENERALIZATION_DESIGN["design_digest"],
+        "manifest_checksum": MANIFEST_CHECKSUM,
+        "exclusion_digest": EXCLUSION_UNIVERSE["exclusion_digest"],
+        "population_audit": _population_audit,
+        "selected_before_model_outputs": True,
+        "development": [
+            {"group_id": str(row["group_id"]), "image_id": str(row["image_id"])}
+            for row in _selected[:24]
+        ],
+        "confirmation": [
+            {"group_id": str(row["group_id"]), "image_id": str(row["image_id"])}
+            for row in _selected[24:]
+        ],
+        "fitting_performed": False,
+        "backward_passes": 0,
+    }
+    _population_body["population_digest"] = payload_checksum(_population_body)
+    LEG_GENERALIZATION_ROOT.mkdir(parents=True, exist_ok=True)
+    if LEG_GENERALIZATION_POPULATION_PATH.is_file():
+        _existing = json.loads(
+            LEG_GENERALIZATION_POPULATION_PATH.read_text(encoding="utf-8")
+        )
+        if _existing != _population_body:
+            raise RuntimeError("the frozen Stage 7 population changed")
+    else:
+        LEG_GENERALIZATION_POPULATION_PATH.write_text(
+            json.dumps(_population_body, indent=2), encoding="utf-8"
+        )
+    print("LEG-COUNT GENERALIZATION POPULATION FROZEN")
+    print("  development candidates", len(_population_body["development"]))
+    print("  confirmation candidates", len(_population_body["confirmation"]))
+    print("  overlap", bool(
+        {row["image_id"] for row in _population_body["development"]}
+        & {row["image_id"] for row in _population_body["confirmation"]}
+    ))
+    print("  population digest", _population_body["population_digest"])
+    print("  model forwards 0; fitting 0; backward passes 0")
+    print("STOP THIS CPU RUNTIME. Run Stage 7B alone on an 80 GB A100.")
+'''
+)
+
+code(
+    r'''
+def _leg_population_groups(split):
+    if not LEG_GENERALIZATION_POPULATION_PATH.is_file():
+        raise RuntimeError("run Stage 7A before any Stage 7 model work")
+    population = json.loads(
+        LEG_GENERALIZATION_POPULATION_PATH.read_text(encoding="utf-8")
+    )
+    expected = population.get("population_digest")
+    body = {key: value for key, value in population.items() if key != "population_digest"}
+    if expected != payload_checksum(body):
+        raise RuntimeError("the frozen Stage 7 population failed its checksum")
+    index = {str(group["group_id"]): group for group in GROUPS}
+    rows = []
+    for record in population[split]:
+        group = index.get(str(record["group_id"]))
+        if group is None or str(group["image_id"]) != str(record["image_id"]):
+            raise RuntimeError(f"cannot reconstruct frozen group {record}")
+        rows.append(group)
+    return population, rows
+
+
+def _leg_integrity(trial, layers):
+    return bool(
+        trial.get("all_prompt_positions_patched")
+        and list(trial.get("layers_patched") or []) == list(layers)
+        and trial.get("all_model_dtype_realizations_converged")
+        and float(trial.get("max_activation_norm_ratio", 99.0)) <= 1.25
+        and float(trial.get("max_update_to_activation_norm_ratio", 99.0)) <= 0.50
+    )
+
+
+def _compact_leg_trial(trial, *, group, modality, target, condition, expected):
+    return {
+        "group_id": str(group["group_id"]),
+        "image_id": str(group["image_id"]),
+        "modality": str(modality),
+        "source": "bird",
+        "target": str(target),
+        "expected": str(expected),
+        "condition": str(condition),
+        "patched_top_token_id": int(trial["patched_top_token_id"]),
+        "patched_surface": str(trial["patched_surface"]),
+        "success": bool(trial["success"]),
+        "integrity_pass": _leg_integrity(trial, BROAD_POOLED_BAND),
+        "layers_patched": list(trial["layers_patched"]),
+        "all_prompt_positions_patched": bool(trial["all_prompt_positions_patched"]),
+        "all_model_dtype_realizations_converged": bool(
+            trial.get("all_model_dtype_realizations_converged")
+        ),
+        "max_activation_norm_ratio": float(trial["max_activation_norm_ratio"]),
+        "max_update_to_activation_norm_ratio": float(
+            trial["max_update_to_activation_norm_ratio"]
+        ),
+        "max_post_cast_relative_coordinate_error": float(
+            trial.get("max_post_cast_relative_coordinate_error", 0.0)
+        ),
+    }
+'''
+)
+
+code(
+    r'''
+LEG_GENERALIZATION_DEVELOPMENT_REPORT = None
+if REAL_MODE and LEG_GENERALIZATION_DEVELOPMENT_ENABLED:
+    from jlens.lens import JacobianLens
+    from jlens.mmpilot.coordinate_swap import (
+        ConceptToken, random_two_direction_basis, resolve_concept_token,
+    )
+    from jlens.mmpilot.full_vocabulary import answer_token_table
+    from jlens.mmpilot.leg_count_generalization import (
+        CONDITIONS as LEG_CONDITIONS,
+        MODALITIES as LEG_MODALITIES,
+        TARGET_ANSWERS as LEG_TARGET_ANSWERS,
+        development_report,
+    )
+    from jlens.mmpilot.multimodal_instrument import MODEL_DTYPE_REALIZATION
+    from jlens.mmpilot.multimodal_lens import (
+        build_swap_bases_for_lens, confirmation_leg_count_prompt,
+        load_broad_pooled_development_source, open_answer_matches,
+        unrestricted_swap_trial,
+    )
+    from jlens.mmpilot.store import RunFingerprint, UnitStore, safe_key
+
+    _population, _development_candidates = _leg_population_groups("development")
+    _source_pin = load_broad_pooled_development_source(
+        BROAD_DEVELOPMENT_RUN_DIR,
+        expected_report_checksum=EXPECTED_BROAD_DEVELOPMENT_REPORT_CHECKSUM,
+        expected_population_digest=EXPECTED_BROAD_DEVELOPMENT_POPULATION_DIGEST,
+        expected_lens_checksum=EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+        expected_direction=CONFIRMATION_DIRECTION,
+    )
+    _lens = JacobianLens.load(_source_pin["lens_path"])
+    if _lens.source_layers != list(BROAD_POOLED_BAND):
+        raise RuntimeError("Stage 7 requires the checksum-pinned L16-L40 lens")
+    _development_config = {
+        "study": "multimodal_distinct_leg_count_generalization_development.v1",
+        "design_digest": LEG_GENERALIZATION_DESIGN["design_digest"],
+        "population_digest": _population["population_digest"],
+        "lens_checksum": EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+        "model_repo_id": MODEL_REPO_ID,
+        "model_revision": MODEL_REVISION,
+        "model_dtype": "float32",
+        "targets": dict(LEG_TARGET_ANSWERS),
+        "layers": list(BROAD_POOLED_BAND),
+        "alpha": 1.0,
+        "positions": "every_original_prompt_position",
+        "fresh_confirmation_opened": False,
+        "fitting_performed": False,
+        "commit": COMMIT,
+    }
+    _development_digest = payload_checksum(_development_config)
+    LEG_GENERALIZATION_DEVELOPMENT_ROOT.mkdir(parents=True, exist_ok=True)
+    (LEG_GENERALIZATION_DEVELOPMENT_ROOT / "scientific_config.json").write_text(
+        json.dumps(_development_config, indent=2), encoding="utf-8"
+    )
+    _development_store = UnitStore(
+        LEG_GENERALIZATION_DEVELOPMENT_ROOT,
+        RunFingerprint(
+            mode="real", model_repo_id=MODEL_REPO_ID,
+            model_revision=MODEL_REVISION, processor_revision=MODEL_REVISION,
+            layers=tuple(BROAD_POOLED_BAND),
+            lens_checksum=EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+            manifest_checksum=MANIFEST_CHECKSUM,
+            split_id=payload_checksum(_population["development"]),
+            intervention_config={
+                "design_digest": LEG_GENERALIZATION_DESIGN["design_digest"],
+                "targets": dict(LEG_TARGET_ANSWERS),
+                "conditions": list(LEG_CONDITIONS),
+                "alpha": 1.0, "positions": "all_original_prompt_positions",
+                "dtype": "float32",
+            },
+            extra={"study_digest": _development_digest},
+        ),
+    )
+    print("leg-generalization development run", _development_store.open())
+    print("lens reused", EXPECTED_BROAD_POOLED_LENS_CHECKSUM)
+    print("fitting performed False; backward passes 0")
+
+    _capability_rows = []
+    for _group in _development_candidates:
+        for _modality in LEG_MODALITIES:
+            _key = safe_key("legdevcap", _group["group_id"], _modality)
+            _row = _development_store.load("capability", _key)
+            if _row is None:
+                _inputs = build_group_inputs(
+                    _group, _modality,
+                    confirmation_leg_count_prompt(_modality, _group["caption"]),
+                )
+                _logits = BACKEND.forward_logits(_inputs.tensors)[
+                    0, _inputs.final_prompt_position
+                ].float()
+                _surface = BACKEND.decode_token(int(_logits.argmax())).strip()
+                _row = {
+                    "group_id": str(_group["group_id"]),
+                    "image_id": str(_group["image_id"]),
+                    "modality": _modality, "expected": "2",
+                    "generated": _surface,
+                    "pass": open_answer_matches(_surface, "2"),
+                }
+                _development_store.save("capability", _key, _row)
+            _capability_rows.append(_row)
+            if len(_capability_rows) == 1 or len(_capability_rows) % 24 == 0:
+                print("leg development capability", len(_capability_rows), "of", 72)
+    _recruited = []
+    for _group in _development_candidates:
+        _rows = [
+            row for row in _capability_rows
+            if row["group_id"] == str(_group["group_id"])
+        ]
+        if len(_rows) == 3 and all(row["pass"] for row in _rows):
+            _recruited.append(_group)
+        if len(_recruited) == 8:
+            break
+    if len(_recruited) != 8:
+        raise RuntimeError(
+            f"Stage 7 development recruited {len(_recruited)}/8 clean bird groups"
+        )
+    print("leg development recruited", len(_recruited), "/ 8")
+
+    _unembed = BACKEND.unembedding_weight()
+    _concept_names = ("bird", *LEG_TARGET_ANSWERS, *BROAD_POOLED_CONTROLS)
+    _concept_tokens = {
+        name: resolve_concept_token(BACKEND.encode_candidate, name)
+        for name in _concept_names
+    }
+    _answer_table = answer_token_table(
+        BACKEND, ("2", "4", "6", "8"),
+        required=("2", "4", "6", "8"), leading_space=True,
+    )
+    _answer_tokens = {
+        answer: ConceptToken(
+            concept=answer, token_id=int(token_id),
+            token_text=str(_answer_table["supported"][answer]["surface"]),
+            variant="single_token_space_prefixed_digit",
+        )
+        for answer, token_id in _answer_table["token_ids"].items()
+    }
+    _concept_bases = {
+        target: build_swap_bases_for_lens(
+            _lens, _unembed, layers=BROAD_POOLED_BAND,
+            source=_concept_tokens["bird"], target=_concept_tokens[target],
+        )
+        for target in LEG_TARGET_ANSWERS
+    }
+    _answer_bases = {
+        target: build_swap_bases_for_lens(
+            _lens, _unembed, layers=BROAD_POOLED_BAND,
+            source=_answer_tokens["2"],
+            target=_answer_tokens[LEG_TARGET_ANSWERS[target]],
+        )
+        for target in LEG_TARGET_ANSWERS
+    }
+    _random_bases = {
+        target: {
+            layer: random_two_direction_basis(
+                basis, seed=20260827 + 1000 * index + layer
+            )
+            for layer, basis in _concept_bases[target].items()
+        }
+        for index, target in enumerate(LEG_TARGET_ANSWERS)
+    }
+    _unrelated_bases = build_swap_bases_for_lens(
+        _lens, _unembed, layers=BROAD_POOLED_BAND,
+        source=_concept_tokens[BROAD_POOLED_CONTROLS[0]],
+        target=_concept_tokens[BROAD_POOLED_CONTROLS[1]],
+    )
+
+    def _run_leg_trial(group, modality, target, condition, alpha, bases, prefix):
+        key = safe_key(prefix, group["group_id"], modality, target, condition)
+        stored = _development_store.load("intervention", key)
+        if stored is not None:
+            return stored, "reused"
+        inputs = build_group_inputs(
+            group, modality,
+            confirmation_leg_count_prompt(modality, group["caption"]),
+        )
+        clean_logits = BACKEND.forward_logits(inputs.tensors)[
+            0, inputs.final_prompt_position
+        ].float()
+        trial = unrestricted_swap_trial(
+            BACKEND, inputs, bases=bases, alpha=alpha,
+            target_token_id=int(_answer_table["token_ids"][LEG_TARGET_ANSWERS[target]]),
+            source_token_id=int(_answer_table["token_ids"]["2"]),
+            clean_logits=clean_logits, compact_positions=True,
+            realization_policy=MODEL_DTYPE_REALIZATION,
+        )
+        surface = BACKEND.decode_token(int(trial["patched_top_token_id"])).strip()
+        trial = {
+            **trial, "patched_surface": surface,
+            "success": open_answer_matches(surface, LEG_TARGET_ANSWERS[target]),
+        }
+        stored = _compact_leg_trial(
+            trial, group=group, modality=modality, target=target,
+            condition=condition, expected=LEG_TARGET_ANSWERS[target],
+        )
+        _development_store.save("intervention", key, stored)
+        return stored, "computed"
+
+    _leverage_rows = []
+    for _target in LEG_TARGET_ANSWERS:
+        for _group in _recruited:
+            for _modality in LEG_MODALITIES:
+                _row, _work = _run_leg_trial(
+                    _group, _modality, _target, "answer_exchange", 1.0,
+                    _answer_bases[_target], "legdevleverage",
+                )
+                _leverage_rows.append(_row)
+                if len(_leverage_rows) == 1 or len(_leverage_rows) % 24 == 0:
+                    print("answer leverage", len(_leverage_rows), "of", 72, _work)
+    _leverage_targets = {
+        target for target in LEG_TARGET_ANSWERS
+        if all(
+            sum(
+                row["success"] for row in _leverage_rows
+                if row["target"] == target and row["modality"] == modality
+            ) >= 6
+            and all(
+                row["integrity_pass"] for row in _leverage_rows
+                if row["target"] == target and row["modality"] == modality
+            )
+            for modality in LEG_MODALITIES
+        )
+    }
+    print("targets with answer leverage", sorted(_leverage_targets))
+
+    _trial_rows = []
+    for _target in LEG_TARGET_ANSWERS:
+        if _target not in _leverage_targets:
+            continue
+        _conditions = (
+            ("exact", 1.0, _concept_bases[_target]),
+            ("zero", 0.0, _concept_bases[_target]),
+            ("random", 1.0, _random_bases[_target]),
+            ("unrelated", 1.0, _unrelated_bases),
+        )
+        for _group in _recruited:
+            for _modality in LEG_MODALITIES:
+                for _condition, _alpha, _bases in _conditions:
+                    _row, _work = _run_leg_trial(
+                        _group, _modality, _target, _condition, _alpha,
+                        _bases, "legdevtrial",
+                    )
+                    _trial_rows.append(_row)
+                    if len(_trial_rows) == 1 or len(_trial_rows) % 48 == 0:
+                        print("leg development trials", len(_trial_rows), _work)
+
+    LEG_GENERALIZATION_DEVELOPMENT_REPORT = development_report(
+        _leverage_rows, _trial_rows, expected_n=8,
+    )
+    LEG_GENERALIZATION_DEVELOPMENT_REPORT = {
+        **LEG_GENERALIZATION_DEVELOPMENT_REPORT,
+        "scientific_config": _development_config,
+        "population_digest": _population["population_digest"],
+        "recruited_group_ids": [str(row["group_id"]) for row in _recruited],
+    }
+    LEG_GENERALIZATION_DEVELOPMENT_REPORT["report_checksum"] = payload_checksum({
+        key: value for key, value in LEG_GENERALIZATION_DEVELOPMENT_REPORT.items()
+        if key != "report_checksum"
+    })
+    _development_store.save(
+        "metric", "leg_count_generalization_development",
+        LEG_GENERALIZATION_DEVELOPMENT_REPORT,
+    )
+    LEG_GENERALIZATION_DEVELOPMENT_REPORT_PATH.write_text(
+        json.dumps(LEG_GENERALIZATION_DEVELOPMENT_REPORT, indent=2),
+        encoding="utf-8",
+    )
+    print("=" * 96)
+    print("LEG-COUNT GENERALIZATION DEVELOPMENT --",
+          LEG_GENERALIZATION_DEVELOPMENT_REPORT["verdict"])
+    print("selected novel targets",
+          LEG_GENERALIZATION_DEVELOPMENT_REPORT["selected_novel_targets"])
+    for _cell in LEG_GENERALIZATION_DEVELOPMENT_REPORT["effect_cells"]:
+        print(_cell["target"], _cell["modality"], {
+            name: f"{row['successes']}/{row['n']}"
+            for name, row in _cell["conditions"].items()
+        })
+    print("report", LEG_GENERALIZATION_DEVELOPMENT_REPORT_PATH)
+elif RUN_STAGE7B_LEG_GENERALIZATION_DEVELOPMENT:
+    print("Stage 7B requested but blocked; confirm fp32 A100 and its budget.")
+'''
+)
+
+code(
+    r'''
+if RUN_STAGE7C_FREEZE_LEG_GENERALIZATION_CONFIRMATION:
+    if not LEG_GENERALIZATION_DEVELOPMENT_REPORT_PATH.is_file():
+        raise RuntimeError("Stage 7C requires the completed Stage 7B report")
+    _development = json.loads(
+        LEG_GENERALIZATION_DEVELOPMENT_REPORT_PATH.read_text(encoding="utf-8")
+    )
+    _development_body = {
+        key: value for key, value in _development.items()
+        if key != "report_checksum"
+    }
+    if _development.get("report_checksum") != payload_checksum(_development_body):
+        raise RuntimeError("the Stage 7B report failed its checksum")
+    if _development.get("verdict") != "LEG_COUNT_GENERALIZATION_DEVELOPMENT_GO":
+        print("LEG GENERALIZATION CONFIRMATION NOT LICENSED -- DEVELOPMENT NO_GO")
+    else:
+        _population, _confirmation_candidates = _leg_population_groups("confirmation")
+        _frozen_targets = [
+            "cat", *list(_development["selected_novel_targets"])
+        ]
+        _confirmation_ids = [
+            str(row["group_id"]) for row in _confirmation_candidates
+        ]
+        _development_unit_root = LEG_GENERALIZATION_DEVELOPMENT_ROOT / "units"
+        _opened = []
+        if _development_unit_root.is_dir():
+            for _path in _development_unit_root.glob("*/*.json"):
+                _raw = _path.read_text(encoding="utf-8")
+                if any(group_id in _raw for group_id in _confirmation_ids):
+                    _opened.append(str(_path))
+        if _opened:
+            raise RuntimeError(
+                "confirmation groups were opened during development: "
+                + repr(_opened[:10])
+            )
+        _confirmation_design = {
+            "version": "mmpilot.multimodal_leg_count_confirmation_design.v1",
+            "base_design_digest": LEG_GENERALIZATION_DESIGN["design_digest"],
+            "development_report_checksum": _development["report_checksum"],
+            "population_digest": _population["population_digest"],
+            "confirmation_group_ids": _confirmation_ids,
+            "frozen_targets": _frozen_targets,
+            "target_answers": {
+                target: LEG_GENERALIZATION_DESIGN["target_answers"][target]
+                for target in _frozen_targets
+            },
+            "layers": list(BROAD_POOLED_BAND),
+            "alpha": 1.0,
+            "positions": "every_original_prompt_position",
+            "conditions": ["exact", "zero", "random", "unrelated"],
+            "selected_before_confirmation_outputs": True,
+            "confirmation_outputs_opened": False,
+            "lens_refitted": False,
+            "fitting_performed": False,
+            "backward_passes": 0,
+        }
+        _confirmation_design["design_checksum"] = payload_checksum(
+            _confirmation_design
+        )
+        LEG_GENERALIZATION_ROOT.mkdir(parents=True, exist_ok=True)
+        LEG_GENERALIZATION_CONFIRMATION_DESIGN_PATH.write_text(
+            json.dumps(_confirmation_design, indent=2), encoding="utf-8"
+        )
+        print("LEG-COUNT GENERALIZATION CONFIRMATION DESIGN FROZEN")
+        print("  targets", _frozen_targets)
+        print("  untouched candidates", len(_confirmation_ids))
+        print("  checksum", _confirmation_design["design_checksum"])
+        print("  model forwards 0; fitting 0; backward passes 0")
+        print("STOP THIS CPU RUNTIME. Run Stage 7D alone on an 80 GB A100.")
+'''
+)
+
+code(
+    r'''
+LEG_GENERALIZATION_CONFIRMATION_REPORT = None
+if REAL_MODE and LEG_GENERALIZATION_CONFIRMATION_ENABLED:
+    from jlens.lens import JacobianLens
+    from jlens.mmpilot.coordinate_swap import (
+        ConceptToken, random_two_direction_basis, resolve_concept_token,
+    )
+    from jlens.mmpilot.full_vocabulary import answer_token_table
+    from jlens.mmpilot.leg_count_generalization import (
+        CONDITIONS as LEG_CONDITIONS,
+        MODALITIES as LEG_MODALITIES,
+        TARGET_ANSWERS as LEG_TARGET_ANSWERS,
+        confirmation_report,
+    )
+    from jlens.mmpilot.multimodal_instrument import MODEL_DTYPE_REALIZATION
+    from jlens.mmpilot.multimodal_lens import (
+        build_swap_bases_for_lens, confirmation_leg_count_prompt,
+        load_broad_pooled_development_source, open_answer_matches,
+        unrestricted_swap_trial,
+    )
+    from jlens.mmpilot.store import RunFingerprint, UnitStore, safe_key
+
+    if not LEG_GENERALIZATION_CONFIRMATION_DESIGN_PATH.is_file():
+        raise RuntimeError("run Stage 7C before opening confirmation outputs")
+    _confirmation_design = json.loads(
+        LEG_GENERALIZATION_CONFIRMATION_DESIGN_PATH.read_text(encoding="utf-8")
+    )
+    _design_body = {
+        key: value for key, value in _confirmation_design.items()
+        if key != "design_checksum"
+    }
+    if _confirmation_design.get("design_checksum") != payload_checksum(_design_body):
+        raise RuntimeError("the Stage 7 confirmation design failed its checksum")
+    _population, _confirmation_candidates = _leg_population_groups("confirmation")
+    if [str(row["group_id"]) for row in _confirmation_candidates] != list(
+        _confirmation_design["confirmation_group_ids"]
+    ):
+        raise RuntimeError("confirmation candidates differ from the frozen design")
+    _targets = tuple(_confirmation_design["frozen_targets"])
+    _source_pin = load_broad_pooled_development_source(
+        BROAD_DEVELOPMENT_RUN_DIR,
+        expected_report_checksum=EXPECTED_BROAD_DEVELOPMENT_REPORT_CHECKSUM,
+        expected_population_digest=EXPECTED_BROAD_DEVELOPMENT_POPULATION_DIGEST,
+        expected_lens_checksum=EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+        expected_direction=CONFIRMATION_DIRECTION,
+    )
+    _lens = JacobianLens.load(_source_pin["lens_path"])
+    _confirmation_config = {
+        "study": "fresh_multimodal_distinct_leg_count_generalization.v1",
+        "design_checksum": _confirmation_design["design_checksum"],
+        "lens_checksum": EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+        "model_repo_id": MODEL_REPO_ID,
+        "model_revision": MODEL_REVISION,
+        "model_dtype": "float32",
+        "targets": list(_targets),
+        "layers": list(BROAD_POOLED_BAND),
+        "alpha": 1.0,
+        "positions": "every_original_prompt_position",
+        "fitting_performed": False,
+        "commit": COMMIT,
+    }
+    _confirmation_digest = payload_checksum(_confirmation_config)
+    LEG_GENERALIZATION_CONFIRMATION_ROOT.mkdir(parents=True, exist_ok=True)
+    (LEG_GENERALIZATION_CONFIRMATION_ROOT / "scientific_config.json").write_text(
+        json.dumps(_confirmation_config, indent=2), encoding="utf-8"
+    )
+    _confirmation_store = UnitStore(
+        LEG_GENERALIZATION_CONFIRMATION_ROOT,
+        RunFingerprint(
+            mode="real", model_repo_id=MODEL_REPO_ID,
+            model_revision=MODEL_REVISION, processor_revision=MODEL_REVISION,
+            layers=tuple(BROAD_POOLED_BAND),
+            lens_checksum=EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+            manifest_checksum=MANIFEST_CHECKSUM,
+            split_id=payload_checksum(_population["confirmation"]),
+            intervention_config={
+                "design_checksum": _confirmation_design["design_checksum"],
+                "targets": list(_targets), "conditions": list(LEG_CONDITIONS),
+                "alpha": 1.0, "positions": "all_original_prompt_positions",
+                "dtype": "float32",
+            },
+            extra={"study_digest": _confirmation_digest},
+        ),
+    )
+    print("leg-generalization confirmation run", _confirmation_store.open())
+    print("targets", list(_targets))
+    print("fitting performed False; backward passes 0")
+
+    _capability_rows = []
+    for _group in _confirmation_candidates:
+        for _modality in LEG_MODALITIES:
+            _key = safe_key("legconfcap", _group["group_id"], _modality)
+            _row = _confirmation_store.load("capability", _key)
+            if _row is None:
+                _inputs = build_group_inputs(
+                    _group, _modality,
+                    confirmation_leg_count_prompt(_modality, _group["caption"]),
+                )
+                _logits = BACKEND.forward_logits(_inputs.tensors)[
+                    0, _inputs.final_prompt_position
+                ].float()
+                _surface = BACKEND.decode_token(int(_logits.argmax())).strip()
+                _row = {
+                    "group_id": str(_group["group_id"]),
+                    "image_id": str(_group["image_id"]),
+                    "modality": _modality, "expected": "2",
+                    "generated": _surface,
+                    "pass": open_answer_matches(_surface, "2"),
+                }
+                _confirmation_store.save("capability", _key, _row)
+            _capability_rows.append(_row)
+            if len(_capability_rows) == 1 or len(_capability_rows) % 24 == 0:
+                print("leg confirmation capability", len(_capability_rows), "of", 72)
+    _recruited = []
+    for _group in _confirmation_candidates:
+        _rows = [
+            row for row in _capability_rows
+            if row["group_id"] == str(_group["group_id"])
+        ]
+        if len(_rows) == 3 and all(row["pass"] for row in _rows):
+            _recruited.append(_group)
+        if len(_recruited) == 12:
+            break
+    if len(_recruited) != 12:
+        raise RuntimeError(
+            f"Stage 7 confirmation recruited {len(_recruited)}/12 clean groups"
+        )
+    print("leg confirmation recruited", len(_recruited), "/ 12")
+
+    _unembed = BACKEND.unembedding_weight()
+    _concept_names = ("bird", *_targets, *BROAD_POOLED_CONTROLS)
+    _concept_tokens = {
+        name: resolve_concept_token(BACKEND.encode_candidate, name)
+        for name in _concept_names
+    }
+    _answer_table = answer_token_table(
+        BACKEND, ("2", "4", "6", "8"),
+        required=("2", "4", "6", "8"), leading_space=True,
+    )
+    _answer_tokens = {
+        answer: ConceptToken(
+            concept=answer, token_id=int(token_id),
+            token_text=str(_answer_table["supported"][answer]["surface"]),
+            variant="single_token_space_prefixed_digit",
+        )
+        for answer, token_id in _answer_table["token_ids"].items()
+    }
+    _concept_bases = {
+        target: build_swap_bases_for_lens(
+            _lens, _unembed, layers=BROAD_POOLED_BAND,
+            source=_concept_tokens["bird"], target=_concept_tokens[target],
+        )
+        for target in _targets
+    }
+    _answer_bases = {
+        target: build_swap_bases_for_lens(
+            _lens, _unembed, layers=BROAD_POOLED_BAND,
+            source=_answer_tokens["2"],
+            target=_answer_tokens[LEG_TARGET_ANSWERS[target]],
+        )
+        for target in _targets
+    }
+    _random_bases = {
+        target: {
+            layer: random_two_direction_basis(
+                basis, seed=20260828 + 1000 * index + layer
+            )
+            for layer, basis in _concept_bases[target].items()
+        }
+        for index, target in enumerate(_targets)
+    }
+    _unrelated_bases = build_swap_bases_for_lens(
+        _lens, _unembed, layers=BROAD_POOLED_BAND,
+        source=_concept_tokens[BROAD_POOLED_CONTROLS[0]],
+        target=_concept_tokens[BROAD_POOLED_CONTROLS[1]],
+    )
+
+    def _run_confirmation_leg_trial(
+        group, modality, target, condition, alpha, bases, prefix
+    ):
+        key = safe_key(prefix, group["group_id"], modality, target, condition)
+        stored = _confirmation_store.load("intervention", key)
+        if stored is not None:
+            return stored, "reused"
+        inputs = build_group_inputs(
+            group, modality,
+            confirmation_leg_count_prompt(modality, group["caption"]),
+        )
+        clean_logits = BACKEND.forward_logits(inputs.tensors)[
+            0, inputs.final_prompt_position
+        ].float()
+        trial = unrestricted_swap_trial(
+            BACKEND, inputs, bases=bases, alpha=alpha,
+            target_token_id=int(_answer_table["token_ids"][LEG_TARGET_ANSWERS[target]]),
+            source_token_id=int(_answer_table["token_ids"]["2"]),
+            clean_logits=clean_logits, compact_positions=True,
+            realization_policy=MODEL_DTYPE_REALIZATION,
+        )
+        surface = BACKEND.decode_token(int(trial["patched_top_token_id"])).strip()
+        trial = {
+            **trial, "patched_surface": surface,
+            "success": open_answer_matches(surface, LEG_TARGET_ANSWERS[target]),
+        }
+        stored = _compact_leg_trial(
+            trial, group=group, modality=modality, target=target,
+            condition=condition, expected=LEG_TARGET_ANSWERS[target],
+        )
+        _confirmation_store.save("intervention", key, stored)
+        return stored, "computed"
+
+    _leverage_rows = []
+    for _target in _targets:
+        for _group in _recruited:
+            for _modality in LEG_MODALITIES:
+                _row, _work = _run_confirmation_leg_trial(
+                    _group, _modality, _target, "answer_exchange", 1.0,
+                    _answer_bases[_target], "legconfleverage",
+                )
+                _leverage_rows.append(_row)
+                if len(_leverage_rows) == 1 or len(_leverage_rows) % 36 == 0:
+                    print("confirmation answer leverage", len(_leverage_rows), _work)
+
+    _trial_rows = []
+    for _target in _targets:
+        _conditions = (
+            ("exact", 1.0, _concept_bases[_target]),
+            ("zero", 0.0, _concept_bases[_target]),
+            ("random", 1.0, _random_bases[_target]),
+            ("unrelated", 1.0, _unrelated_bases),
+        )
+        for _group in _recruited:
+            for _modality in LEG_MODALITIES:
+                for _condition, _alpha, _bases in _conditions:
+                    _row, _work = _run_confirmation_leg_trial(
+                        _group, _modality, _target, _condition, _alpha,
+                        _bases, "legconftrial",
+                    )
+                    _trial_rows.append(_row)
+                    if len(_trial_rows) == 1 or len(_trial_rows) % 72 == 0:
+                        print("leg confirmation trials", len(_trial_rows), _work)
+
+    LEG_GENERALIZATION_CONFIRMATION_REPORT = confirmation_report(
+        _leverage_rows, _trial_rows, frozen_targets=_targets, expected_n=12,
+    )
+    LEG_GENERALIZATION_CONFIRMATION_REPORT = {
+        **LEG_GENERALIZATION_CONFIRMATION_REPORT,
+        "scientific_config": _confirmation_config,
+        "confirmation_design": _confirmation_design,
+        "population_digest": _population["population_digest"],
+        "recruited_group_ids": [str(row["group_id"]) for row in _recruited],
+    }
+    LEG_GENERALIZATION_CONFIRMATION_REPORT["report_checksum"] = payload_checksum({
+        key: value for key, value in LEG_GENERALIZATION_CONFIRMATION_REPORT.items()
+        if key != "report_checksum"
+    })
+    _confirmation_store.save(
+        "metric", "fresh_leg_count_generalization",
+        LEG_GENERALIZATION_CONFIRMATION_REPORT,
+    )
+    LEG_GENERALIZATION_CONFIRMATION_REPORT_PATH.write_text(
+        json.dumps(LEG_GENERALIZATION_CONFIRMATION_REPORT, indent=2),
+        encoding="utf-8",
+    )
+    print("=" * 96)
+    print("FRESH MULTIMODAL LEG-COUNT GENERALIZATION --",
+          LEG_GENERALIZATION_CONFIRMATION_REPORT["verdict"])
+    print("calibration passed",
+          LEG_GENERALIZATION_CONFIRMATION_REPORT["calibration_passed"])
+    print("novel passing targets",
+          LEG_GENERALIZATION_CONFIRMATION_REPORT["novel_passing_targets"])
+    for _cell in LEG_GENERALIZATION_CONFIRMATION_REPORT["effect_cells"]:
+        print(_cell["target"], _cell["modality"], {
+            name: f"{row['successes']}/{row['n']}"
+            for name, row in _cell["conditions"].items()
+        })
+    print("report", LEG_GENERALIZATION_CONFIRMATION_REPORT_PATH)
+elif RUN_STAGE7D_LEG_GENERALIZATION_CONFIRMATION:
+    print("Stage 7D requested but blocked; confirm fp32 A100 and its budget.")
 '''
 )
 

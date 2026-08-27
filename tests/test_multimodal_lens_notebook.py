@@ -119,6 +119,39 @@ def test_notebook_contains_frozen_fresh_multimodal_confirmation() -> None:
     assert "RUN_STAGE3C_BROAD_POOLED_WORKSPACE and RUN_STAGE3D_FRESH_MULTIMODAL_CONFIRMATION" in source
 
 
+def test_notebook_contains_no_refit_leg_count_target_generalization() -> None:
+    source = _source()
+    for required in (
+        "RUN_STAGE7A_FREEZE_LEG_GENERALIZATION_POPULATION",
+        "RUN_STAGE7B_LEG_GENERALIZATION_DEVELOPMENT",
+        "RUN_STAGE7C_FREEZE_LEG_GENERALIZATION_CONFIRMATION",
+        "RUN_STAGE7D_LEG_GENERALIZATION_CONFIRMATION",
+        'LEG_GENERALIZATION_TARGET_ANSWERS = {"cat": "4", "ant": "6", "spider": "8"}',
+        'LEG_GENERALIZATION_SOURCE = "bird"',
+        '"lens_refitted": False',
+        '"positions": "every_original_prompt_position"',
+        "LEG_GENERALIZATION_LAYERS = tuple(range(16, 41))",
+        "LEG_GENERALIZATION_ALPHA = 1.0",
+        'required=("2", "4", "6", "8"), leading_space=True',
+        'variant="single_token_space_prefixed_digit"',
+        "preflight_fp32_or_refuse",
+        '_observed_dtype != "torch.float32"',
+        "load_broad_pooled_development_source",
+        "STAGE 7 NO-REFIT LEG-COUNT GENERALIZATION",
+        "frozen_population.json",
+        "confirmation_design.json",
+        "fresh_multimodal_leg_count_generalization_report.json",
+        '"fresh_confirmation_opened": False',
+        "fitting performed False; backward passes 0",
+    ):
+        assert required in source, required
+
+    section = source.split("## 20. Stage 7: no-refit target generalization")[1]
+    assert "fit_arm(" not in section
+    assert "fit_jacobian" not in section
+    assert "teacher_forcing" not in section
+
+
 def test_mock_notebook_executes_end_to_end(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("TMP", str(tmp_path))
     monkeypatch.setenv("TEMP", str(tmp_path))
