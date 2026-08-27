@@ -91,6 +91,18 @@ load it. The GPU stages reuse that lens and perform zero backward passes. A
 successful development diagnostic can motivate a separately frozen fresh
 confirmation study; it does not itself reclassify the completed country result.
 
+The completed screen produced a split diagnostic. Its direct-answer J-lens
+control failed at every tested path, so the original conjunctive screen remains
+`COUNTRY_CAUSAL_SITE_SCREEN_NO_GO`. In contrast, replacing the final prompt
+state with a real clean China state produced both Beijing and Asia in text,
+image, and spoken audio for L24-L31, L28-L35, L33-L40, and L16-L40. Self-state
+and unrelated-state controls remained at zero, with every integrity check
+passing. A versioned amendment therefore freezes the shortest state-valid path,
+L24-L31 at the final prompt token, without reading any exact J-lens swap result.
+On the three development examples not used by the screen, it reports two
+separate arms: replication of the full-state transfer and the exact alpha-one
+J-lens exchange at that same site. The original screen verdict is preserved.
+
 ### Direction-scoped capability amendment
 
 The first capability run passed 34 of 36 cells. France, China, and Japan passed
@@ -124,8 +136,10 @@ refit or reinterpret any causal outcome.
 
 For the no-refit diagnosis, run Stage 6A alone on CPU to seal the plan. Then run
 Stage 6B on an fp32 80 GB A100. Run Stage 6C only if Stage 6B prints
-`COUNTRY_CAUSAL_SITE_SCREEN_GO`. Stages 6A-6C must never be combined with a lens
-fit toggle.
+either a conjunctive passing path or a separately recorded state-valid path.
+Stage 6C runs 54 full-state and 72 J-lens conditions on the three remaining
+development examples. Stages 6A-6C must never be combined with a lens fit
+toggle.
 
 The canonical notebook is
 `notebooks/multimodal_country_workspace_generalization_colab.ipynb`.

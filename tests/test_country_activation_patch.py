@@ -11,9 +11,11 @@ from jlens.mmpilot.country_activation_patch import (
     CountryActivationPatchRefused,
     activation_patch_band,
     causal_site_screen_report,
+    localized_development_report,
     patch_position,
     restricted_swap_report,
     single_position_inputs,
+    state_validated_selection,
 )
 
 
@@ -133,6 +135,27 @@ def test_screen_refuses_a_path_when_positive_control_fails() -> None:
     assert report["selected"] is None
 
 
+def test_state_selection_can_preserve_original_direct_answer_no_go() -> None:
+    rows = _screen_rows()
+    for row in rows:
+        if row["condition"] == "direct_answer":
+            row["success"] = False
+    screen = causal_site_screen_report(
+        rows,
+        bands=((16, 17), (20, 21, 22)),
+        expected_n=1,
+        properties=("capital", "continent"),
+        modalities=("text", "image", "spoken_audio"),
+    )
+    assert screen["verdict"] == "COUNTRY_CAUSAL_SITE_SCREEN_NO_GO"
+    selection = state_validated_selection(screen)
+    assert selection["verdict"] == "COUNTRY_STATE_VALIDATED_PATH_GO"
+    assert selection["selected"]["band"] == [16, 17]
+    assert selection["selection_used_coordinate_swap_outcomes"] is False
+    assert selection["selection_used_direct_answer_outcomes"] is False
+    assert selection["source_screen_verdict_unchanged"] == screen["verdict"]
+
+
 def _restricted_rows(exact_success: bool) -> list[dict]:
     return [
         {
@@ -169,3 +192,35 @@ def test_restricted_swap_report_requires_every_modality_and_property(
     )
     assert report["verdict"] == verdict
     assert report["fresh_confirmation_opened"] is False
+
+
+def test_localized_report_keeps_full_state_and_jlens_claims_separate() -> None:
+    state_rows = [
+        {
+            "property": property_name,
+            "modality": modality,
+            "condition": condition,
+            "success": condition == "target_state",
+            "integrity_pass": True,
+        }
+        for property_name in ("capital", "continent")
+        for modality in ("text", "image", "spoken_audio")
+        for _ in range(3)
+        for condition in ("target_state", "self_state", "unrelated_state")
+    ]
+    report = localized_development_report(
+        state_rows,
+        _restricted_rows(False),
+        expected_n=3,
+        properties=("capital", "continent"),
+        modalities=("text", "image", "spoken_audio"),
+        selection={"band": [24, 25], "site": "final_prompt_token"},
+    )
+    assert report["verdict"] == "COUNTRY_LOCALIZED_DEVELOPMENT_STATE_ONLY_GO"
+    assert report["full_state_arm"]["passed"] is True
+    assert (
+        report["j_lens_coordinate_arm"]["verdict"]
+        == "COUNTRY_RESTRICTED_SWAP_DEVELOPMENT_NO_GO"
+    )
+    assert report["fresh_confirmation_opened"] is False
+    assert report["fitting_performed"] is False

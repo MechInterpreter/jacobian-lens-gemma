@@ -27,6 +27,7 @@ from jlens.mmpilot.store import payload_checksum
 ACTIVATION_PATCH_VERSION = "mmpilot.country_activation_patch.v1"
 CAUSAL_SITE_SCREEN_VERSION = "mmpilot.country_causal_site_screen.v1"
 RESTRICTED_SWAP_VERSION = "mmpilot.country_restricted_swap_development.v1"
+LOCALIZED_DEVELOPMENT_VERSION = "mmpilot.country_localized_development.v1"
 PATCH_SITES = ("evidence_endpoint", "final_prompt_token")
 SCREEN_CONDITIONS = (
     "target_state",
@@ -395,6 +396,67 @@ def causal_site_screen_report(
     return {**body, "report_checksum": payload_checksum(body)}
 
 
+def state_validated_selection(screen: Mapping) -> dict:
+    """Derive a path using only clean-state patches and negative controls.
+
+    This is intentionally separate from the original conjunctive screen.  The
+    original verdict remains unchanged: its direct-answer arm failed.  This
+    derived development choice answers a narrower question, namely where a
+    real target-country state has causal leverage.  It never reads an exact
+    J-lens coordinate-swap outcome.
+    """
+
+    if screen.get("selection_used_coordinate_swap_outcomes") is not False:
+        raise CountryActivationPatchRefused(
+            "the source screen does not prove outcome-blind path selection"
+        )
+    passing = []
+    for candidate in screen.get("candidates") or ():
+        cells = candidate.get("cells") or ()
+        state_pass = bool(cells)
+        for cell in cells:
+            conditions = cell.get("conditions") or {}
+            target = conditions.get("target_state") or {}
+            self_state = conditions.get("self_state") or {}
+            unrelated = conditions.get("unrelated_state") or {}
+            state_pass = bool(
+                state_pass
+                and target.get("n") == screen.get("expected_n")
+                and target.get("rate") == 1.0
+                and target.get("integrity_pass") is True
+                and self_state.get("n") == screen.get("expected_n")
+                and self_state.get("rate") == 0.0
+                and self_state.get("integrity_pass") is True
+                and unrelated.get("n") == screen.get("expected_n")
+                and unrelated.get("rate") == 0.0
+                and unrelated.get("integrity_pass") is True
+            )
+        if state_pass:
+            passing.append(
+                {
+                    key: candidate[key]
+                    for key in ("path_id", "band", "site")
+                }
+            )
+    passing.sort(key=lambda row: (len(row["band"]), row["band"], row["site"]))
+    body = {
+        "version": "mmpilot.country_state_validated_selection.v1",
+        "source_screen_checksum": screen.get("report_checksum"),
+        "source_screen_verdict_unchanged": screen.get("verdict"),
+        "selection_used_coordinate_swap_outcomes": False,
+        "selection_used_direct_answer_outcomes": False,
+        "fresh_confirmation_opened": False,
+        "passing_paths": passing,
+        "selected": passing[0] if passing else None,
+        "verdict": (
+            "COUNTRY_STATE_VALIDATED_PATH_GO"
+            if passing
+            else "COUNTRY_STATE_VALIDATED_PATH_NO_GO"
+        ),
+    }
+    return {**body, "record_checksum": payload_checksum(body)}
+
+
 def restricted_swap_report(
     rows: Sequence[Mapping],
     *,
@@ -465,9 +527,97 @@ def restricted_swap_report(
     return {**body, "report_checksum": payload_checksum(body)}
 
 
+def localized_development_report(
+    state_rows: Sequence[Mapping],
+    coordinate_rows: Sequence[Mapping],
+    *,
+    expected_n: int,
+    properties: Sequence[str],
+    modalities: Sequence[str],
+    selection: Mapping,
+) -> dict:
+    """Report full-state transfer and J-lens exchange as distinct arms."""
+
+    state_records = [dict(row) for row in state_rows]
+    state_cells = []
+    for property_name in map(str, properties):
+        for modality in map(str, modalities):
+            subset = [
+                row
+                for row in state_records
+                if row.get("property") == property_name
+                and row.get("modality") == modality
+            ]
+            conditions = {
+                condition: _summary(subset, condition)
+                for condition in ("target_state", "self_state", "unrelated_state")
+            }
+            target = conditions["target_state"]
+            margins = {
+                name: target["rate"] - conditions[name]["rate"]
+                for name in ("self_state", "unrelated_state")
+            }
+            complete = all(
+                item["n"] == int(expected_n) for item in conditions.values()
+            )
+            passed = bool(
+                complete
+                and target["rate"] >= 0.75
+                and min(margins.values()) >= 0.25
+                and all(item["integrity_pass"] for item in conditions.values())
+            )
+            state_cells.append(
+                {
+                    "property": property_name,
+                    "modality": modality,
+                    "conditions": conditions,
+                    "margins": margins,
+                    "complete": complete,
+                    "passed": passed,
+                }
+            )
+    state_passed = bool(state_cells) and all(cell["passed"] for cell in state_cells)
+    coordinate = restricted_swap_report(
+        coordinate_rows,
+        expected_n=expected_n,
+        properties=properties,
+        modalities=modalities,
+        band=selection["band"],
+        site=selection["site"],
+    )
+    coordinate_passed = (
+        coordinate["verdict"] == "COUNTRY_RESTRICTED_SWAP_DEVELOPMENT_GO"
+    )
+    if state_passed and coordinate_passed:
+        verdict = "COUNTRY_LOCALIZED_DEVELOPMENT_BOTH_GO"
+    elif state_passed:
+        verdict = "COUNTRY_LOCALIZED_DEVELOPMENT_STATE_ONLY_GO"
+    elif coordinate_passed:
+        verdict = "COUNTRY_LOCALIZED_DEVELOPMENT_JLENS_ONLY_GO"
+    else:
+        verdict = "COUNTRY_LOCALIZED_DEVELOPMENT_NO_GO"
+    body = {
+        "version": LOCALIZED_DEVELOPMENT_VERSION,
+        "verdict": verdict,
+        "stage": "development",
+        "fresh_confirmation_opened": False,
+        "fitting_performed": False,
+        "backward_passes": 0,
+        "selection": dict(selection),
+        "full_state_arm": {
+            "passed": state_passed,
+            "cells": state_cells,
+            "rows": state_records,
+        },
+        "j_lens_coordinate_arm": coordinate,
+    }
+    return {**body, "report_checksum": payload_checksum(body)}
+
+
 __all__ = [
     "ACTIVATION_PATCH_VERSION",
     "CAUSAL_SITE_SCREEN_VERSION",
+    "LOCALIZED_DEVELOPMENT_VERSION",
     "PATCH_SITES",
     "RESTRICTED_SWAP_CONDITIONS",
     "RESTRICTED_SWAP_VERSION",
@@ -476,8 +626,10 @@ __all__ = [
     "activation_patch_band",
     "capture_activation_sites",
     "causal_site_screen_report",
+    "localized_development_report",
     "patch_position",
     "restricted_swap_report",
     "single_position_inputs",
+    "state_validated_selection",
     "unrestricted_greedy_activation_patch_trial",
 ]

@@ -183,3 +183,8 @@ def test_no_refit_causal_site_diagnostic_is_prospective_and_resumable() -> None:
     assert "unrestricted_greedy_activation_patch_trial" in source
     assert 'position_rule="evidence_span_only"' in source
     assert "fitting 0; backward passes 0; fresh confirmation opened False" in source
+    assert "state_validated_selection(CAUSAL_SITE_SCREEN)" in source
+    assert '"country_localized_development_v1"' in source
+    assert "localized_development_report" in source
+    assert '"target_state", target_state' in source
+    assert "SOURCE SCREEN VERDICT UNCHANGED" in source

@@ -1299,7 +1299,7 @@ print("Also send france_china_downstream_development_report.json and, if present
 print("france_china_fresh_confirmation_report.json.")
 print("For the no-refit diagnosis, send country_causal_site_plan.json,")
 print("country_causal_site_screen_report.json and, if licensed,")
-print("country_restricted_swap_development_report.json.")
+print("country_localized_development_report.json.")
 '''
 )
 markdown("## 5. Open the fingerprinted run")
@@ -1828,7 +1828,9 @@ print("  France-to-China follow-up development", len(PROPERTIES) * len(MODALITIE
 print("  France-to-China follow-up confirmation", len(PROPERTIES) * len(MODALITIES) * 4 * N_CONFIRMATION_PER_COUNTRY, "conditions plus clean capability")
 print("  no-refit causal-site screen", len(PATH_BANDS) * 2 * len(PROPERTIES) * len(MODALITIES) * 4, "development conditions")
 print("    selection reads actual-target-state and direct-answer controls only")
-print("  restricted exact swap after a passing screen", (N_DEVELOPMENT_PER_COUNTRY - 1) * len(PROPERTIES) * len(MODALITIES) * 4, "development conditions")
+print("  localized full-state replication", (N_DEVELOPMENT_PER_COUNTRY - 1) * len(PROPERTIES) * len(MODALITIES) * 3, "development conditions")
+print("  localized exact J-lens exchange", (N_DEVELOPMENT_PER_COUNTRY - 1) * len(PROPERTIES) * len(MODALITIES) * 4, "development conditions")
+print("    combined localized development", (N_DEVELOPMENT_PER_COUNTRY - 1) * len(PROPERTIES) * len(MODALITIES) * 7, "conditions")
 print("  diagnostic fitting/backward passes 0; fresh confirmation examples opened 0")
 print("  model dtype float32; A100 80 GB required; no fallback")
 print("  resume fit checkpoint every", CHECKPOINT_EVERY, "examples; causal resume unit one condition")
@@ -2089,16 +2091,23 @@ code(
     r'''
 from jlens.mmpilot.backend import file_checksum
 from jlens.mmpilot.country_activation_patch import (
-    ACTIVATION_PATCH_VERSION, PATCH_SITES, SCREEN_CONDITIONS,
+    ACTIVATION_PATCH_VERSION, LOCALIZED_DEVELOPMENT_VERSION,
+    PATCH_SITES, SCREEN_CONDITIONS,
     capture_activation_sites, causal_site_screen_report, patch_position,
-    restricted_swap_report, single_position_inputs,
+    localized_development_report, single_position_inputs,
+    state_validated_selection,
     unrestricted_greedy_activation_patch_trial,
 )
 
 CAUSAL_SITE_PLAN_PATH = RUN_DIR / "country_causal_site_plan.json"
 CAUSAL_SITE_ROOT = RUN_DIR / "diagnostics" / "country_causal_site_v1"
 CAUSAL_SITE_SCREEN_PATH = CAUSAL_SITE_ROOT / "country_causal_site_screen_report.json"
-RESTRICTED_SWAP_PATH = CAUSAL_SITE_ROOT / "country_restricted_swap_development_report.json"
+LOCALIZED_DEVELOPMENT_ROOT = (
+    RUN_DIR / "diagnostics" / "country_localized_development_v1"
+)
+RESTRICTED_SWAP_PATH = (
+    LOCALIZED_DEVELOPMENT_ROOT / "country_localized_development_report.json"
+)
 
 _development_by_country = {
     country: sorted(
@@ -2163,7 +2172,8 @@ if RUN_STAGE6A_CPU_CAUSAL_SITE_PLAN:
     print("  plan", CAUSAL_SITE_PLAN_PATH)
     print("  digest", _causal_plan_body["plan_digest"])
     print("  screen", _causal_plan_body["screen_generation_conditions"], "generation conditions")
-    print("  restricted follow-up", _causal_plan_body["restricted_generation_conditions_if_licensed"], "conditions")
+    print("  original restricted J-lens follow-up", _causal_plan_body["restricted_generation_conditions_if_licensed"], "conditions")
+    print("  a state-valid-screen amendment may add 54 full-state conditions")
     print("  fitting 0; backward passes 0; fresh confirmation opened False")
 
 CAUSAL_SITE_SCREEN = (
@@ -2331,13 +2341,16 @@ if RUN_STAGE6B_CAUSAL_SITE_SCREEN:
 
 if RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT:
     if not CONFIRM_RESTRICTED_SWAP_BUDGET:
-        raise RuntimeError("restricted-swap development budget is not confirmed")
+        raise RuntimeError("localized development budget is not confirmed")
     if CAUSAL_SITE_SCREEN is None:
         raise RuntimeError("run or load the causal-site screen first")
-    if CAUSAL_SITE_SCREEN["verdict"] != "COUNTRY_CAUSAL_SITE_SCREEN_GO":
-        print("RESTRICTED SWAP NOT LICENSED:", CAUSAL_SITE_SCREEN["verdict"])
+    _state_choice = state_validated_selection(CAUSAL_SITE_SCREEN)
+    print("SOURCE SCREEN VERDICT UNCHANGED", CAUSAL_SITE_SCREEN["verdict"])
+    print("STATE-VALIDATED PATH", _state_choice["verdict"])
+    if _state_choice["selected"] is None:
+        print("LOCALIZED DEVELOPMENT NOT LICENSED: no state-valid path")
     else:
-        selection = CAUSAL_SITE_SCREEN["selected"]
+        selection = _state_choice["selected"]
         band = tuple(map(int, selection["band"]))
         site = selection["site"]
         _country_tokens = concept_tokens((*EVAL_COUNTRIES, *CONTROL_COUNTRIES))
@@ -2357,19 +2370,127 @@ if RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT:
             source=_country_tokens[CONTROL_COUNTRIES[0]],
             target=_country_tokens[CONTROL_COUNTRIES[1]],
         )
-        _restricted_rows = []
-        for source_row in _restricted_source_rows:
+        _restricted_target_rows = _development_by_country["China"][1:]
+        _restricted_unrelated_rows = _italy_fit_rows[1:1 + len(_restricted_source_rows)]
+        if not (
+            len(_restricted_source_rows)
+            == len(_restricted_target_rows)
+            == len(_restricted_unrelated_rows)
+        ):
+            raise RuntimeError("localized development donor pairing is incomplete")
+        _localized_fingerprint = RunFingerprint(
+            mode="real", model_repo_id=MODEL_REPO_ID,
+            model_revision=MODEL_REVISION, processor_revision=MODEL_REVISION,
+            layers=band, lens_checksum=_balanced_checksum,
+            manifest_checksum=PREPARED["population_digest"],
+            split_id=payload_checksum({
+                "source": [row["unit_id"] for row in _restricted_source_rows],
+                "target": [row["unit_id"] for row in _restricted_target_rows],
+                "unrelated": [row["unit_id"] for row in _restricted_unrelated_rows],
+            }),
+            intervention_config={
+                "version": LOCALIZED_DEVELOPMENT_VERSION,
+                "selection": selection,
+                "full_state_conditions": [
+                    "target_state", "self_state", "unrelated_state",
+                ],
+                "coordinate_conditions": [
+                    "exact", "zero", "random", "unrelated",
+                ],
+                "alpha": 1.0,
+                "position_rule": "one_state_validated_position",
+                "fresh_confirmation_opened": False,
+            },
+            extra={
+                "source_screen_checksum": CAUSAL_SITE_SCREEN["report_checksum"],
+                "state_selection_checksum": _state_choice["record_checksum"],
+                "fitting_performed": False, "backward_passes": 0,
+            },
+        )
+        LOCALIZED_STORE = UnitStore(
+            LOCALIZED_DEVELOPMENT_ROOT, _localized_fingerprint
+        )
+        print("localized development run", LOCALIZED_DEVELOPMENT_ROOT)
+        print("resume", LOCALIZED_STORE.open())
+
+        def _localized_capture(row, property_name, modality):
+            inputs = build_task_inputs(row, modality, property_name)
+            position = patch_position(
+                inputs, site,
+                country_token_id=(
+                    _country_tokens[row["country"]].token_id
+                    if modality == "text" else None
+                ),
+            )
+            captured = capture_activation_sites(
+                BACKEND, inputs, layers=band, positions={site: position},
+            )
+            return inputs, position, captured[site]
+
+        _state_rows = []
+        _coordinate_rows = []
+        for row_index, source_row in enumerate(_restricted_source_rows):
+            target_row = _restricted_target_rows[row_index]
+            unrelated_row = _restricted_unrelated_rows[row_index]
             for property_name in PROPERTIES:
                 expected = fact("China", property_name)
                 for modality in MODALITIES:
-                    inputs = build_task_inputs(source_row, modality, property_name)
-                    position = patch_position(
-                        inputs, site,
-                        country_token_id=(
-                            _country_tokens["France"].token_id
-                            if modality == "text" else None
-                        ),
+                    inputs, position, source_state = _localized_capture(
+                        source_row, property_name, modality
                     )
+                    _, _, target_state = _localized_capture(
+                        target_row, property_name, modality
+                    )
+                    _, _, unrelated_state = _localized_capture(
+                        unrelated_row, property_name, modality
+                    )
+                    for condition, donor_state in (
+                        ("target_state", target_state),
+                        ("self_state", source_state),
+                        ("unrelated_state", unrelated_state),
+                    ):
+                        key = safe_key(
+                            "country_localized_state_v1",
+                            CAUSAL_SITE_SCREEN["report_checksum"],
+                            property_name, modality, source_row["unit_id"], condition,
+                        )
+                        stored = LOCALIZED_STORE.load("intervention", key)
+                        if stored is None:
+                            result = unrestricted_greedy_activation_patch_trial(
+                                BACKEND, inputs, donor_by_layer=donor_state,
+                                source_position=position, answer=expected,
+                                max_new_tokens=MAX_NEW_TOKENS,
+                            )
+                            patch_diag = result["activation_patch_diagnostics"]
+                            stored = {
+                                **result, "unit_id": source_row["unit_id"],
+                                "donor_unit_id": (
+                                    target_row["unit_id"]
+                                    if condition == "target_state"
+                                    else source_row["unit_id"]
+                                    if condition == "self_state"
+                                    else unrelated_row["unit_id"]
+                                ),
+                                "source": "France", "target": "China",
+                                "property": property_name, "modality": modality,
+                                "condition": condition, "site": site,
+                                "layers_patched": list(band), "expected": expected,
+                                "success": answer_matches(
+                                    result["generated_text"], expected
+                                ),
+                                "integrity_pass": bool(
+                                    patch_diag["all_hooks_fired"]
+                                    and patch_diag["all_finite"]
+                                ),
+                            }
+                            LOCALIZED_STORE.save("intervention", key, stored)
+                            work = "computed"
+                        else:
+                            work = "reused"
+                        _state_rows.append(stored)
+                        if len(_state_rows) == 1 or len(_state_rows) % 18 == 0:
+                            print("localized state", len(_state_rows), work)
+
                     site_inputs = single_position_inputs(inputs, position)
                     for condition, alpha, bases in (
                         ("exact", 1.0, exact_bases),
@@ -2382,7 +2503,7 @@ if RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT:
                             CAUSAL_SITE_SCREEN["report_checksum"],
                             property_name, modality, source_row["unit_id"], condition,
                         )
-                        stored = PATCH_STORE.load("intervention", key)
+                        stored = LOCALIZED_STORE.load("intervention", key)
                         if stored is None:
                             result = unrestricted_greedy_swap_trial(
                                 BACKEND, site_inputs, bases=bases, alpha=alpha,
@@ -2401,24 +2522,38 @@ if RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT:
                                     result, exact=(condition == "exact")
                                 ),
                             }
-                            PATCH_STORE.save("intervention", key, stored)
+                            LOCALIZED_STORE.save("intervention", key, stored)
                             work = "computed"
                         else:
                             work = "reused"
-                        _restricted_rows.append(stored)
-                        if len(_restricted_rows) == 1 or len(_restricted_rows) % 24 == 0:
-                            print("restricted swap", len(_restricted_rows), work)
-        RESTRICTED_SWAP_DEVELOPMENT = restricted_swap_report(
-            _restricted_rows, expected_n=len(_restricted_source_rows),
+                        _coordinate_rows.append(stored)
+                        if (
+                            len(_coordinate_rows) == 1
+                            or len(_coordinate_rows) % 24 == 0
+                        ):
+                            print("localized J-lens", len(_coordinate_rows), work)
+        RESTRICTED_SWAP_DEVELOPMENT = localized_development_report(
+            _state_rows, _coordinate_rows,
+            expected_n=len(_restricted_source_rows),
             properties=PROPERTIES, modalities=MODALITIES,
-            band=band, site=site,
+            selection={**selection, "selection_record": _state_choice},
         )
         _write_report(RESTRICTED_SWAP_PATH, RESTRICTED_SWAP_DEVELOPMENT)
-        print("RESTRICTED SWAP", RESTRICTED_SWAP_DEVELOPMENT["verdict"])
-        for cell in RESTRICTED_SWAP_DEVELOPMENT["cells"]:
+        print("LOCALIZED DEVELOPMENT", RESTRICTED_SWAP_DEVELOPMENT["verdict"])
+        for cell in RESTRICTED_SWAP_DEVELOPMENT["full_state_arm"]["cells"]:
+            target = cell["conditions"]["target_state"]
+            print(
+                "state", cell["property"], cell["modality"],
+                f"target {target['successes']}/{target['n']}",
+                "controls", {
+                    name: cell["conditions"][name]["successes"]
+                    for name in ("self_state", "unrelated_state")
+                },
+            )
+        for cell in RESTRICTED_SWAP_DEVELOPMENT["j_lens_coordinate_arm"]["cells"]:
             exact = cell["conditions"]["exact"]
             print(
-                cell["property"], cell["modality"],
+                "J-lens", cell["property"], cell["modality"],
                 f"exact {exact['successes']}/{exact['n']}",
                 "controls", {
                     name: cell["conditions"][name]["successes"]
