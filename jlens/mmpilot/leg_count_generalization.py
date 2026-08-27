@@ -40,14 +40,14 @@ def frozen_design() -> dict:
         "positions": "every_original_prompt_position",
         "lens_refitted": False,
         "development": {
-            "candidates": 24,
-            "recruited": 8,
+            "candidates": 9,
+            "recruited": 6,
             "minimum_exact_rate": 0.50,
             "minimum_control_margin": 0.25,
             "minimum_answer_leverage_rate": 0.75,
         },
         "confirmation": {
-            "candidates": 24,
+            "candidates": 22,
             "recruited": 12,
             "minimum_exact_rate": 0.75,
             "minimum_control_margin": 0.25,
@@ -130,7 +130,7 @@ def development_report(
     leverage_rows: Sequence[Mapping],
     trial_rows: Sequence[Mapping],
     *,
-    expected_n: int = 8,
+    expected_n: int = 6,
 ) -> dict:
     """Select novel targets on development data under the frozen method."""
 

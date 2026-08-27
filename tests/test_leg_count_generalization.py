@@ -44,11 +44,20 @@ def test_frozen_design_uses_distinct_answers_and_no_refit():
     assert design["layers"] == list(range(16, 41))
     assert design["alpha"] == 1.0
     assert design["lens_refitted"] is False
+    assert design["development"] == {
+        "candidates": 9,
+        "recruited": 6,
+        "minimum_exact_rate": 0.50,
+        "minimum_control_margin": 0.25,
+        "minimum_answer_leverage_rate": 0.75,
+    }
+    assert design["confirmation"]["candidates"] == 22
+    assert design["confirmation"]["recruited"] == 12
 
 
 def test_development_selects_only_passing_novel_targets():
-    leverage, trials = _rows(n=8, successes=6)
-    report = development_report(leverage, trials)
+    leverage, trials = _rows(n=6, successes=5)
+    report = development_report(leverage, trials, expected_n=6)
     assert report["verdict"] == "LEG_COUNT_GENERALIZATION_DEVELOPMENT_GO"
     assert report["selected_novel_targets"] == ["ant"]
     assert report["fresh_confirmation_opened"] is False

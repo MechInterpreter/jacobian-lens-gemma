@@ -870,10 +870,10 @@ print("  frozen source             bird")
 print("  calibration / novel       cat=4 / ant=6, spider=8")
 print("  lens / band / alpha       existing pooled lens / L16-L40 / exact alpha=1")
 print("  positions                 every original prompt position")
-print("  new bird candidates       24 development + 24 confirmation")
-print("  recruited                 8 development + 12 confirmation")
-print("  development maximum       72 capability + 72 answer-leverage + 288 causal")
-print("  confirmation maximum      72 capability + 108 answer-leverage + 432 causal")
+print("  new bird candidates       9 development + 22 confirmation")
+print("  recruited                 6 development + 12 confirmation")
+print("  development maximum       27 capability + 54 answer-leverage + 216 causal")
+print("  confirmation maximum      66 capability + 108 answer-leverage + 432 causal")
 print("  fitting / backward        0 / 0")
 print("  runtime                   fp32 80 GB A100; one JSON per completed condition")
 print()
@@ -7532,7 +7532,7 @@ if RUN_STAGE7A_FREEZE_LEG_GENERALIZATION_POPULATION:
     _selected = select_causal_groups(
         GROUPS,
         concepts=("bird",),
-        n_per_concept=48,
+        n_per_concept=31,
         excluded_image_ids=EXCLUSION_UNIVERSE["excluded_image_ids"],
         seed="multimodal-distinct-leg-count-generalization-20260827-v1",
         forbidden_concepts={"bird": ("cat", "ant", "spider")},
@@ -7550,11 +7550,11 @@ if RUN_STAGE7A_FREEZE_LEG_GENERALIZATION_POPULATION:
         "selected_before_model_outputs": True,
         "development": [
             {"group_id": str(row["group_id"]), "image_id": str(row["image_id"])}
-            for row in _selected[:24]
+            for row in _selected[:9]
         ],
         "confirmation": [
             {"group_id": str(row["group_id"]), "image_id": str(row["image_id"])}
-            for row in _selected[24:]
+            for row in _selected[9:]
         ],
         "fitting_performed": False,
         "backward_passes": 0,
@@ -7747,7 +7747,7 @@ if REAL_MODE and LEG_GENERALIZATION_DEVELOPMENT_ENABLED:
                 _development_store.save("capability", _key, _row)
             _capability_rows.append(_row)
             if len(_capability_rows) == 1 or len(_capability_rows) % 24 == 0:
-                print("leg development capability", len(_capability_rows), "of", 72)
+                print("leg development capability", len(_capability_rows), "of", 27)
     _recruited = []
     for _group in _development_candidates:
         _rows = [
@@ -7756,13 +7756,13 @@ if REAL_MODE and LEG_GENERALIZATION_DEVELOPMENT_ENABLED:
         ]
         if len(_rows) == 3 and all(row["pass"] for row in _rows):
             _recruited.append(_group)
-        if len(_recruited) == 8:
+        if len(_recruited) == 6:
             break
-    if len(_recruited) != 8:
+    if len(_recruited) != 6:
         raise RuntimeError(
-            f"Stage 7 development recruited {len(_recruited)}/8 clean bird groups"
+            f"Stage 7 development recruited {len(_recruited)}/6 clean bird groups"
         )
-    print("leg development recruited", len(_recruited), "/ 8")
+    print("leg development recruited", len(_recruited), "/ 6")
 
     _unembed = BACKEND.unembedding_weight()
     _concept_names = ("bird", *LEG_TARGET_ANSWERS, *BROAD_POOLED_CONTROLS)
@@ -7852,15 +7852,15 @@ if REAL_MODE and LEG_GENERALIZATION_DEVELOPMENT_ENABLED:
                     _answer_bases[_target], "legdevleverage",
                 )
                 _leverage_rows.append(_row)
-                if len(_leverage_rows) == 1 or len(_leverage_rows) % 24 == 0:
-                    print("answer leverage", len(_leverage_rows), "of", 72, _work)
+                if len(_leverage_rows) == 1 or len(_leverage_rows) % 18 == 0:
+                    print("answer leverage", len(_leverage_rows), "of", 54, _work)
     _leverage_targets = {
         target for target in LEG_TARGET_ANSWERS
         if all(
             sum(
                 row["success"] for row in _leverage_rows
                 if row["target"] == target and row["modality"] == modality
-            ) >= 6
+            ) >= 5
             and all(
                 row["integrity_pass"] for row in _leverage_rows
                 if row["target"] == target and row["modality"] == modality
@@ -7892,7 +7892,7 @@ if REAL_MODE and LEG_GENERALIZATION_DEVELOPMENT_ENABLED:
                         print("leg development trials", len(_trial_rows), _work)
 
     LEG_GENERALIZATION_DEVELOPMENT_REPORT = development_report(
-        _leverage_rows, _trial_rows, expected_n=8,
+        _leverage_rows, _trial_rows, expected_n=6,
     )
     LEG_GENERALIZATION_DEVELOPMENT_REPORT = {
         **LEG_GENERALIZATION_DEVELOPMENT_REPORT,
@@ -8114,7 +8114,7 @@ if REAL_MODE and LEG_GENERALIZATION_CONFIRMATION_ENABLED:
                 _confirmation_store.save("capability", _key, _row)
             _capability_rows.append(_row)
             if len(_capability_rows) == 1 or len(_capability_rows) % 24 == 0:
-                print("leg confirmation capability", len(_capability_rows), "of", 72)
+                print("leg confirmation capability", len(_capability_rows), "of", 66)
     _recruited = []
     for _group in _confirmation_candidates:
         _rows = [

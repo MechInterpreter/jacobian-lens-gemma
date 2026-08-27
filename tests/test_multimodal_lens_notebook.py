@@ -132,6 +132,8 @@ def test_notebook_contains_no_refit_leg_count_target_generalization() -> None:
         '"positions": "every_original_prompt_position"',
         "LEG_GENERALIZATION_LAYERS = tuple(range(16, 41))",
         "LEG_GENERALIZATION_ALPHA = 1.0",
+        "n_per_concept=31",
+        "9 development + 22 confirmation",
         'required=("2", "4", "6", "8"), leading_space=True',
         'variant="single_token_space_prefixed_digit"',
         "preflight_fp32_or_refuse",
