@@ -103,6 +103,29 @@ On the three development examples not used by the screen, it reports two
 separate arms: replication of the full-state transfer and the exact alpha-one
 J-lens exchange at that same site. The original screen verdict is preserved.
 
+That localized follow-up transferred the real China state in 16 of 18 cells:
+6/6 text, 6/6 image, and 4/6 spoken audio. The two failures were the same audio
+source/donor pair across both properties. Self-state and unrelated-state
+controls remained at zero. The exact J-lens exchange remained at 0/18, with
+all hook and numerical-integrity checks passing. This localizes a causal state
+but also shows that the much smaller J-lens edit is overwritten or bypassed in
+the ordinary prompt computation.
+
+Stage 6D tests one specific explanation without refitting. The evidence is
+still supplied normally and may influence the final prompt state below L24.
+At L24 the final prompt token can no longer attend to the earlier prompt
+prefix. Every generated token is also blocked from attending to that prefix at
+every layer, which closes indirect bypasses through prompt tokens that had
+already read the evidence. Generation can still attend to the encoded final
+prompt token, making it the sole state bottleneck. The stage first
+requires the sealed clean state to retain France facts and the sealed real
+China state to produce China facts. It then tests the exact alpha-one J-lens
+exchange against zero, random-basis, and unrelated-country controls at the
+already selected L24-L31 final-token path. This is a controlled bottleneck
+diagnostic, not a relabeling of the paper method. It uses only the already-open
+development examples, writes one atomic unit per condition, performs zero
+backward passes, and cannot open confirmation.
+
 ### Direction-scoped capability amendment
 
 The first capability run passed 34 of 36 cells. France, China, and Japan passed
@@ -138,8 +161,13 @@ For the no-refit diagnosis, run Stage 6A alone on CPU to seal the plan. Then run
 Stage 6B on an fp32 80 GB A100. Run Stage 6C only if Stage 6B prints
 either a conjunctive passing path or a separately recorded state-valid path.
 Stage 6C runs 54 full-state and 72 J-lens conditions on the three remaining
-development examples. Stages 6A-6C must never be combined with a lens fit
+development examples. Stages 6A-6D must never be combined with a lens fit
 toggle.
+
+After Stage 6C, Stage 6D can be run by itself on the same fp32 A100. It adds
+126 forward-only development conditions and reuses the checksum-pinned
+balanced pooled J-lens. All fit toggles must remain false. A runtime restart
+checksum-reuses every completed condition.
 
 The canonical notebook is
 `notebooks/multimodal_country_workspace_generalization_colab.ipynb`.

@@ -58,6 +58,7 @@ def test_default_configuration_spends_nothing() -> None:
     assert "RUN_STAGE6A_CPU_CAUSAL_SITE_PLAN = False" in source
     assert "RUN_STAGE6B_CAUSAL_SITE_SCREEN = False" in source
     assert "RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT = False" in source
+    assert "RUN_STAGE6D_SEALED_EVIDENCE_DEVELOPMENT = False" in source
     assert "CONFIRM_MODEL_LOAD = False" in source
     assert "CONFIRM_FP32_A100 = False" in source
     assert 'SCIENTIFIC_IMPLEMENTATION_ID = "country-prompt-lens-band-debug-v4.20260826"' in source
@@ -189,3 +190,28 @@ def test_no_refit_causal_site_diagnostic_is_prospective_and_resumable() -> None:
     assert '"target_state", target_state' in source
     assert "SOURCE SCREEN VERDICT UNCHANGED" in source
     assert "_italy_fit_rows[:len(_restricted_source_rows)]" in source
+
+
+def test_sealed_evidence_stage_encodes_then_blocks_rereading_without_refit() -> None:
+    source = _source()
+    assert "RUN_STAGE6D_SEALED_EVIDENCE_DEVELOPMENT = False" in source
+    assert "CONFIRM_SEALED_EVIDENCE_BUDGET = False" in source
+    assert "unrestricted_greedy_sealed_completion" in source
+    assert "unrestricted_greedy_sealed_activation_patch_trial" in source
+    assert "unrestricted_greedy_sealed_swap_trial" in source
+    assert '"bottleneck_layer": _sealed_bottleneck' in source
+    assert (
+        '"generated_tokens_cannot_attend_earlier_prompt_prefix_at_any_layer": True'
+        in source
+    )
+    assert (
+        '"final_prompt_cannot_attend_earlier_prefix_from_layer": _sealed_bottleneck'
+        in source
+    )
+    assert '"fitting_performed": False, "backward_passes": 0' in source
+    assert 'SEALED_STORE.load("intervention", key)' in source
+    assert 'SEALED_STORE.save("intervention", key, stored)' in source
+    assert "fresh confirmation opened False" in source
+    assert "COUNTRY_SEALED_EVIDENCE" not in source.split(
+        "if RUN_STAGE6D_SEALED_EVIDENCE_DEVELOPMENT:", 1
+    )[0]

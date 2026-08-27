@@ -1695,6 +1695,7 @@ RUN_STAGE4B_FRANCE_CHINA_FRESH_CONFIRMATION = False
 RUN_STAGE6A_CPU_CAUSAL_SITE_PLAN = False
 RUN_STAGE6B_CAUSAL_SITE_SCREEN = False
 RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT = False
+RUN_STAGE6D_SEALED_EVIDENCE_DEVELOPMENT = False
 RUN_STAGE5_WRITE_REPORT = False
 
 CONFIRM_MODEL_LOAD = False
@@ -1710,6 +1711,7 @@ CONFIRM_FRANCE_CHINA_DEVELOPMENT_BUDGET = False
 CONFIRM_FRANCE_CHINA_CONFIRMATION_BUDGET = False
 CONFIRM_CAUSAL_SITE_SCREEN_BUDGET = False
 CONFIRM_RESTRICTED_SWAP_BUDGET = False
+CONFIRM_SEALED_EVIDENCE_BUDGET = False
 
 MODEL_REPO_ID = "google/gemma-4-E4B-it"
 MODEL_REVISION = "fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd"
@@ -1760,6 +1762,7 @@ ANY_STAGE = any((
     RUN_STAGE6A_CPU_CAUSAL_SITE_PLAN,
     RUN_STAGE6B_CAUSAL_SITE_SCREEN,
     RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT,
+    RUN_STAGE6D_SEALED_EVIDENCE_DEVELOPMENT,
     RUN_STAGE5_WRITE_REPORT,
 ))
 if not ANY_STAGE:
@@ -1779,6 +1782,7 @@ MODEL_STAGE = any((
     RUN_STAGE4B_FRANCE_CHINA_FRESH_CONFIRMATION,
     RUN_STAGE6B_CAUSAL_SITE_SCREEN,
     RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT,
+    RUN_STAGE6D_SEALED_EVIDENCE_DEVELOPMENT,
 ))
 if MODEL_STAGE and not CONFIRM_MODEL_LOAD:
     print("MODEL BLOCKED: set CONFIRM_MODEL_LOAD=True after reading the budget")
@@ -1797,6 +1801,16 @@ if RUN_STAGE6B_CAUSAL_SITE_SCREEN and not CONFIRM_CAUSAL_SITE_SCREEN_BUDGET:
     print("CAUSAL-SITE SCREEN BLOCKED: confirm its forward-pass budget")
 if RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT and not CONFIRM_RESTRICTED_SWAP_BUDGET:
     print("RESTRICTED SWAP BLOCKED: confirm its forward-pass budget")
+if RUN_STAGE6D_SEALED_EVIDENCE_DEVELOPMENT and not CONFIRM_SEALED_EVIDENCE_BUDGET:
+    print("SEALED-EVIDENCE DEVELOPMENT BLOCKED: confirm its forward-pass budget")
+if RUN_STAGE6D_SEALED_EVIDENCE_DEVELOPMENT and any((
+    RUN_STAGE1_FIT_POOLED_LENS,
+    RUN_STAGE2_REFIT_TASK_MATCHED_LENS_IF_NEEDED,
+    RUN_STAGE2C_FIT_BALANCED_TASK_LENS,
+)):
+    raise RuntimeError(
+        "Stage 6D is a no-refit diagnostic; every lens-fit toggle must be False"
+    )
 '''
 )
 
@@ -1831,6 +1845,8 @@ print("    selection reads actual-target-state and direct-answer controls only")
 print("  localized full-state replication", (N_DEVELOPMENT_PER_COUNTRY - 1) * len(PROPERTIES) * len(MODALITIES) * 3, "development conditions")
 print("  localized exact J-lens exchange", (N_DEVELOPMENT_PER_COUNTRY - 1) * len(PROPERTIES) * len(MODALITIES) * 4, "development conditions")
 print("    combined localized development", (N_DEVELOPMENT_PER_COUNTRY - 1) * len(PROPERTIES) * len(MODALITIES) * 7, "conditions")
+print("  sealed-evidence bottleneck", (N_DEVELOPMENT_PER_COUNTRY - 1) * len(PROPERTIES) * len(MODALITIES) * 7, "development conditions")
+print("    evidence encodes below L24; the final prompt token becomes the sole prefix bottleneck")
 print("  diagnostic fitting/backward passes 0; fresh confirmation examples opened 0")
 print("  model dtype float32; A100 80 GB required; no fallback")
 print("  resume fit checkpoint every", CHECKPOINT_EVERY, "examples; causal resume unit one condition")
@@ -2155,6 +2171,7 @@ _causal_site_requested = any((
     RUN_STAGE6A_CPU_CAUSAL_SITE_PLAN,
     RUN_STAGE6B_CAUSAL_SITE_SCREEN,
     RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT,
+    RUN_STAGE6D_SEALED_EVIDENCE_DEVELOPMENT,
 ))
 if _causal_site_requested:
     if not BALANCED_LENS_PATH.is_file():
@@ -2185,7 +2202,11 @@ RESTRICTED_SWAP_DEVELOPMENT = (
     if RESTRICTED_SWAP_PATH.is_file() else None
 )
 
-if RUN_STAGE6B_CAUSAL_SITE_SCREEN or RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT:
+if any((
+    RUN_STAGE6B_CAUSAL_SITE_SCREEN,
+    RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT,
+    RUN_STAGE6D_SEALED_EVIDENCE_DEVELOPMENT,
+)):
     if not MODEL_ENABLED:
         raise RuntimeError("causal-site GPU stages require the loaded fp32 model")
     if ACTIVE_LENS_LABEL != "balanced_task_pooled_j":
@@ -2562,8 +2583,269 @@ if RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT:
             )
         print("report", RESTRICTED_SWAP_PATH)
 
+if RUN_STAGE6D_SEALED_EVIDENCE_DEVELOPMENT:
+    if not CONFIRM_SEALED_EVIDENCE_BUDGET:
+        raise RuntimeError("sealed-evidence development budget is not confirmed")
+    if ACTIVE_LENS_LABEL != "balanced_task_pooled_j":
+        raise RuntimeError(
+            "sealed-evidence development requires the completed balanced-task "
+            "pooled J-lens; no fitting fallback is permitted"
+        )
+    if CAUSAL_SITE_SCREEN is None or not RESTRICTED_SWAP_PATH.is_file():
+        raise RuntimeError(
+            "sealed-evidence development requires the completed no-refit causal-site "
+            "and localized-development reports"
+        )
+    _localized_source = json.loads(RESTRICTED_SWAP_PATH.read_text(encoding="utf-8"))
+    _state_choice = state_validated_selection(CAUSAL_SITE_SCREEN)
+    _selection = _state_choice.get("selected")
+    if _selection != {
+        "path_id": "L24-31:final_prompt_token",
+        "band": list(range(24, 32)),
+        "site": "final_prompt_token",
+    }:
+        raise RuntimeError(
+            "the sealed-evidence diagnostic is frozen to the previously selected "
+            "L24-L31 final-prompt-token path"
+        )
+    if _localized_source.get("selection", {}).get("band") != list(range(24, 32)):
+        raise RuntimeError("the localized source report records a different band")
+
+    from jlens.mmpilot.country_evidence_seal import (
+        EVIDENCE_SEAL_VERSION, SEALED_DEVELOPMENT_VERSION,
+        evidence_positions, sealed_development_report, sealed_integrity,
+        unrestricted_greedy_sealed_activation_patch_trial,
+        unrestricted_greedy_sealed_completion,
+        unrestricted_greedy_sealed_swap_trial,
+    )
+
+    _sealed_band = tuple(range(24, 32))
+    _sealed_bottleneck = 24
+    _sealed_root = RUN_DIR / "diagnostics" / "country_sealed_evidence_v1"
+    _sealed_path = _sealed_root / "country_sealed_evidence_development_report.json"
+    _country_tokens = concept_tokens((*EVAL_COUNTRIES, *CONTROL_COUNTRIES))
+    _unembed = BACKEND.unembedding_weight()
+    _exact_bases = build_swap_bases_for_lens(
+        ACTIVE_LENS, _unembed, layers=_sealed_band,
+        source=_country_tokens["France"], target=_country_tokens["China"],
+    )
+    _random_bases = {
+        layer: random_two_direction_basis(
+            basis, seed=RANDOM_SEED + 92000 + layer
+        )
+        for layer, basis in _exact_bases.items()
+    }
+    _unrelated_bases = build_swap_bases_for_lens(
+        ACTIVE_LENS, _unembed, layers=_sealed_band,
+        source=_country_tokens[CONTROL_COUNTRIES[0]],
+        target=_country_tokens[CONTROL_COUNTRIES[1]],
+    )
+    _sealed_source_rows = _development_by_country["France"][1:]
+    _sealed_target_rows = _development_by_country["China"][1:]
+    _sealed_unrelated_rows = _italy_fit_rows[:len(_sealed_source_rows)]
+    if not (
+        len(_sealed_source_rows)
+        == len(_sealed_target_rows)
+        == len(_sealed_unrelated_rows)
+        == N_DEVELOPMENT_PER_COUNTRY - 1
+    ):
+        raise RuntimeError("sealed-evidence donor pairing is incomplete")
+
+    _sealed_fingerprint = RunFingerprint(
+        mode="real", model_repo_id=MODEL_REPO_ID,
+        model_revision=MODEL_REVISION, processor_revision=MODEL_REVISION,
+        layers=_sealed_band, lens_checksum=_balanced_checksum,
+        manifest_checksum=PREPARED["population_digest"],
+        split_id=payload_checksum({
+            "source": [row["unit_id"] for row in _sealed_source_rows],
+            "target": [row["unit_id"] for row in _sealed_target_rows],
+            "unrelated": [row["unit_id"] for row in _sealed_unrelated_rows],
+        }),
+        intervention_config={
+            "version": SEALED_DEVELOPMENT_VERSION,
+            "seal_version": EVIDENCE_SEAL_VERSION,
+            "band": list(_sealed_band),
+            "bottleneck_layer": _sealed_bottleneck,
+            "site": "final_prompt_token",
+            "state_conditions": [
+                "clean_sealed", "target_state", "unrelated_state",
+            ],
+            "coordinate_conditions": [
+                "exact", "zero", "random", "unrelated",
+            ],
+            "alpha": 1.0,
+            "generated_tokens_cannot_attend_earlier_prompt_prefix_at_any_layer": True,
+            "final_prompt_cannot_attend_earlier_prefix_from_layer": _sealed_bottleneck,
+            "fresh_confirmation_opened": False,
+        },
+        extra={
+            "causal_site_screen_checksum": CAUSAL_SITE_SCREEN["report_checksum"],
+            "localized_source_checksum": _localized_source["report_checksum"],
+            "selection_checksum": _state_choice["record_checksum"],
+            "fitting_performed": False, "backward_passes": 0,
+        },
+    )
+    SEALED_STORE = UnitStore(_sealed_root, _sealed_fingerprint)
+    print("sealed-evidence run", _sealed_root)
+    print("resume", SEALED_STORE.open())
+    print("fitting performed False; backward passes 0")
+    print("fresh confirmation opened False")
+
+    def _sealed_capture(row, property_name, modality):
+        inputs = build_task_inputs(row, modality, property_name)
+        position = int(inputs.prompt_len) - 1
+        evidence = evidence_positions(
+            inputs,
+            country_token_id=(
+                _country_tokens[row["country"]].token_id
+                if modality == "text" else None
+            ),
+        )
+        captured = capture_activation_sites(
+            BACKEND, inputs, layers=_sealed_band,
+            positions={"final_prompt_token": position},
+        )
+        return inputs, position, evidence, captured["final_prompt_token"]
+
+    _sealed_state_rows = []
+    _sealed_coordinate_rows = []
+    for row_index, source_row in enumerate(_sealed_source_rows):
+        target_row = _sealed_target_rows[row_index]
+        unrelated_row = _sealed_unrelated_rows[row_index]
+        for property_name in PROPERTIES:
+            source_expected = fact("France", property_name)
+            target_expected = fact("China", property_name)
+            for modality in MODALITIES:
+                inputs, position, evidence, _source_state = _sealed_capture(
+                    source_row, property_name, modality
+                )
+                _, _, _, target_state = _sealed_capture(
+                    target_row, property_name, modality
+                )
+                _, _, _, unrelated_state = _sealed_capture(
+                    unrelated_row, property_name, modality
+                )
+                for condition, donor_state, expected in (
+                    ("clean_sealed", None, source_expected),
+                    ("target_state", target_state, target_expected),
+                    ("unrelated_state", unrelated_state, target_expected),
+                ):
+                    key = safe_key(
+                        "country_sealed_state_v1", _state_choice["record_checksum"],
+                        property_name, modality, source_row["unit_id"], condition,
+                    )
+                    stored = SEALED_STORE.load("intervention", key)
+                    if stored is None:
+                        if donor_state is None:
+                            result = unrestricted_greedy_sealed_completion(
+                                BACKEND, inputs,
+                                evidence_token_positions=evidence,
+                                bottleneck_layer=_sealed_bottleneck,
+                                answer=expected, max_new_tokens=MAX_NEW_TOKENS,
+                            )
+                            integrity = sealed_integrity(result)
+                        else:
+                            result = unrestricted_greedy_sealed_activation_patch_trial(
+                                BACKEND, inputs, donor_by_layer=donor_state,
+                                source_position=position,
+                                evidence_token_positions=evidence,
+                                bottleneck_layer=_sealed_bottleneck,
+                                answer=expected, max_new_tokens=MAX_NEW_TOKENS,
+                            )
+                            integrity = sealed_integrity(
+                                result, require_intervention=True
+                            )
+                        stored = {
+                            **result, "unit_id": source_row["unit_id"],
+                            "source": "France", "target": "China",
+                            "property": property_name, "modality": modality,
+                            "condition": condition, "expected": expected,
+                            "success": answer_matches(
+                                result["generated_text"], expected
+                            ),
+                            "integrity_pass": integrity,
+                        }
+                        SEALED_STORE.save("intervention", key, stored)
+                        work = "computed"
+                    else:
+                        work = "reused"
+                    _sealed_state_rows.append(stored)
+                    if len(_sealed_state_rows) == 1 or len(_sealed_state_rows) % 18 == 0:
+                        print("sealed state", len(_sealed_state_rows), work)
+
+                site_inputs = single_position_inputs(inputs, position)
+                for condition, alpha, bases in (
+                    ("exact", 1.0, _exact_bases),
+                    ("zero", 0.0, _exact_bases),
+                    ("random", 1.0, _random_bases),
+                    ("unrelated", 1.0, _unrelated_bases),
+                ):
+                    key = safe_key(
+                        "country_sealed_swap_v1", _state_choice["record_checksum"],
+                        property_name, modality, source_row["unit_id"], condition,
+                    )
+                    stored = SEALED_STORE.load("intervention", key)
+                    if stored is None:
+                        result = unrestricted_greedy_sealed_swap_trial(
+                            BACKEND, site_inputs, bases=bases, alpha=alpha,
+                            evidence_token_positions=evidence,
+                            bottleneck_layer=_sealed_bottleneck,
+                            answer=target_expected,
+                            max_new_tokens=MAX_NEW_TOKENS,
+                            position_rule="evidence_span_only",
+                            realization_policy=TEXT_MODEL_DTYPE_REALIZATION,
+                        )
+                        stored = {
+                            **result, "unit_id": source_row["unit_id"],
+                            "source": "France", "target": "China",
+                            "property": property_name, "modality": modality,
+                            "condition": condition, "expected": target_expected,
+                            "success": answer_matches(
+                                result["generated_text"], target_expected
+                            ),
+                            "integrity_pass": bool(
+                                sealed_integrity(result, require_intervention=True)
+                                and diagnostic_integrity(
+                                    result, exact=(condition == "exact")
+                                )
+                            ),
+                        }
+                        SEALED_STORE.save("intervention", key, stored)
+                        work = "computed"
+                    else:
+                        work = "reused"
+                    _sealed_coordinate_rows.append(stored)
+                    if (
+                        len(_sealed_coordinate_rows) == 1
+                        or len(_sealed_coordinate_rows) % 24 == 0
+                    ):
+                        print("sealed J-lens", len(_sealed_coordinate_rows), work)
+
+    SEALED_DEVELOPMENT = sealed_development_report(
+        _sealed_state_rows, _sealed_coordinate_rows,
+        expected_n=len(_sealed_source_rows),
+        properties=PROPERTIES, modalities=MODALITIES, band=_sealed_band,
+    )
+    _write_report(_sealed_path, SEALED_DEVELOPMENT)
+    print("SEALED-EVIDENCE DEVELOPMENT", SEALED_DEVELOPMENT["verdict"])
+    for cell in SEALED_DEVELOPMENT["state_arm"]["cells"]:
+        print(
+            "state", cell["property"], cell["modality"],
+            {name: f"{row['successes']}/{row['n']}"
+             for name, row in cell["conditions"].items()},
+        )
+    for cell in SEALED_DEVELOPMENT["j_lens_coordinate_arm"]["cells"]:
+        print(
+            "J-lens", cell["property"], cell["modality"],
+            {name: f"{row['successes']}/{row['n']}"
+             for name, row in cell["conditions"].items()},
+        )
+    print("report", _sealed_path)
+
 if RUN_STAGE6A_CPU_CAUSAL_SITE_PLAN and not (
-    RUN_STAGE6B_CAUSAL_SITE_SCREEN or RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT
+    RUN_STAGE6B_CAUSAL_SITE_SCREEN
+    or RUN_STAGE6C_RESTRICTED_SWAP_DEVELOPMENT
+    or RUN_STAGE6D_SEALED_EVIDENCE_DEVELOPMENT
 ):
     print("CPU PLAN COMPLETE. Stop this runtime before the fp32 A100 stages.")
 '''
