@@ -154,10 +154,12 @@ def test_notebook_contains_no_refit_leg_count_target_generalization() -> None:
     ):
         assert required in source, required
 
-    section = source.split("## 20. Stage 7: no-refit target generalization")[1]
+    section = source.split("## 20. Stage 7: no-refit target generalization")[1].split(
+        "## 21. Stage 8: hold the proven identity exchange fixed and vary the fact"
+    )[0]
     assert "fit_arm(" not in section
     assert "fit_jacobian" not in section
-    assert "teacher_forcing" not in section
+    assert '"teacher_forcing_used": True' not in section
 
 
 def test_notebook_contains_no_refit_bird_cat_property_generalization() -> None:
@@ -169,9 +171,16 @@ def test_notebook_contains_no_refit_bird_cat_property_generalization() -> None:
         "EXPECTED_STAGE7B2_NOVEL_REPORT_CHECKSUM",
         "sha256:dbd1c4c6eb46b14c8edb831db0cc4ca8f0f56d6a4084932a5571ae6f3821527a",
         "bird_cat_property_development_report.json",
+        "bird_cat_property_generation_development_report.json",
         "fresh_multimodal_bird_cat_property_generalization_report.json",
+        "EXPECTED_SUPERSEDED_STAGE8A_FIRST_TOKEN_REPORT_CHECKSUM",
+        "sha256:ac0350ecb8de68a446a1db8e39c38595ac62dc716ba1c6ada6048cecedbf2a30",
         '"direction": "bird->cat"',
         '"property_selection": "clean capability only before causal outcomes"',
+        '"output_endpoint": "unrestricted_greedy_complete_answer"',
+        "unrestricted_greedy_swap_trial",
+        "generation_trial_row",
+        "trial_integrity",
         '"fitting_performed": False',
         '"backward_passes": 0',
         "taxonomic class",
@@ -187,7 +196,7 @@ def test_notebook_contains_no_refit_bird_cat_property_generalization() -> None:
     )[1]
     assert "fit_arm(" not in section
     assert "fit_jacobian" not in section
-    assert "teacher_forcing" not in section
+    assert '"teacher_forcing_used": True' not in section
 
 
 def test_mock_notebook_executes_end_to_end(tmp_path: Path, monkeypatch) -> None:

@@ -60,8 +60,10 @@ def test_prompts_are_modality_specific_and_answers_are_unrestricted_aliases():
     assert "attached image" in property_prompt("taxonomic_class", "image")
     assert "spoken recording" in property_prompt("taxonomic_class", "spoken_audio")
     assert answer_matches(" Mammalia.", "taxonomic_class", "target")
+    assert answer_matches("A mammalian.", "taxonomic_class", "target")
     assert answer_matches("an avian", "taxonomic_class", "source")
     assert answer_matches(" kitten<turn|>", "young_name", "target")
+    assert answer_matches("A fledgling.", "young_name", "source")
     assert not answer_matches("chick", "young_name", "target")
 
 
@@ -105,4 +107,3 @@ def test_fresh_confirmation_holm_corrects_all_fifteen_controls():
     assert report["verdict"] == "FRESH_MULTIMODAL_BIRD_CAT_PROPERTY_GENERALIZATION_GO"
     assert len(report["paired_comparisons"]) == 15
     assert all(row["holm_adjusted_p"] <= 0.05 for row in report["paired_comparisons"])
-

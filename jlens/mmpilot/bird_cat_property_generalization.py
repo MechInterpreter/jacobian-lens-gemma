@@ -15,7 +15,7 @@ from collections.abc import Mapping, Sequence
 from jlens.mmpilot.multimodal_lens import holm_adjust, paired_binary_one_sided_p
 from jlens.mmpilot.store import payload_checksum
 
-VERSION = "mmpilot.bird_cat_downstream_property_generalization.v1"
+VERSION = "mmpilot.bird_cat_downstream_property_generalization.v2"
 SOURCE = "bird"
 TARGET = "cat"
 MODALITIES = ("text", "image", "spoken_audio")
@@ -34,7 +34,7 @@ PROPERTY_SPECS = {
         "source_answer": "bird",
         "target_answer": "mammal",
         "source_aliases": ("bird", "avian", "aves"),
-        "target_aliases": ("mammal", "mammalia"),
+        "target_aliases": ("mammal", "mammalia", "mammalian"),
         "rationale": "taxonomy is identity-dependent and is not visible in a still image",
     },
     "young_name": {
@@ -44,7 +44,14 @@ PROPERTY_SPECS = {
         ),
         "source_answer": "chick",
         "target_answer": "kitten",
-        "source_aliases": ("chick", "chicks"),
+        "source_aliases": (
+            "chick",
+            "chicks",
+            "fledgling",
+            "fledglings",
+            "hatchling",
+            "hatchlings",
+        ),
         "target_aliases": ("kitten", "kittens"),
         "rationale": "offspring name is identity-dependent and absent from the evidence",
     },
@@ -68,6 +75,10 @@ def frozen_design() -> dict:
         "layers": list(range(16, 41)),
         "alpha": 1.0,
         "positions": "every_original_prompt_position",
+        "output_endpoint": "unrestricted_greedy_complete_answer",
+        "max_new_tokens": 4,
+        "teacher_forcing_used": False,
+        "candidate_list_supplied": False,
         "selection_uses": "clean capability only; no intervention outcome",
         "development": {
             "n": 6,
