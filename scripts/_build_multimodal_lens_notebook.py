@@ -298,9 +298,11 @@ RUN_STAGE6E_CATDOG_CONFIRMATION = False
 # identities produce distinct leg-count answers: cat=4, ant=6, spider=8.
 RUN_STAGE7A_FREEZE_LEG_GENERALIZATION_POPULATION = False
 RUN_STAGE7B_LEG_GENERALIZATION_DEVELOPMENT = False
+RUN_STAGE7B2_NOVEL_LEG_TARGET_DEVELOPMENT = False
 RUN_STAGE7C_FREEZE_LEG_GENERALIZATION_CONFIRMATION = False
 RUN_STAGE7D_LEG_GENERALIZATION_CONFIRMATION = False
 CONFIRM_LEG_GENERALIZATION_DEVELOPMENT_BUDGET = False
+CONFIRM_LEG_GENERALIZATION_NOVEL_BUDGET = False
 CONFIRM_LEG_GENERALIZATION_CONFIRMATION_BUDGET = False
 CONFIRM_LEG_GENERALIZATION_FP32_A100 = False
 
@@ -650,6 +652,9 @@ FOLLOWUP_STAGES = {
     "7B_leg_generalization_development": (
         RUN_STAGE7B_LEG_GENERALIZATION_DEVELOPMENT
     ),
+    "7B2_novel_leg_target_development": (
+        RUN_STAGE7B2_NOVEL_LEG_TARGET_DEVELOPMENT
+    ),
     "7C_leg_generalization_freeze": (
         RUN_STAGE7C_FREEZE_LEG_GENERALIZATION_CONFIRMATION
     ),
@@ -686,6 +691,7 @@ MODEL_STAGE = any((
     RUN_STAGE5B3_NEW_PROPERTY_CONFIRMATION,
     RUN_STAGE5C_ASYMMETRY_REPLICATION,
     RUN_STAGE7B_LEG_GENERALIZATION_DEVELOPMENT,
+    RUN_STAGE7B2_NOVEL_LEG_TARGET_DEVELOPMENT,
     RUN_STAGE7D_LEG_GENERALIZATION_CONFIRMATION,
 ))
 MODEL_ENABLED = bool(MODEL_STAGE and CONFIRM_MODEL_LOAD)
@@ -757,6 +763,12 @@ LEG_GENERALIZATION_DEVELOPMENT_ENABLED = bool(
     and CONFIRM_LEG_GENERALIZATION_DEVELOPMENT_BUDGET
     and CONFIRM_LEG_GENERALIZATION_FP32_A100
 )
+LEG_GENERALIZATION_NOVEL_ENABLED = bool(
+    RUN_STAGE7B2_NOVEL_LEG_TARGET_DEVELOPMENT
+    and MODEL_ENABLED
+    and CONFIRM_LEG_GENERALIZATION_NOVEL_BUDGET
+    and CONFIRM_LEG_GENERALIZATION_FP32_A100
+)
 LEG_GENERALIZATION_CONFIRMATION_ENABLED = bool(
     RUN_STAGE7D_LEG_GENERALIZATION_CONFIRMATION
     and MODEL_ENABLED
@@ -771,6 +783,7 @@ for _name, _requested, _enabled in (
     ("STAGE 5B3 NEW-PROPERTY CONFIRMATION", RUN_STAGE5B3_NEW_PROPERTY_CONFIRMATION, NEW_PROPERTY_CONFIRM_ENABLED),
     ("STAGE 5C ASYMMETRY REPLICATION", RUN_STAGE5C_ASYMMETRY_REPLICATION, ASYMMETRY_ENABLED),
     ("STAGE 7B LEG GENERALIZATION DEVELOPMENT", RUN_STAGE7B_LEG_GENERALIZATION_DEVELOPMENT, LEG_GENERALIZATION_DEVELOPMENT_ENABLED),
+    ("STAGE 7B2 NOVEL LEG TARGET DEVELOPMENT", RUN_STAGE7B2_NOVEL_LEG_TARGET_DEVELOPMENT, LEG_GENERALIZATION_NOVEL_ENABLED),
     ("STAGE 7D LEG GENERALIZATION CONFIRMATION", RUN_STAGE7D_LEG_GENERALIZATION_CONFIRMATION, LEG_GENERALIZATION_CONFIRMATION_ENABLED),
 ):
     if REAL_MODE and _requested and not _enabled:
@@ -873,7 +886,9 @@ print("  positions                 every original prompt position")
 print("  new bird candidates       9 development + 22 confirmation")
 print("  recruited                 6 development + 12 confirmation")
 print("  development maximum       27 capability + 54 answer-leverage + 216 causal")
-print("  confirmation maximum      66 capability + 108 answer-leverage + 432 causal")
+print("  Stage 7B2 novel extension 216 causal + 36 diagnostic on the spent photos")
+print("  Stage 7B2 scored controls zero, unrelated, 3 random seeds, cross-target")
+print("  confirmation maximum      66 capability + 432 causal + 72 diagnostic")
 print("  fitting / backward        0 / 0")
 print("  runtime                   fp32 80 GB A100; one JSON per completed condition")
 print()
@@ -1274,6 +1289,7 @@ if REAL_MODE and MODEL_ENABLED:
     from jlens.mmpilot.tri_modal import assert_audio_protocol
     _leg_generalization_gpu = bool(
         RUN_STAGE7B_LEG_GENERALIZATION_DEVELOPMENT
+        or RUN_STAGE7B2_NOVEL_LEG_TARGET_DEVELOPMENT
         or RUN_STAGE7D_LEG_GENERALIZATION_CONFIRMATION
     )
     if _leg_generalization_gpu:
@@ -7481,20 +7497,48 @@ downstream answers are 4, 6, and 8, so success on a novel target cannot be
 explained by merely deleting the bird coordinate.
 
 Stage 7A freezes disjoint development and confirmation photographs on CPU.
-Stage 7B first checks clean bird capability and reports direct answer-coordinate
-leverage as a non-gating diagnostic. It then runs cat as a calibration and
-only spends on ant and spider if cat passes. Stage 7C
-freezes every passing novel target without opening confirmation outputs.
-Stage 7D tests the frozen targets once on the untouched population with Holm
-familywise correction.  No stage fits a lens or searches alpha, layers, or
-positions.
+Stage 7B checks clean bird capability and runs the cat calibration.
+
+Cat alone cannot carry the claim.  Four is the answer most animals get, so a
+perturbation that merely disturbs the bird evidence can land on it by accident,
+which is what the pilot saw: in images the exact and the random exchange
+produced four on exactly the same five photographs.  Ant and spider are the
+repair, because six and eight are not where a disturbed model falls.
+
+Stage 7B2 therefore runs ant and spider on the six already-spent development
+photographs, against zero, unrelated and three independently seeded random
+controls, checksum-pinned to the completed cat run and recomputing none of it.
+It adds one control that costs no forward pass and that the four-legged design
+could not express: the exchange toward the *other* identity, rescored against
+this one.  A generic push cannot pass it, because passing requires the answer to
+follow which identity was inserted.  Direct answer-coordinate leverage is
+recorded as a diagnostic and never gates; its only job is to tell a capacity
+limit apart from a transfer failure if a target comes back null.
+
+Stage 7C freezes every passing novel target without opening confirmation
+outputs.  Stage 7D tests them once on the untouched 22-photograph population:
+the first target in the predeclared priority order gates the verdict inside a
+Holm family of three modalities by six controls, and any further target is
+Holm-corrected in its own family as supporting evidence, so carrying it costs
+the primary no familywise power.  No stage fits a lens or searches alpha,
+layers, or positions.
 """
 )
 code(
     r'''
-from jlens.mmpilot.leg_count_generalization import frozen_design
+from jlens.mmpilot.leg_count_generalization import frozen_design, novel_frozen_design
 
 LEG_GENERALIZATION_DESIGN = frozen_design()
+# The novel-target extension is frozen in its own object.  The completed cat run
+# embeds the digest above, and a finished run must not be retroactively rescored
+# under a design that changed after it.
+NOVEL_LEG_DESIGN = novel_frozen_design()
+if NOVEL_LEG_DESIGN["novel_targets"] != ["ant", "spider"]:
+    raise RuntimeError("the frozen novel targets changed")
+if NOVEL_LEG_DESIGN["target_answers"] != {"ant": "6", "spider": "8"}:
+    raise RuntimeError("the frozen novel answers changed")
+if tuple(NOVEL_LEG_DESIGN["layers"]) != tuple(BROAD_POOLED_BAND):
+    raise RuntimeError("the novel extension must reuse the confirmed band")
 LEG_GENERALIZATION_SOURCE = "bird"
 LEG_GENERALIZATION_TARGET_ANSWERS = {"cat": "4", "ant": "6", "spider": "8"}
 LEG_GENERALIZATION_LAYERS = tuple(range(16, 41))
@@ -7515,6 +7559,17 @@ LEG_GENERALIZATION_DEVELOPMENT_ROOT = LEG_GENERALIZATION_ROOT / "development"
 LEG_GENERALIZATION_DEVELOPMENT_REPORT_PATH = (
     LEG_GENERALIZATION_DEVELOPMENT_ROOT / "leg_count_generalization_development_report.json"
 )
+LEG_GENERALIZATION_NOVEL_REPORT_PATH = (
+    LEG_GENERALIZATION_DEVELOPMENT_ROOT
+    / "leg_count_novel_target_development_report.json"
+)
+# Pin for the completed Stage 7B cat run.  Only the prefix was carried off that
+# finished run, so the prefix is what is checked, together with the report's own
+# internal self-consistency, its lens and its population digest.  Paste the full
+# digest below to harden the pin.  Do not invent the remaining characters: a
+# wrong full digest aborts the A100 session on the very check meant to guard it.
+EXPECTED_STAGE7B_CAT_REPORT_CHECKSUM_PREFIX = "sha256:30f2246b"
+EXPECTED_STAGE7B_CAT_REPORT_CHECKSUM = None
 LEG_GENERALIZATION_CONFIRMATION_DESIGN_PATH = (
     LEG_GENERALIZATION_ROOT / "confirmation_design.json"
 )
@@ -7928,25 +7983,355 @@ elif RUN_STAGE7B_LEG_GENERALIZATION_DEVELOPMENT:
 
 code(
     r'''
-if RUN_STAGE7C_FREEZE_LEG_GENERALIZATION_CONFIRMATION:
+LEG_GENERALIZATION_NOVEL_REPORT = None
+if REAL_MODE and LEG_GENERALIZATION_NOVEL_ENABLED:
+    from jlens.lens import JacobianLens
+    from jlens.mmpilot.coordinate_swap import (
+        random_two_direction_basis, resolve_concept_token,
+    )
+    from jlens.mmpilot.leg_count_generalization import (
+        MODALITIES as LEG_MODALITIES,
+        NOVEL_CONDITIONS,
+        NOVEL_CONTROL_CONDITIONS,
+        NOVEL_TARGETS,
+        NUMBER_WORDS as LEG_NUMBER_WORDS,
+        TARGET_ANSWERS as LEG_TARGET_ANSWERS,
+        leg_count_answer_matches,
+        novel_development_report,
+    )
+    from jlens.mmpilot.multimodal_instrument import MODEL_DTYPE_REALIZATION
+    from jlens.mmpilot.multimodal_lens import (
+        build_swap_bases_for_lens, confirmation_leg_count_prompt,
+        load_broad_pooled_development_source, unrestricted_swap_trial,
+    )
+    from jlens.mmpilot.store import RunFingerprint, UnitStore, safe_key
+
     if not LEG_GENERALIZATION_DEVELOPMENT_REPORT_PATH.is_file():
-        raise RuntimeError("Stage 7C requires the completed Stage 7B report")
-    _development = json.loads(
+        raise RuntimeError("Stage 7B2 requires the completed cat calibration report")
+    _cat_report = json.loads(
         LEG_GENERALIZATION_DEVELOPMENT_REPORT_PATH.read_text(encoding="utf-8")
+    )
+    _cat_body = {
+        key: value for key, value in _cat_report.items()
+        if key != "report_checksum"
+    }
+    _cat_checksum = str(_cat_report.get("report_checksum") or "")
+    if _cat_checksum != payload_checksum(_cat_body):
+        raise RuntimeError("the Stage 7B cat report failed its own checksum")
+    if not _cat_checksum.startswith(EXPECTED_STAGE7B_CAT_REPORT_CHECKSUM_PREFIX):
+        raise RuntimeError(
+            "Stage 7B2 is pinned to "
+            f"{EXPECTED_STAGE7B_CAT_REPORT_CHECKSUM_PREFIX}..., found {_cat_checksum}"
+        )
+    if (
+        EXPECTED_STAGE7B_CAT_REPORT_CHECKSUM
+        and _cat_checksum != EXPECTED_STAGE7B_CAT_REPORT_CHECKSUM
+    ):
+        raise RuntimeError("Stage 7B2 is pinned to a different cat report")
+    if (_cat_report.get("scientific_config") or {}).get("lens_checksum") != (
+        EXPECTED_BROAD_POOLED_LENS_CHECKSUM
+    ):
+        raise RuntimeError("the Stage 7B cat report used a different lens")
+    _population, _development_candidates = _leg_population_groups("development")
+    if _cat_report.get("population_digest") != _population["population_digest"]:
+        raise RuntimeError("the Stage 7B cat report used a different population")
+    _groups_by_id = {
+        str(group["group_id"]): group for group in _development_candidates
+    }
+    _recruited = []
+    for _group_id in _cat_report.get("recruited_group_ids") or []:
+        if str(_group_id) not in _groups_by_id:
+            raise RuntimeError(f"cannot reconstruct recruited group {_group_id}")
+        _recruited.append(_groups_by_id[str(_group_id)])
+    if len(_recruited) != 6:
+        raise RuntimeError("Stage 7B2 requires the six frozen recruited groups")
+
+    _source_pin = load_broad_pooled_development_source(
+        BROAD_DEVELOPMENT_RUN_DIR,
+        expected_report_checksum=EXPECTED_BROAD_DEVELOPMENT_REPORT_CHECKSUM,
+        expected_population_digest=EXPECTED_BROAD_DEVELOPMENT_POPULATION_DIGEST,
+        expected_lens_checksum=EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+        expected_direction=CONFIRMATION_DIRECTION,
+    )
+    _lens = JacobianLens.load(_source_pin["lens_path"])
+    # Whether the pinned cat run already spent these photographs on ant and
+    # spider decides what the development stage may be called.  If it did, this
+    # extension is a re-analysis with better controls, not a sealed first look.
+    # Either way the 22 confirmation photographs stay closed, which is what the
+    # confirmatory claim actually rests on.
+    _previously_opened = sorted({
+        str(_cell.get("target"))
+        for _cell in (_cat_report.get("effect_cells") or [])
+        if str(_cell.get("target")) in NOVEL_TARGETS
+    })
+    _novel_random_seeds = (2026082701, 2026082702, 2026082703)
+    _novel_config = {
+        "study": "multimodal_distinct_leg_count_novel_development.v2",
+        "novel_design_digest": NOVEL_LEG_DESIGN["design_digest"],
+        "source_cat_report_checksum": _cat_checksum,
+        "source_cat_report_checksum_prefix": (
+            EXPECTED_STAGE7B_CAT_REPORT_CHECKSUM_PREFIX
+        ),
+        "novel_targets_previously_opened": _previously_opened,
+        "development_is_sealed_first_look": not _previously_opened,
+        "population_digest": _population["population_digest"],
+        "recruited_group_ids": [str(row["group_id"]) for row in _recruited],
+        "lens_checksum": EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+        "model_repo_id": MODEL_REPO_ID,
+        "model_revision": MODEL_REVISION,
+        "model_dtype": "float32",
+        "targets": {target: LEG_TARGET_ANSWERS[target] for target in NOVEL_TARGETS},
+        "selection_priority": list(NOVEL_TARGETS),
+        "layers": list(BROAD_POOLED_BAND),
+        "alpha": 1.0,
+        "positions": "every_original_prompt_position",
+        "executed_conditions": list(NOVEL_CONDITIONS),
+        "scored_controls": list(NOVEL_CONTROL_CONDITIONS),
+        "answer_leverage_role": "diagnostic_only_never_gating",
+        "random_seeds": list(_novel_random_seeds),
+        "fresh_confirmation_opened": False,
+        "fitting_performed": False,
+        "backward_passes": 0,
+        "commit": COMMIT,
+    }
+    _novel_digest = payload_checksum(_novel_config)
+    _novel_run_root = (
+        LEG_GENERALIZATION_DEVELOPMENT_ROOT
+        / f"legnovel_real_{_novel_digest.removeprefix('sha256:')[:12]}"
+    )
+    _novel_run_root.mkdir(parents=True, exist_ok=True)
+    (_novel_run_root / "scientific_config.json").write_text(
+        json.dumps(_novel_config, indent=2), encoding="utf-8"
+    )
+    _novel_store = UnitStore(
+        _novel_run_root,
+        RunFingerprint(
+            mode="real", model_repo_id=MODEL_REPO_ID,
+            model_revision=MODEL_REVISION, processor_revision=MODEL_REVISION,
+            layers=tuple(BROAD_POOLED_BAND),
+            lens_checksum=EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+            manifest_checksum=MANIFEST_CHECKSUM,
+            split_id=payload_checksum(_novel_config["recruited_group_ids"]),
+            intervention_config={
+                "source_report": _cat_checksum,
+                "targets": list(NOVEL_TARGETS),
+                "conditions": list(NOVEL_CONDITIONS),
+                "random_seeds": list(_novel_random_seeds),
+                "alpha": 1.0, "positions": "all_original_prompt_positions",
+                "dtype": "float32",
+            },
+            extra={"study_digest": _novel_digest},
+        ),
+    )
+    print("novel leg-target development run", _novel_store.open())
+    print("source cat report", _cat_checksum)
+    print("novel targets already opened on these photos:",
+          _previously_opened or "none")
+    print("fitting performed False; backward passes 0")
+
+    _unembed = BACKEND.unembedding_weight()
+    _concept_names = ("bird", *NOVEL_TARGETS, *BROAD_POOLED_CONTROLS)
+    _concept_tokens = {
+        name: resolve_concept_token(BACKEND.encode_candidate, name)
+        for name in _concept_names
+    }
+    _answer_tokens = {
+        answer: resolve_concept_token(BACKEND.encode_candidate, word)
+        for answer, word in LEG_NUMBER_WORDS.items()
+    }
+    _concept_bases = {
+        target: build_swap_bases_for_lens(
+            _lens, _unembed, layers=BROAD_POOLED_BAND,
+            source=_concept_tokens["bird"], target=_concept_tokens[target],
+        )
+        for target in NOVEL_TARGETS
+    }
+    _random_bases = {
+        target: {
+            random_index: {
+                layer: random_two_direction_basis(
+                    basis,
+                    seed=(
+                        _novel_random_seeds[random_index]
+                        + 100000 * target_index + layer
+                    ),
+                )
+                for layer, basis in _concept_bases[target].items()
+            }
+            for random_index in range(3)
+        }
+        for target_index, target in enumerate(NOVEL_TARGETS)
+    }
+    _unrelated_bases = build_swap_bases_for_lens(
+        _lens, _unembed, layers=BROAD_POOLED_BAND,
+        source=_concept_tokens[BROAD_POOLED_CONTROLS[0]],
+        target=_concept_tokens[BROAD_POOLED_CONTROLS[1]],
+    )
+    # Diagnostic only, and it can never gate.  Six and eight are far rarer
+    # answers than four, so a null on ant or spider has two very different
+    # readings: the band cannot install that answer at all, or it can but the
+    # identity does not carry it.  Exchanging the answer coordinate directly
+    # separates them, which is what makes a negative result publishable rather
+    # than merely disappointing.
+    _answer_bases = {
+        target: build_swap_bases_for_lens(
+            _lens, _unembed, layers=BROAD_POOLED_BAND,
+            source=_answer_tokens["2"],
+            target=_answer_tokens[LEG_TARGET_ANSWERS[target]],
+        )
+        for target in NOVEL_TARGETS
+    }
+
+    def _run_novel_trial(group, modality, target, condition, alpha, bases):
+        key = safe_key("legnovel", group["group_id"], modality, target, condition)
+        stored = _novel_store.load("intervention", key)
+        if stored is not None:
+            return stored, "reused"
+        inputs = build_group_inputs(
+            group, modality,
+            confirmation_leg_count_prompt(modality, group["caption"]),
+        )
+        clean_logits = BACKEND.forward_logits(inputs.tensors)[
+            0, inputs.final_prompt_position
+        ].float()
+        trial = unrestricted_swap_trial(
+            BACKEND, inputs, bases=bases, alpha=alpha,
+            target_token_id=int(
+                _answer_tokens[LEG_TARGET_ANSWERS[target]].token_id
+            ),
+            source_token_id=int(_answer_tokens["2"].token_id),
+            clean_logits=clean_logits, compact_positions=True,
+            realization_policy=MODEL_DTYPE_REALIZATION,
+        )
+        surface = BACKEND.decode_token(int(trial["patched_top_token_id"])).strip()
+        trial = {
+            **trial, "patched_surface": surface,
+            "success": leg_count_answer_matches(
+                surface, LEG_TARGET_ANSWERS[target]
+            ),
+        }
+        stored = _compact_leg_trial(
+            trial, group=group, modality=modality, target=target,
+            condition=condition, expected=LEG_TARGET_ANSWERS[target],
+        )
+        _novel_store.save("intervention", key, stored)
+        return stored, "computed"
+
+    _novel_rows = []
+    for _target in NOVEL_TARGETS:
+        _conditions = [
+            ("exact", 1.0, _concept_bases[_target]),
+            ("zero", 0.0, _concept_bases[_target]),
+            ("unrelated", 1.0, _unrelated_bases),
+            *[
+                (f"random_{index}", 1.0, _random_bases[_target][index])
+                for index in range(3)
+            ],
+        ]
+        for _group in _recruited:
+            for _modality in LEG_MODALITIES:
+                for _condition, _alpha, _bases in _conditions:
+                    _row, _work = _run_novel_trial(
+                        _group, _modality, _target, _condition, _alpha, _bases
+                    )
+                    _novel_rows.append(_row)
+                    if len(_novel_rows) == 1 or len(_novel_rows) % 36 == 0:
+                        print("novel leg trials", len(_novel_rows), "of 216", _work)
+
+    _novel_leverage_rows = []
+    for _target in NOVEL_TARGETS:
+        for _group in _recruited:
+            for _modality in LEG_MODALITIES:
+                _row, _work = _run_novel_trial(
+                    _group, _modality, _target, "answer_exchange", 1.0,
+                    _answer_bases[_target],
+                )
+                _novel_leverage_rows.append(_row)
+                if len(_novel_leverage_rows) % 18 == 0:
+                    print("novel answer leverage", len(_novel_leverage_rows),
+                          "of 36", _work)
+
+    LEG_GENERALIZATION_NOVEL_REPORT = novel_development_report(
+        _novel_rows, _novel_leverage_rows, expected_n=6,
+    )
+    LEG_GENERALIZATION_NOVEL_REPORT = {
+        **LEG_GENERALIZATION_NOVEL_REPORT,
+        "scientific_config": _novel_config,
+        "source_cat_report_checksum": _cat_checksum,
+        "novel_targets_previously_opened": _previously_opened,
+        "population_digest": _population["population_digest"],
+        "run_dir": str(_novel_run_root),
+    }
+    LEG_GENERALIZATION_NOVEL_REPORT["report_checksum"] = payload_checksum({
+        key: value for key, value in LEG_GENERALIZATION_NOVEL_REPORT.items()
+        if key != "report_checksum"
+    })
+    _novel_store.save(
+        "metric", "leg_count_novel_target_development",
+        LEG_GENERALIZATION_NOVEL_REPORT,
+    )
+    LEG_GENERALIZATION_NOVEL_REPORT_PATH.write_text(
+        json.dumps(LEG_GENERALIZATION_NOVEL_REPORT, indent=2), encoding="utf-8"
+    )
+    print("=" * 96)
+    print("NOVEL LEG-TARGET DEVELOPMENT --",
+          LEG_GENERALIZATION_NOVEL_REPORT["verdict"])
+    print("passing", LEG_GENERALIZATION_NOVEL_REPORT["passing_novel_targets"])
+    print("carried forward",
+          LEG_GENERALIZATION_NOVEL_REPORT["selected_confirmation_targets"])
+    for _cell in LEG_GENERALIZATION_NOVEL_REPORT["effect_cells"]:
+        print(_cell["target"], _cell["modality"], {
+            name: f"{row['successes']}/{row['n']}"
+            for name, row in _cell["conditions"].items()
+        })
+    print("-- which answer each inserted identity actually produced --")
+    for _row in LEG_GENERALIZATION_NOVEL_REPORT["target_answer_confusion"]:
+        print(f"  {_row['target']}->{_row['expected_answer']}",
+              _row["modality"], _row["answers"])
+    for _row in LEG_GENERALIZATION_NOVEL_REPORT["double_dissociation"]:
+        print("  both identities correct", _row["modality"],
+              f"{_row['all_targets_correct']}/{_row['n']}")
+    print("-- answer leverage (diagnostic only, never gating) --")
+    for _row in LEG_GENERALIZATION_NOVEL_REPORT["answer_leverage_diagnostic"]:
+        print(f"  {_row['target']}->{_row['answer']}", _row["modality"],
+              f"{_row['successes']}/{_row['n']}")
+    print("report", LEG_GENERALIZATION_NOVEL_REPORT_PATH)
+elif RUN_STAGE7B2_NOVEL_LEG_TARGET_DEVELOPMENT:
+    print("Stage 7B2 requested but blocked; confirm fp32 A100 and its budget.")
+'''
+)
+
+code(
+    r'''
+if RUN_STAGE7C_FREEZE_LEG_GENERALIZATION_CONFIRMATION:
+    if not LEG_GENERALIZATION_NOVEL_REPORT_PATH.is_file():
+        raise RuntimeError("Stage 7C requires the completed Stage 7B2 report")
+    _development = json.loads(
+        LEG_GENERALIZATION_NOVEL_REPORT_PATH.read_text(encoding="utf-8")
     )
     _development_body = {
         key: value for key, value in _development.items()
         if key != "report_checksum"
     }
     if _development.get("report_checksum") != payload_checksum(_development_body):
-        raise RuntimeError("the Stage 7B report failed its checksum")
-    if _development.get("verdict") != "LEG_COUNT_GENERALIZATION_DEVELOPMENT_GO":
-        print("LEG GENERALIZATION CONFIRMATION NOT LICENSED -- DEVELOPMENT NO_GO")
+        raise RuntimeError("the Stage 7B2 report failed its checksum")
+    if _development.get("verdict") != "LEG_COUNT_NOVEL_TARGET_DEVELOPMENT_GO":
+        print("NOVEL LEG CONFIRMATION NOT LICENSED -- DEVELOPMENT NO_GO")
     else:
         _population, _confirmation_candidates = _leg_population_groups("confirmation")
-        _frozen_targets = [
-            "cat", *list(_development["selected_novel_targets"])
+        # The first passing target in the predeclared priority order gates the
+        # verdict; any second one is carried as a supporting family.  Both are
+        # run regardless, because the exact exchange toward the other identity
+        # *is* the cross-target control for the primary, and a control does not
+        # need to have passed anything itself.
+        _frozen_targets = list(_development["selected_confirmation_targets"])
+        _frozen_target = str(_frozen_targets[0])
+        _secondary_targets = [str(name) for name in _frozen_targets[1:]]
+        _donor_targets = [
+            name for name in LEG_GENERALIZATION_DESIGN["novel_targets"]
+            if name not in _frozen_targets
         ]
+        _executed_targets = [*_frozen_targets, *_donor_targets]
         _confirmation_ids = [
             str(row["group_id"]) for row in _confirmation_candidates
         ]
@@ -7964,20 +8349,34 @@ if RUN_STAGE7C_FREEZE_LEG_GENERALIZATION_CONFIRMATION:
                 + repr(_opened[:10])
             )
         _confirmation_design = {
-            "version": "mmpilot.multimodal_leg_count_confirmation_design.v1",
+            "version": "mmpilot.multimodal_novel_leg_count_confirmation_design.v2",
             "base_design_digest": LEG_GENERALIZATION_DESIGN["design_digest"],
+            "novel_design_digest": NOVEL_LEG_DESIGN["design_digest"],
             "development_report_checksum": _development["report_checksum"],
+            "source_cat_report_checksum": _development[
+                "source_cat_report_checksum"
+            ],
             "population_digest": _population["population_digest"],
             "confirmation_group_ids": _confirmation_ids,
-            "frozen_targets": _frozen_targets,
+            "frozen_target": _frozen_target,
+            "secondary_targets": _secondary_targets,
+            "executed_targets": _executed_targets,
+            "target_answer": LEG_GENERALIZATION_DESIGN["target_answers"][_frozen_target],
             "target_answers": {
-                target: LEG_GENERALIZATION_DESIGN["target_answers"][target]
-                for target in _frozen_targets
+                name: LEG_GENERALIZATION_DESIGN["target_answers"][name]
+                for name in _executed_targets
             },
+            "gating_family": (
+                "the frozen primary target only: 3 modalities x 6 controls"
+            ),
             "layers": list(BROAD_POOLED_BAND),
             "alpha": 1.0,
             "positions": "every_original_prompt_position",
-            "conditions": ["exact", "zero", "random", "unrelated"],
+            "executed_conditions": [
+                "exact", "zero", "unrelated", "random_0", "random_1", "random_2"
+            ],
+            "scored_controls": list(NOVEL_LEG_DESIGN["scored_controls"]),
+            "random_seeds": [2026082801, 2026082802, 2026082803],
             "selected_before_confirmation_outputs": True,
             "confirmation_outputs_opened": False,
             "lens_refitted": False,
@@ -7992,7 +8391,9 @@ if RUN_STAGE7C_FREEZE_LEG_GENERALIZATION_CONFIRMATION:
             json.dumps(_confirmation_design, indent=2), encoding="utf-8"
         )
         print("LEG-COUNT GENERALIZATION CONFIRMATION DESIGN FROZEN")
-        print("  targets", _frozen_targets)
+        print("  gating primary target", _frozen_target)
+        print("  supporting targets", _secondary_targets or "none")
+        print("  executed targets", _executed_targets)
         print("  untouched candidates", len(_confirmation_ids))
         print("  checksum", _confirmation_design["design_checksum"])
         print("  model forwards 0; fitting 0; backward passes 0")
@@ -8009,11 +8410,13 @@ if REAL_MODE and LEG_GENERALIZATION_CONFIRMATION_ENABLED:
         random_two_direction_basis, resolve_concept_token,
     )
     from jlens.mmpilot.leg_count_generalization import (
-        CONDITIONS as LEG_CONDITIONS,
         MODALITIES as LEG_MODALITIES,
+        NOVEL_CONDITIONS,
+        NOVEL_CONTROL_CONDITIONS,
         NUMBER_WORDS as LEG_NUMBER_WORDS,
         TARGET_ANSWERS as LEG_TARGET_ANSWERS,
-        confirmation_report, leg_count_answer_matches,
+        leg_count_answer_matches,
+        novel_confirmation_report,
     )
     from jlens.mmpilot.multimodal_instrument import MODEL_DTYPE_REALIZATION
     from jlens.mmpilot.multimodal_lens import (
@@ -8034,12 +8437,23 @@ if REAL_MODE and LEG_GENERALIZATION_CONFIRMATION_ENABLED:
     }
     if _confirmation_design.get("design_checksum") != payload_checksum(_design_body):
         raise RuntimeError("the Stage 7 confirmation design failed its checksum")
+    if _confirmation_design.get("novel_design_digest") != (
+        NOVEL_LEG_DESIGN["design_digest"]
+    ):
+        raise RuntimeError("the novel design changed after Stage 7C froze it")
     _population, _confirmation_candidates = _leg_population_groups("confirmation")
     if [str(row["group_id"]) for row in _confirmation_candidates] != list(
         _confirmation_design["confirmation_group_ids"]
     ):
         raise RuntimeError("confirmation candidates differ from the frozen design")
-    _targets = tuple(_confirmation_design["frozen_targets"])
+    _primary_target = str(_confirmation_design["frozen_target"])
+    _secondary_targets = [
+        str(name) for name in _confirmation_design.get("secondary_targets") or []
+    ]
+    _executed_targets = [
+        str(name) for name in _confirmation_design["executed_targets"]
+    ]
+    _random_seeds = tuple(_confirmation_design["random_seeds"])
     _source_pin = load_broad_pooled_development_source(
         BROAD_DEVELOPMENT_RUN_DIR,
         expected_report_checksum=EXPECTED_BROAD_DEVELOPMENT_REPORT_CHECKSUM,
@@ -8049,20 +8463,27 @@ if REAL_MODE and LEG_GENERALIZATION_CONFIRMATION_ENABLED:
     )
     _lens = JacobianLens.load(_source_pin["lens_path"])
     _confirmation_config = {
-        "study": "fresh_multimodal_distinct_leg_count_generalization.v1",
+        "study": "fresh_multimodal_distinct_leg_count_generalization.v2",
         "design_checksum": _confirmation_design["design_checksum"],
+        "novel_design_digest": NOVEL_LEG_DESIGN["design_digest"],
         "lens_checksum": EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
         "model_repo_id": MODEL_REPO_ID,
         "model_revision": MODEL_REVISION,
         "model_dtype": "float32",
-        "targets": list(_targets),
+        "primary_target": _primary_target,
+        "secondary_targets": _secondary_targets,
+        "executed_targets": _executed_targets,
         "layers": list(BROAD_POOLED_BAND),
         "alpha": 1.0,
         "positions": "every_original_prompt_position",
+        "executed_conditions": list(NOVEL_CONDITIONS),
+        "scored_controls": list(NOVEL_CONTROL_CONDITIONS),
+        "random_seeds": list(_random_seeds),
         "answer_matching": "digit_or_english_number_word.v1",
         "answer_basis_surfaces": {
             answer: LEG_NUMBER_WORDS[answer] for answer in ("2", "4", "6", "8")
         },
+        "answer_leverage_role": "diagnostic_only_never_gating",
         "fitting_performed": False,
         "commit": COMMIT,
     }
@@ -8086,7 +8507,9 @@ if REAL_MODE and LEG_GENERALIZATION_CONFIRMATION_ENABLED:
             split_id=payload_checksum(_population["confirmation"]),
             intervention_config={
                 "design_checksum": _confirmation_design["design_checksum"],
-                "targets": list(_targets), "conditions": list(LEG_CONDITIONS),
+                "targets": list(_executed_targets),
+                "conditions": list(NOVEL_CONDITIONS),
+                "random_seeds": list(_random_seeds),
                 "alpha": 1.0, "positions": "all_original_prompt_positions",
                 "dtype": "float32",
             },
@@ -8094,7 +8517,9 @@ if REAL_MODE and LEG_GENERALIZATION_CONFIRMATION_ENABLED:
         ),
     )
     print("leg-generalization confirmation run", _confirmation_store.open())
-    print("targets", list(_targets))
+    print("gating primary target", _primary_target)
+    print("supporting targets", _secondary_targets or "none")
+    print("executed targets", _executed_targets)
     print("fitting performed False; backward passes 0")
 
     _capability_rows = []
@@ -8139,7 +8564,7 @@ if REAL_MODE and LEG_GENERALIZATION_CONFIRMATION_ENABLED:
     print("leg confirmation recruited", len(_recruited), "/ 12")
 
     _unembed = BACKEND.unembedding_weight()
-    _concept_names = ("bird", *_targets, *BROAD_POOLED_CONTROLS)
+    _concept_names = ("bird", *_executed_targets, *BROAD_POOLED_CONTROLS)
     _concept_tokens = {
         name: resolve_concept_token(BACKEND.encode_candidate, name)
         for name in _concept_names
@@ -8153,7 +8578,7 @@ if REAL_MODE and LEG_GENERALIZATION_CONFIRMATION_ENABLED:
             _lens, _unembed, layers=BROAD_POOLED_BAND,
             source=_concept_tokens["bird"], target=_concept_tokens[target],
         )
-        for target in _targets
+        for target in _executed_targets
     }
     _answer_bases = {
         target: build_swap_bases_for_lens(
@@ -8161,16 +8586,20 @@ if REAL_MODE and LEG_GENERALIZATION_CONFIRMATION_ENABLED:
             source=_answer_tokens["2"],
             target=_answer_tokens[LEG_TARGET_ANSWERS[target]],
         )
-        for target in _targets
+        for target in _executed_targets
     }
     _random_bases = {
         target: {
-            layer: random_two_direction_basis(
-                basis, seed=20260828 + 1000 * index + layer
-            )
-            for layer, basis in _concept_bases[target].items()
+            seed_index: {
+                layer: random_two_direction_basis(
+                    basis,
+                    seed=_random_seeds[seed_index] + 100000 * target_index + layer,
+                )
+                for layer, basis in _concept_bases[target].items()
+            }
+            for seed_index in range(len(_random_seeds))
         }
-        for index, target in enumerate(_targets)
+        for target_index, target in enumerate(_executed_targets)
     }
     _unrelated_bases = build_swap_bases_for_lens(
         _lens, _unembed, layers=BROAD_POOLED_BAND,
@@ -8213,26 +8642,18 @@ if REAL_MODE and LEG_GENERALIZATION_CONFIRMATION_ENABLED:
         _confirmation_store.save("intervention", key, stored)
         return stored, "computed"
 
-    _leverage_rows = []
-    for _target in _targets:
-        for _group in _recruited:
-            for _modality in LEG_MODALITIES:
-                _row, _work = _run_confirmation_leg_trial(
-                    _group, _modality, _target, "answer_exchange", 1.0,
-                    _answer_bases[_target], "legconfleverage",
-                )
-                _leverage_rows.append(_row)
-                if len(_leverage_rows) == 1 or len(_leverage_rows) % 36 == 0:
-                    print("confirmation answer leverage", len(_leverage_rows), _work)
-
+    _expected_trials = len(_executed_targets) * len(NOVEL_CONDITIONS) * 12 * 3
     _trial_rows = []
-    for _target in _targets:
-        _conditions = (
+    for _target in _executed_targets:
+        _conditions = [
             ("exact", 1.0, _concept_bases[_target]),
             ("zero", 0.0, _concept_bases[_target]),
-            ("random", 1.0, _random_bases[_target]),
             ("unrelated", 1.0, _unrelated_bases),
-        )
+            *[
+                (f"random_{index}", 1.0, _random_bases[_target][index])
+                for index in range(len(_random_seeds))
+            ],
+        ]
         for _group in _recruited:
             for _modality in LEG_MODALITIES:
                 for _condition, _alpha, _bases in _conditions:
@@ -8242,10 +8663,25 @@ if REAL_MODE and LEG_GENERALIZATION_CONFIRMATION_ENABLED:
                     )
                     _trial_rows.append(_row)
                     if len(_trial_rows) == 1 or len(_trial_rows) % 72 == 0:
-                        print("leg confirmation trials", len(_trial_rows), _work)
+                        print("leg confirmation trials", len(_trial_rows),
+                              "of", _expected_trials, _work)
 
-    LEG_GENERALIZATION_CONFIRMATION_REPORT = confirmation_report(
-        _leverage_rows, _trial_rows, frozen_targets=_targets, expected_n=12,
+    _leverage_rows = []
+    for _target in _executed_targets:
+        for _group in _recruited:
+            for _modality in LEG_MODALITIES:
+                _row, _work = _run_confirmation_leg_trial(
+                    _group, _modality, _target, "answer_exchange", 1.0,
+                    _answer_bases[_target], "legconfleverage",
+                )
+                _leverage_rows.append(_row)
+                if len(_leverage_rows) % 36 == 0:
+                    print("confirmation answer leverage", len(_leverage_rows), _work)
+
+    LEG_GENERALIZATION_CONFIRMATION_REPORT = novel_confirmation_report(
+        _trial_rows, _leverage_rows,
+        target=_primary_target, secondary_targets=_secondary_targets,
+        expected_n=12,
     )
     LEG_GENERALIZATION_CONFIRMATION_REPORT = {
         **LEG_GENERALIZATION_CONFIRMATION_REPORT,
@@ -8268,17 +8704,33 @@ if REAL_MODE and LEG_GENERALIZATION_CONFIRMATION_ENABLED:
         encoding="utf-8",
     )
     print("=" * 96)
-    print("FRESH MULTIMODAL LEG-COUNT GENERALIZATION --",
+    print("FRESH MULTIMODAL NOVEL LEG-COUNT GENERALIZATION --",
           LEG_GENERALIZATION_CONFIRMATION_REPORT["verdict"])
-    print("calibration passed",
-          LEG_GENERALIZATION_CONFIRMATION_REPORT["calibration_passed"])
-    print("novel passing targets",
-          LEG_GENERALIZATION_CONFIRMATION_REPORT["novel_passing_targets"])
-    for _cell in LEG_GENERALIZATION_CONFIRMATION_REPORT["effect_cells"]:
-        print(_cell["target"], _cell["modality"], {
-            name: f"{row['successes']}/{row['n']}"
-            for name, row in _cell["conditions"].items()
-        })
+    for _result in LEG_GENERALIZATION_CONFIRMATION_REPORT["target_results"]:
+        print(f"{_result['role']} {_result['target']}->{_result['answer']}",
+              "effect", _result["effect_passed"],
+              "significance", _result["significance_passed"])
+        for _cell in _result["effect_cells"]:
+            print("   ", _cell["modality"], {
+                name: f"{row['successes']}/{row['n']}"
+                for name, row in _cell["conditions"].items()
+            })
+    print("-- which answer each inserted identity actually produced --")
+    for _row in LEG_GENERALIZATION_CONFIRMATION_REPORT["target_answer_confusion"]:
+        print(f"  {_row['target']}->{_row['expected_answer']}",
+              _row["modality"], _row["answers"])
+    for _row in LEG_GENERALIZATION_CONFIRMATION_REPORT["double_dissociation"]:
+        print("  every identity correct", _row["modality"],
+              f"{_row['all_targets_correct']}/{_row['n']}")
+    print("-- gating family, Holm-adjusted --")
+    for _row in LEG_GENERALIZATION_CONFIRMATION_REPORT["paired_comparisons"]:
+        print(f"  {_row['modality']:<13} vs {_row['control']:<12}",
+              f"discordant {_row['primary_only']}/{_row['discordant']}",
+              f"holm p {_row['holm_adjusted_p']:.5f}")
+    print("-- answer leverage (diagnostic only, never gating) --")
+    for _row in LEG_GENERALIZATION_CONFIRMATION_REPORT["answer_leverage_diagnostic"]:
+        print(f"  {_row['target']}->{_row['answer']}", _row["modality"],
+              f"{_row['successes']}/{_row['n']}")
     print("report", LEG_GENERALIZATION_CONFIRMATION_REPORT_PATH)
 elif RUN_STAGE7D_LEG_GENERALIZATION_CONFIRMATION:
     print("Stage 7D requested but blocked; confirm fp32 A100 and its budget.")
