@@ -160,6 +160,36 @@ def test_notebook_contains_no_refit_leg_count_target_generalization() -> None:
     assert "teacher_forcing" not in section
 
 
+def test_notebook_contains_no_refit_bird_cat_property_generalization() -> None:
+    source = _source()
+    for required in (
+        "RUN_STAGE8A_BIRD_CAT_PROPERTY_DEVELOPMENT",
+        "RUN_STAGE8B_FREEZE_BIRD_CAT_PROPERTY_CONFIRMATION",
+        "RUN_STAGE8C_BIRD_CAT_PROPERTY_CONFIRMATION",
+        "EXPECTED_STAGE7B2_NOVEL_REPORT_CHECKSUM",
+        "sha256:dbd1c4c6eb46b14c8edb831db0cc4ca8f0f56d6a4084932a5571ae6f3821527a",
+        "bird_cat_property_development_report.json",
+        "fresh_multimodal_bird_cat_property_generalization_report.json",
+        '"direction": "bird->cat"',
+        '"property_selection": "clean capability only before causal outcomes"',
+        '"fitting_performed": False',
+        '"backward_passes": 0',
+        "taxonomic class",
+        "young-name",
+        "property_capability_report",
+        "property_development_report",
+        "property_confirmation_report",
+    ):
+        assert required in source, required
+
+    section = source.split(
+        "## 21. Stage 8: hold the proven identity exchange fixed and vary the fact"
+    )[1]
+    assert "fit_arm(" not in section
+    assert "fit_jacobian" not in section
+    assert "teacher_forcing" not in section
+
+
 def test_mock_notebook_executes_end_to_end(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("TMP", str(tmp_path))
     monkeypatch.setenv("TEMP", str(tmp_path))

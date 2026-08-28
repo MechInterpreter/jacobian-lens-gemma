@@ -158,7 +158,7 @@ code(
 # For a clean real run set RUN_REAL_MATCHED_JLENS=True and the desired stages.
 # Stage 0 can run on CPU. Stages 1-3 need a GPU; A100 is strongly recommended
 # for Stage 1. Stage 4 can run in a fresh CPU session by setting REPORT_RUN_DIR.
-RUN_REAL_MATCHED_JLENS = True
+RUN_REAL_MATCHED_JLENS = False
 RUN_STAGE0_FREEZE_PLAN = False
 RUN_STAGE1_FIT_LENSES = False
 RUN_STAGE2_CROSS_EVALUATE = False
@@ -298,13 +298,25 @@ RUN_STAGE6E_CATDOG_CONFIRMATION = False
 # identities produce distinct leg-count answers: cat=4, ant=6, spider=8.
 RUN_STAGE7A_FREEZE_LEG_GENERALIZATION_POPULATION = False
 RUN_STAGE7B_LEG_GENERALIZATION_DEVELOPMENT = False
-RUN_STAGE7B2_NOVEL_LEG_TARGET_DEVELOPMENT = True
+RUN_STAGE7B2_NOVEL_LEG_TARGET_DEVELOPMENT = False
 RUN_STAGE7C_FREEZE_LEG_GENERALIZATION_CONFIRMATION = False
 RUN_STAGE7D_LEG_GENERALIZATION_CONFIRMATION = False
 CONFIRM_LEG_GENERALIZATION_DEVELOPMENT_BUDGET = False
-CONFIRM_LEG_GENERALIZATION_NOVEL_BUDGET = True
+CONFIRM_LEG_GENERALIZATION_NOVEL_BUDGET = False
 CONFIRM_LEG_GENERALIZATION_CONFIRMATION_BUDGET = False
 CONFIRM_LEG_GENERALIZATION_FP32_A100 = True
+
+# Stage 8 changes only the downstream question.  It reuses the confirmed
+# bird->cat exchange and the six already-spent Stage 7 development photographs.
+# Clean capability, measured before intervention outcomes, chooses between two
+# frozen nonvisual facts.  Fresh confirmation remains sealed unless development
+# passes.  No stage fits a lens or searches alpha, layers, or positions.
+RUN_STAGE8A_BIRD_CAT_PROPERTY_DEVELOPMENT = False
+RUN_STAGE8B_FREEZE_BIRD_CAT_PROPERTY_CONFIRMATION = False
+RUN_STAGE8C_BIRD_CAT_PROPERTY_CONFIRMATION = False
+CONFIRM_BIRD_CAT_PROPERTY_DEVELOPMENT_BUDGET = False
+CONFIRM_BIRD_CAT_PROPERTY_CONFIRMATION_BUDGET = False
+CONFIRM_BIRD_CAT_PROPERTY_FP32_A100 = True
 
 # The frozen cat->dog scientific target and every tunable it uses. Declared
 # here, not in section 19's own cell, for the same reason the switches above
@@ -661,6 +673,15 @@ FOLLOWUP_STAGES = {
     "7D_leg_generalization_confirmation": (
         RUN_STAGE7D_LEG_GENERALIZATION_CONFIRMATION
     ),
+    "8A_bird_cat_property_development": (
+        RUN_STAGE8A_BIRD_CAT_PROPERTY_DEVELOPMENT
+    ),
+    "8B_bird_cat_property_freeze": (
+        RUN_STAGE8B_FREEZE_BIRD_CAT_PROPERTY_CONFIRMATION
+    ),
+    "8C_bird_cat_property_confirmation": (
+        RUN_STAGE8C_BIRD_CAT_PROPERTY_CONFIRMATION
+    ),
 }
 if sum(1 for value in FOLLOWUP_STAGES.values() if value) > 1:
     raise RuntimeError(
@@ -693,6 +714,8 @@ MODEL_STAGE = any((
     RUN_STAGE7B_LEG_GENERALIZATION_DEVELOPMENT,
     RUN_STAGE7B2_NOVEL_LEG_TARGET_DEVELOPMENT,
     RUN_STAGE7D_LEG_GENERALIZATION_CONFIRMATION,
+    RUN_STAGE8A_BIRD_CAT_PROPERTY_DEVELOPMENT,
+    RUN_STAGE8C_BIRD_CAT_PROPERTY_CONFIRMATION,
 ))
 MODEL_ENABLED = bool(MODEL_STAGE and CONFIRM_MODEL_LOAD)
 FIT_ENABLED = bool(RUN_STAGE1_FIT_LENSES and MODEL_ENABLED and CONFIRM_FIT_BUDGET)
@@ -775,6 +798,18 @@ LEG_GENERALIZATION_CONFIRMATION_ENABLED = bool(
     and CONFIRM_LEG_GENERALIZATION_CONFIRMATION_BUDGET
     and CONFIRM_LEG_GENERALIZATION_FP32_A100
 )
+BIRD_CAT_PROPERTY_DEVELOPMENT_ENABLED = bool(
+    RUN_STAGE8A_BIRD_CAT_PROPERTY_DEVELOPMENT
+    and MODEL_ENABLED
+    and CONFIRM_BIRD_CAT_PROPERTY_DEVELOPMENT_BUDGET
+    and CONFIRM_BIRD_CAT_PROPERTY_FP32_A100
+)
+BIRD_CAT_PROPERTY_CONFIRMATION_ENABLED = bool(
+    RUN_STAGE8C_BIRD_CAT_PROPERTY_CONFIRMATION
+    and MODEL_ENABLED
+    and CONFIRM_BIRD_CAT_PROPERTY_CONFIRMATION_BUDGET
+    and CONFIRM_BIRD_CAT_PROPERTY_FP32_A100
+)
 for _name, _requested, _enabled in (
     ("STAGE 5A LOCALIZATION", RUN_STAGE5A_BAND_LOCALIZATION, LOCALIZATION_ENABLED),
     ("STAGE 5B00 PROPERTY PROMPT SCREEN", RUN_STAGE5B00_PROPERTY_PROMPT_SCREEN, PROPERTY_PROMPT_SCREEN_ENABLED),
@@ -785,6 +820,8 @@ for _name, _requested, _enabled in (
     ("STAGE 7B LEG GENERALIZATION DEVELOPMENT", RUN_STAGE7B_LEG_GENERALIZATION_DEVELOPMENT, LEG_GENERALIZATION_DEVELOPMENT_ENABLED),
     ("STAGE 7B2 NOVEL LEG TARGET DEVELOPMENT", RUN_STAGE7B2_NOVEL_LEG_TARGET_DEVELOPMENT, LEG_GENERALIZATION_NOVEL_ENABLED),
     ("STAGE 7D LEG GENERALIZATION CONFIRMATION", RUN_STAGE7D_LEG_GENERALIZATION_CONFIRMATION, LEG_GENERALIZATION_CONFIRMATION_ENABLED),
+    ("STAGE 8A BIRD-CAT PROPERTY DEVELOPMENT", RUN_STAGE8A_BIRD_CAT_PROPERTY_DEVELOPMENT, BIRD_CAT_PROPERTY_DEVELOPMENT_ENABLED),
+    ("STAGE 8C BIRD-CAT PROPERTY CONFIRMATION", RUN_STAGE8C_BIRD_CAT_PROPERTY_CONFIRMATION, BIRD_CAT_PROPERTY_CONFIRMATION_ENABLED),
 ):
     if REAL_MODE and _requested and not _enabled:
         print(f"{_name} BLOCKED: confirm its printed budget above")
@@ -889,6 +926,16 @@ print("  development maximum       27 capability + 54 answer-leverage + 216 caus
 print("  Stage 7B2 novel extension 216 causal + 36 diagnostic on the spent photos")
 print("  Stage 7B2 scored controls zero, unrelated, 3 random seeds, cross-target")
 print("  confirmation maximum      66 capability + 432 causal + 72 diagnostic")
+print("  fitting / backward        0 / 0")
+print("  runtime                   fp32 80 GB A100; one JSON per completed condition")
+print()
+print("STAGE 8 NO-REFIT BIRD->CAT PROPERTY GENERALIZATION")
+print("  fixed causal instrument   pooled J-lens / L16-L40 / exact alpha=1 / all positions")
+print("  capability-only choices   taxonomic class, young-name")
+print("  development population    same six already-spent Stage 7 bird photographs")
+print("  development forwards      36 capability + 108 causal")
+print("  scored controls           zero, unrelated, three independent random seeds")
+print("  confirmation maximum      66 capability + 216 causal on untouched photographs")
 print("  fitting / backward        0 / 0")
 print("  runtime                   fp32 80 GB A100; one JSON per completed condition")
 print()
@@ -8734,6 +8781,673 @@ if REAL_MODE and LEG_GENERALIZATION_CONFIRMATION_ENABLED:
     print("report", LEG_GENERALIZATION_CONFIRMATION_REPORT_PATH)
 elif RUN_STAGE7D_LEG_GENERALIZATION_CONFIRMATION:
     print("Stage 7D requested but blocked; confirm fp32 A100 and its budget.")
+'''
+)
+
+markdown(
+    r"""
+## 21. Stage 8: hold the proven identity exchange fixed and vary the fact
+
+Stage 7 showed that ant and spider are not usable causal targets under this
+lens: their exact exchanges produced neither six nor eight in any modality,
+while one random direction often produced six.  That rules out treating a
+generic number displacement as semantic transfer.
+
+Stage 8 instead keeps every successful causal choice fixed: bird-to-cat,
+pooled multimodal J-lens, L16-L40, exact alpha one, and every original prompt
+position.  It asks whether the same identity exchange recomputes a second
+nonvisual fact.  Two facts are declared in advance: biological class
+(bird/avian to mammal) and the usual name for the young (chick to kitten).
+Clean capability alone selects the fact before any intervention result is
+opened.  Development reuses the six already-spent Stage 7 photographs; fresh
+confirmation remains sealed unless development passes.  Nothing is fitted and
+no alpha, band, position, threshold, or answer is searched.
+"""
+)
+code(
+    r'''
+from jlens.mmpilot.bird_cat_property_generalization import frozen_design as bird_cat_property_design
+
+BIRD_CAT_PROPERTY_DESIGN = bird_cat_property_design()
+BIRD_CAT_PROPERTY_ROOT = RUNS_ROOT / "mmbirdcatproperty"
+BIRD_CAT_PROPERTY_DEVELOPMENT_ROOT = BIRD_CAT_PROPERTY_ROOT / "development"
+BIRD_CAT_PROPERTY_DEVELOPMENT_REPORT_PATH = (
+    BIRD_CAT_PROPERTY_DEVELOPMENT_ROOT
+    / "bird_cat_property_development_report.json"
+)
+BIRD_CAT_PROPERTY_CONFIRMATION_DESIGN_PATH = (
+    BIRD_CAT_PROPERTY_ROOT / "confirmation_design.json"
+)
+BIRD_CAT_PROPERTY_CONFIRMATION_ROOT = BIRD_CAT_PROPERTY_ROOT / "confirmation"
+BIRD_CAT_PROPERTY_CONFIRMATION_REPORT_PATH = (
+    BIRD_CAT_PROPERTY_CONFIRMATION_ROOT
+    / "fresh_multimodal_bird_cat_property_generalization_report.json"
+)
+EXPECTED_STAGE7B2_NOVEL_REPORT_CHECKSUM = (
+    "sha256:dbd1c4c6eb46b14c8edb831db0cc4ca8f0f56d6a4084932a5571ae6f3821527a"
+)
+'''
+)
+
+code(
+    r'''
+BIRD_CAT_PROPERTY_DEVELOPMENT_REPORT = None
+if REAL_MODE and BIRD_CAT_PROPERTY_DEVELOPMENT_ENABLED:
+    from jlens.lens import JacobianLens
+    from jlens.mmpilot.bird_cat_property_generalization import (
+        CONDITIONS as PROPERTY_CONDITIONS,
+        MODALITIES as PROPERTY_MODALITIES,
+        PROPERTY_SPECS,
+        answer_matches as property_fact_matches,
+        capability_report as property_capability_report,
+        development_report as property_development_report,
+        property_prompt,
+    )
+    from jlens.mmpilot.coordinate_swap import (
+        random_two_direction_basis, resolve_concept_token,
+    )
+    from jlens.mmpilot.multimodal_instrument import MODEL_DTYPE_REALIZATION
+    from jlens.mmpilot.multimodal_lens import (
+        build_swap_bases_for_lens, load_broad_pooled_development_source,
+        unrestricted_swap_trial,
+    )
+    from jlens.mmpilot.store import RunFingerprint, UnitStore, safe_key
+
+    if not LEG_GENERALIZATION_NOVEL_REPORT_PATH.is_file():
+        raise RuntimeError("Stage 8A requires the completed Stage 7B2 report")
+    _novel_source = json.loads(
+        LEG_GENERALIZATION_NOVEL_REPORT_PATH.read_text(encoding="utf-8")
+    )
+    _novel_source_body = {
+        key: value for key, value in _novel_source.items()
+        if key != "report_checksum"
+    }
+    if _novel_source.get("report_checksum") != payload_checksum(_novel_source_body):
+        raise RuntimeError("the Stage 7B2 report failed its own checksum")
+    if _novel_source["report_checksum"] != EXPECTED_STAGE7B2_NOVEL_REPORT_CHECKSUM:
+        raise RuntimeError("Stage 8A is pinned to a different Stage 7B2 report")
+    if _novel_source.get("fresh_confirmation_opened") is not False:
+        raise RuntimeError("the Stage 7B2 source does not prove confirmation stayed sealed")
+    _population, _development_candidates = _leg_population_groups("development")
+    _groups_by_id = {
+        str(group["group_id"]): group for group in _development_candidates
+    }
+    _recruited = []
+    for _group_id in (_novel_source.get("scientific_config") or {}).get(
+        "recruited_group_ids", []
+    ):
+        if str(_group_id) not in _groups_by_id:
+            raise RuntimeError(f"cannot reconstruct Stage 8 group {_group_id}")
+        _recruited.append(_groups_by_id[str(_group_id)])
+    if len(_recruited) != 6:
+        raise RuntimeError("Stage 8A requires the six already-spent development groups")
+
+    _source_pin = load_broad_pooled_development_source(
+        BROAD_DEVELOPMENT_RUN_DIR,
+        expected_report_checksum=EXPECTED_BROAD_DEVELOPMENT_REPORT_CHECKSUM,
+        expected_population_digest=EXPECTED_BROAD_DEVELOPMENT_POPULATION_DIGEST,
+        expected_lens_checksum=EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+        expected_direction=CONFIRMATION_DIRECTION,
+    )
+    _lens = JacobianLens.load(_source_pin["lens_path"])
+    _random_seeds = (2026082801, 2026082802, 2026082803)
+    _config = {
+        "study": "bird_cat_downstream_property_development.v1",
+        "design_digest": BIRD_CAT_PROPERTY_DESIGN["design_digest"],
+        "source_novel_report_checksum": EXPECTED_STAGE7B2_NOVEL_REPORT_CHECKSUM,
+        "population_digest": _population["population_digest"],
+        "recruited_group_ids": [str(row["group_id"]) for row in _recruited],
+        "lens_checksum": EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+        "model_repo_id": MODEL_REPO_ID,
+        "model_revision": MODEL_REVISION,
+        "model_dtype": "float32",
+        "direction": "bird->cat",
+        "candidate_properties": list(BIRD_CAT_PROPERTY_DESIGN["property_priority"]),
+        "property_selection": "clean capability only before causal outcomes",
+        "layers": list(BROAD_POOLED_BAND),
+        "alpha": 1.0,
+        "positions": "every_original_prompt_position",
+        "conditions": list(PROPERTY_CONDITIONS),
+        "random_seeds": list(_random_seeds),
+        "fresh_confirmation_opened": False,
+        "fitting_performed": False,
+        "backward_passes": 0,
+        "commit": COMMIT,
+    }
+    _digest = payload_checksum(_config)
+    _run_root = (
+        BIRD_CAT_PROPERTY_DEVELOPMENT_ROOT
+        / f"birdcatpropdev_real_{_digest.removeprefix('sha256:')[:12]}"
+    )
+    _run_root.mkdir(parents=True, exist_ok=True)
+    (_run_root / "scientific_config.json").write_text(
+        json.dumps(_config, indent=2), encoding="utf-8"
+    )
+    _store = UnitStore(
+        _run_root,
+        RunFingerprint(
+            mode="real", model_repo_id=MODEL_REPO_ID,
+            model_revision=MODEL_REVISION, processor_revision=MODEL_REVISION,
+            layers=tuple(BROAD_POOLED_BAND),
+            lens_checksum=EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+            manifest_checksum=MANIFEST_CHECKSUM,
+            split_id=payload_checksum(_config["recruited_group_ids"]),
+            intervention_config={
+                "design_digest": BIRD_CAT_PROPERTY_DESIGN["design_digest"],
+                "direction": "bird->cat", "conditions": list(PROPERTY_CONDITIONS),
+                "random_seeds": list(_random_seeds), "alpha": 1.0,
+                "positions": "all_original_prompt_positions", "dtype": "float32",
+            },
+            extra={"study_digest": _digest},
+        ),
+    )
+    print("bird-cat property development run", _store.open())
+    print("lens reused", EXPECTED_BROAD_POOLED_LENS_CHECKSUM)
+    print("fitting performed False; backward passes 0")
+
+    # This whole loop completes before any causal basis is built or causal row
+    # is opened.  The selected question therefore depends only on whether the
+    # unmodified model can answer it from each modality.
+    _capability_rows = []
+    for _property_name in BIRD_CAT_PROPERTY_DESIGN["property_priority"]:
+        for _group in _recruited:
+            for _modality in PROPERTY_MODALITIES:
+                _key = safe_key("bcpropcap", _property_name, _group["group_id"], _modality)
+                _row = _store.load("capability", _key)
+                if _row is None:
+                    _inputs = build_group_inputs(
+                        _group, _modality,
+                        property_prompt(_property_name, _modality, _group["caption"]),
+                    )
+                    _logits = BACKEND.forward_logits(_inputs.tensors)[
+                        0, _inputs.final_prompt_position
+                    ].float()
+                    _surface = BACKEND.decode_token(int(_logits.argmax())).strip()
+                    _row = {
+                        "group_id": str(_group["group_id"]),
+                        "image_id": str(_group["image_id"]),
+                        "property": _property_name,
+                        "modality": _modality,
+                        "generated": _surface,
+                        "pass": property_fact_matches(
+                            _surface, _property_name, "source"
+                        ),
+                    }
+                    _store.save("capability", _key, _row)
+                _capability_rows.append(_row)
+    _capability = property_capability_report(_capability_rows, expected_n=6)
+    _store.save("metric", "bird_cat_property_capability", _capability)
+    print("PROPERTY CAPABILITY", _capability["verdict"])
+    for _cell in _capability["cells"]:
+        print(_cell["property"], _cell["modality"],
+              f"{_cell['successes']}/{_cell['n']}")
+    print("selected before causal outcomes", _capability["selected_property"])
+
+    _trial_rows = []
+    if _capability["selected_property"] is not None:
+        _property_name = _capability["selected_property"]
+        _unembed = BACKEND.unembedding_weight()
+        _tokens = {
+            name: resolve_concept_token(BACKEND.encode_candidate, name)
+            for name in ("bird", "cat", *BROAD_POOLED_CONTROLS)
+        }
+        _basis = build_swap_bases_for_lens(
+            _lens, _unembed, layers=BROAD_POOLED_BAND,
+            source=_tokens["bird"], target=_tokens["cat"],
+        )
+        _random_bases = {
+            index: {
+                layer: random_two_direction_basis(
+                    layer_basis, seed=_random_seeds[index] + layer
+                )
+                for layer, layer_basis in _basis.items()
+            }
+            for index in range(3)
+        }
+        _unrelated = build_swap_bases_for_lens(
+            _lens, _unembed, layers=BROAD_POOLED_BAND,
+            source=_tokens[BROAD_POOLED_CONTROLS[0]],
+            target=_tokens[BROAD_POOLED_CONTROLS[1]],
+        )
+        _spec = PROPERTY_SPECS[_property_name]
+        _source_answer_token = resolve_concept_token(
+            BACKEND.encode_candidate, _spec["source_answer"]
+        )
+        _target_answer_token = resolve_concept_token(
+            BACKEND.encode_candidate, _spec["target_answer"]
+        )
+        _conditions = [
+            ("exact", 1.0, _basis),
+            ("zero", 0.0, _basis),
+            ("unrelated", 1.0, _unrelated),
+            *[(f"random_{index}", 1.0, _random_bases[index]) for index in range(3)],
+        ]
+        for _group in _recruited:
+            for _modality in PROPERTY_MODALITIES:
+                for _condition, _alpha, _bases in _conditions:
+                    _key = safe_key(
+                        "bcproptrial", _property_name, _group["group_id"],
+                        _modality, _condition,
+                    )
+                    _row = _store.load("intervention", _key)
+                    if _row is None:
+                        _inputs = build_group_inputs(
+                            _group, _modality,
+                            property_prompt(
+                                _property_name, _modality, _group["caption"]
+                            ),
+                        )
+                        _clean_logits = BACKEND.forward_logits(_inputs.tensors)[
+                            0, _inputs.final_prompt_position
+                        ].float()
+                        _trial = unrestricted_swap_trial(
+                            BACKEND, _inputs, bases=_bases, alpha=_alpha,
+                            target_token_id=int(_target_answer_token.token_id),
+                            source_token_id=int(_source_answer_token.token_id),
+                            clean_logits=_clean_logits, compact_positions=True,
+                            realization_policy=MODEL_DTYPE_REALIZATION,
+                        )
+                        _surface = BACKEND.decode_token(
+                            int(_trial["patched_top_token_id"])
+                        ).strip()
+                        _row = {
+                            "group_id": str(_group["group_id"]),
+                            "image_id": str(_group["image_id"]),
+                            "property": _property_name,
+                            "modality": _modality,
+                            "condition": _condition,
+                            "patched_surface": _surface,
+                            "success": property_fact_matches(
+                                _surface, _property_name, "target"
+                            ),
+                            "integrity_pass": _leg_integrity(
+                                _trial, BROAD_POOLED_BAND
+                            ),
+                            "layers_patched": list(_trial["layers_patched"]),
+                            "all_prompt_positions_patched": bool(
+                                _trial["all_prompt_positions_patched"]
+                            ),
+                            "all_model_dtype_realizations_converged": bool(
+                                _trial.get("all_model_dtype_realizations_converged")
+                            ),
+                            "max_activation_norm_ratio": float(
+                                _trial["max_activation_norm_ratio"]
+                            ),
+                            "max_update_to_activation_norm_ratio": float(
+                                _trial["max_update_to_activation_norm_ratio"]
+                            ),
+                        }
+                        _store.save("intervention", _key, _row)
+                    _trial_rows.append(_row)
+                    if len(_trial_rows) == 1 or len(_trial_rows) % 36 == 0:
+                        print("property trials", len(_trial_rows), "of 108")
+
+    BIRD_CAT_PROPERTY_DEVELOPMENT_REPORT = property_development_report(
+        _capability, _trial_rows, expected_n=6
+    )
+    BIRD_CAT_PROPERTY_DEVELOPMENT_REPORT = {
+        **BIRD_CAT_PROPERTY_DEVELOPMENT_REPORT,
+        "scientific_config": _config,
+        "population_digest": _population["population_digest"],
+        "recruited_group_ids": [str(row["group_id"]) for row in _recruited],
+        "run_dir": str(_run_root),
+    }
+    BIRD_CAT_PROPERTY_DEVELOPMENT_REPORT["report_checksum"] = payload_checksum({
+        key: value for key, value in BIRD_CAT_PROPERTY_DEVELOPMENT_REPORT.items()
+        if key != "report_checksum"
+    })
+    _store.save(
+        "metric", "bird_cat_property_development",
+        BIRD_CAT_PROPERTY_DEVELOPMENT_REPORT,
+    )
+    BIRD_CAT_PROPERTY_DEVELOPMENT_ROOT.mkdir(parents=True, exist_ok=True)
+    BIRD_CAT_PROPERTY_DEVELOPMENT_REPORT_PATH.write_text(
+        json.dumps(BIRD_CAT_PROPERTY_DEVELOPMENT_REPORT, indent=2),
+        encoding="utf-8",
+    )
+    print("=" * 96)
+    print("BIRD->CAT PROPERTY DEVELOPMENT --",
+          BIRD_CAT_PROPERTY_DEVELOPMENT_REPORT["verdict"])
+    print("selected property",
+          BIRD_CAT_PROPERTY_DEVELOPMENT_REPORT["selected_property"])
+    for _cell in BIRD_CAT_PROPERTY_DEVELOPMENT_REPORT["effect_cells"]:
+        print(_cell["modality"], {
+            name: f"{row['successes']}/{row['n']}"
+            for name, row in _cell["conditions"].items()
+        })
+    print("report", BIRD_CAT_PROPERTY_DEVELOPMENT_REPORT_PATH)
+elif RUN_STAGE8A_BIRD_CAT_PROPERTY_DEVELOPMENT:
+    print("Stage 8A requested but blocked; confirm fp32 A100 and its budget.")
+'''
+)
+
+code(
+    r'''
+if RUN_STAGE8B_FREEZE_BIRD_CAT_PROPERTY_CONFIRMATION:
+    if not BIRD_CAT_PROPERTY_DEVELOPMENT_REPORT_PATH.is_file():
+        raise RuntimeError("Stage 8B requires the completed Stage 8A report")
+    _development = json.loads(
+        BIRD_CAT_PROPERTY_DEVELOPMENT_REPORT_PATH.read_text(encoding="utf-8")
+    )
+    _body = {key: value for key, value in _development.items() if key != "report_checksum"}
+    if _development.get("report_checksum") != payload_checksum(_body):
+        raise RuntimeError("the Stage 8A report failed its own checksum")
+    if _development.get("verdict") != "BIRD_CAT_PROPERTY_DEVELOPMENT_GO":
+        raise RuntimeError("Stage 8A did not pass; fresh confirmation remains sealed")
+    if LEG_GENERALIZATION_CONFIRMATION_REPORT_PATH.is_file():
+        raise RuntimeError(
+            "the shared Stage 7 confirmation population has already been opened"
+        )
+    _population, _confirmation_candidates = _leg_population_groups("confirmation")
+    _design = {
+        "version": "mmpilot.bird_cat_property_confirmation_design.v1",
+        "source_development_report_checksum": _development["report_checksum"],
+        "design_digest": BIRD_CAT_PROPERTY_DESIGN["design_digest"],
+        "frozen_property": _development["selected_property"],
+        "direction": "bird->cat",
+        "lens_checksum": EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+        "layers": list(BROAD_POOLED_BAND),
+        "alpha": 1.0,
+        "positions": "every_original_prompt_position",
+        "conditions": list(BIRD_CAT_PROPERTY_DESIGN["conditions"]),
+        "random_seeds": [2026082901, 2026082902, 2026082903],
+        "confirmation_candidates": _population["confirmation"],
+        "confirmation_population_digest": payload_checksum(_population["confirmation"]),
+        "confirmation_outputs_opened": False,
+        "fitting_performed": False,
+        "backward_passes": 0,
+    }
+    _design["confirmation_design_checksum"] = payload_checksum(_design)
+    BIRD_CAT_PROPERTY_ROOT.mkdir(parents=True, exist_ok=True)
+    if BIRD_CAT_PROPERTY_CONFIRMATION_DESIGN_PATH.is_file():
+        _existing = json.loads(
+            BIRD_CAT_PROPERTY_CONFIRMATION_DESIGN_PATH.read_text(encoding="utf-8")
+        )
+        if _existing != _design:
+            raise RuntimeError("the frozen Stage 8 confirmation design changed")
+    else:
+        BIRD_CAT_PROPERTY_CONFIRMATION_DESIGN_PATH.write_text(
+            json.dumps(_design, indent=2), encoding="utf-8"
+        )
+    print("BIRD->CAT PROPERTY CONFIRMATION DESIGN FROZEN")
+    print("property", _design["frozen_property"])
+    print("candidates", len(_confirmation_candidates))
+    print("confirmation outputs opened False")
+    print("model forwards 0; fitting 0; backward passes 0")
+'''
+)
+
+code(
+    r'''
+BIRD_CAT_PROPERTY_CONFIRMATION_REPORT = None
+if REAL_MODE and BIRD_CAT_PROPERTY_CONFIRMATION_ENABLED:
+    from jlens.lens import JacobianLens
+    from jlens.mmpilot.bird_cat_property_generalization import (
+        CONDITIONS as PROPERTY_CONDITIONS,
+        MODALITIES as PROPERTY_MODALITIES,
+        PROPERTY_SPECS,
+        answer_matches as property_fact_matches,
+        confirmation_report as property_confirmation_report,
+        property_prompt,
+    )
+    from jlens.mmpilot.coordinate_swap import (
+        random_two_direction_basis, resolve_concept_token,
+    )
+    from jlens.mmpilot.multimodal_instrument import MODEL_DTYPE_REALIZATION
+    from jlens.mmpilot.multimodal_lens import (
+        build_swap_bases_for_lens, load_broad_pooled_development_source,
+        unrestricted_swap_trial,
+    )
+    from jlens.mmpilot.store import RunFingerprint, UnitStore, safe_key
+
+    if not BIRD_CAT_PROPERTY_CONFIRMATION_DESIGN_PATH.is_file():
+        raise RuntimeError("run Stage 8B before Stage 8C")
+    _design = json.loads(
+        BIRD_CAT_PROPERTY_CONFIRMATION_DESIGN_PATH.read_text(encoding="utf-8")
+    )
+    _design_body = {
+        key: value for key, value in _design.items()
+        if key != "confirmation_design_checksum"
+    }
+    if _design.get("confirmation_design_checksum") != payload_checksum(_design_body):
+        raise RuntimeError("the Stage 8 confirmation design failed its checksum")
+    if _design.get("confirmation_outputs_opened") is not False:
+        raise RuntimeError("the Stage 8 design does not prove outputs were sealed")
+    _property_name = str(_design["frozen_property"])
+    _population, _candidates = _leg_population_groups("confirmation")
+    if payload_checksum(_population["confirmation"]) != _design[
+        "confirmation_population_digest"
+    ]:
+        raise RuntimeError("the Stage 8 confirmation population changed")
+    _source_pin = load_broad_pooled_development_source(
+        BROAD_DEVELOPMENT_RUN_DIR,
+        expected_report_checksum=EXPECTED_BROAD_DEVELOPMENT_REPORT_CHECKSUM,
+        expected_population_digest=EXPECTED_BROAD_DEVELOPMENT_POPULATION_DIGEST,
+        expected_lens_checksum=EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+        expected_direction=CONFIRMATION_DIRECTION,
+    )
+    _lens = JacobianLens.load(_source_pin["lens_path"])
+    _config = {
+        "study": "fresh_multimodal_bird_cat_property_generalization.v1",
+        "confirmation_design_checksum": _design["confirmation_design_checksum"],
+        "property": _property_name,
+        "direction": "bird->cat",
+        "lens_checksum": EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+        "model_repo_id": MODEL_REPO_ID,
+        "model_revision": MODEL_REVISION,
+        "model_dtype": "float32",
+        "layers": list(BROAD_POOLED_BAND),
+        "alpha": 1.0,
+        "positions": "every_original_prompt_position",
+        "conditions": list(PROPERTY_CONDITIONS),
+        "random_seeds": list(_design["random_seeds"]),
+        "fitting_performed": False,
+        "backward_passes": 0,
+        "commit": COMMIT,
+    }
+    _digest = payload_checksum(_config)
+    _run_root = (
+        BIRD_CAT_PROPERTY_CONFIRMATION_ROOT
+        / f"birdcatpropconfirm_real_{_digest.removeprefix('sha256:')[:12]}"
+    )
+    _run_root.mkdir(parents=True, exist_ok=True)
+    (_run_root / "scientific_config.json").write_text(
+        json.dumps(_config, indent=2), encoding="utf-8"
+    )
+    _store = UnitStore(
+        _run_root,
+        RunFingerprint(
+            mode="real", model_repo_id=MODEL_REPO_ID,
+            model_revision=MODEL_REVISION, processor_revision=MODEL_REVISION,
+            layers=tuple(BROAD_POOLED_BAND),
+            lens_checksum=EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+            manifest_checksum=MANIFEST_CHECKSUM,
+            split_id=_design["confirmation_population_digest"],
+            intervention_config={
+                "confirmation_design_checksum": _design["confirmation_design_checksum"],
+                "property": _property_name, "direction": "bird->cat",
+                "conditions": list(PROPERTY_CONDITIONS),
+                "random_seeds": list(_design["random_seeds"]),
+                "alpha": 1.0, "positions": "all_original_prompt_positions",
+                "dtype": "float32",
+            },
+            extra={"study_digest": _digest},
+        ),
+    )
+    print("bird-cat property confirmation run", _store.open())
+    print("property frozen before outputs", _property_name)
+    print("fitting performed False; backward passes 0")
+
+    _capability_rows = []
+    for _group in _candidates:
+        for _modality in PROPERTY_MODALITIES:
+            _key = safe_key("bcpropconfcap", _group["group_id"], _modality)
+            _row = _store.load("capability", _key)
+            if _row is None:
+                _inputs = build_group_inputs(
+                    _group, _modality,
+                    property_prompt(_property_name, _modality, _group["caption"]),
+                )
+                _logits = BACKEND.forward_logits(_inputs.tensors)[
+                    0, _inputs.final_prompt_position
+                ].float()
+                _surface = BACKEND.decode_token(int(_logits.argmax())).strip()
+                _row = {
+                    "group_id": str(_group["group_id"]),
+                    "image_id": str(_group["image_id"]),
+                    "modality": _modality,
+                    "generated": _surface,
+                    "pass": property_fact_matches(
+                        _surface, _property_name, "source"
+                    ),
+                }
+                _store.save("capability", _key, _row)
+            _capability_rows.append(_row)
+    _recruited = []
+    for _group in _candidates:
+        _own = [
+            row for row in _capability_rows
+            if row["group_id"] == str(_group["group_id"])
+        ]
+        if len(_own) == 3 and all(row["pass"] for row in _own):
+            _recruited.append(_group)
+        if len(_recruited) == 12:
+            break
+    if len(_recruited) != 12:
+        raise RuntimeError(
+            f"Stage 8C recruited {len(_recruited)}/12 clean-capable groups"
+        )
+    print("confirmation recruited", len(_recruited), "/ 12")
+
+    _unembed = BACKEND.unembedding_weight()
+    _tokens = {
+        name: resolve_concept_token(BACKEND.encode_candidate, name)
+        for name in ("bird", "cat", *BROAD_POOLED_CONTROLS)
+    }
+    _basis = build_swap_bases_for_lens(
+        _lens, _unembed, layers=BROAD_POOLED_BAND,
+        source=_tokens["bird"], target=_tokens["cat"],
+    )
+    _random_bases = {
+        index: {
+            layer: random_two_direction_basis(
+                layer_basis, seed=int(_design["random_seeds"][index]) + layer
+            )
+            for layer, layer_basis in _basis.items()
+        }
+        for index in range(3)
+    }
+    _unrelated = build_swap_bases_for_lens(
+        _lens, _unembed, layers=BROAD_POOLED_BAND,
+        source=_tokens[BROAD_POOLED_CONTROLS[0]],
+        target=_tokens[BROAD_POOLED_CONTROLS[1]],
+    )
+    _spec = PROPERTY_SPECS[_property_name]
+    _source_answer_token = resolve_concept_token(
+        BACKEND.encode_candidate, _spec["source_answer"]
+    )
+    _target_answer_token = resolve_concept_token(
+        BACKEND.encode_candidate, _spec["target_answer"]
+    )
+    _conditions = [
+        ("exact", 1.0, _basis),
+        ("zero", 0.0, _basis),
+        ("unrelated", 1.0, _unrelated),
+        *[(f"random_{index}", 1.0, _random_bases[index]) for index in range(3)],
+    ]
+    _trial_rows = []
+    for _group in _recruited:
+        for _modality in PROPERTY_MODALITIES:
+            for _condition, _alpha, _bases in _conditions:
+                _key = safe_key(
+                    "bcpropconftrial", _group["group_id"], _modality, _condition
+                )
+                _row = _store.load("intervention", _key)
+                if _row is None:
+                    _inputs = build_group_inputs(
+                        _group, _modality,
+                        property_prompt(_property_name, _modality, _group["caption"]),
+                    )
+                    _clean_logits = BACKEND.forward_logits(_inputs.tensors)[
+                        0, _inputs.final_prompt_position
+                    ].float()
+                    _trial = unrestricted_swap_trial(
+                        BACKEND, _inputs, bases=_bases, alpha=_alpha,
+                        target_token_id=int(_target_answer_token.token_id),
+                        source_token_id=int(_source_answer_token.token_id),
+                        clean_logits=_clean_logits, compact_positions=True,
+                        realization_policy=MODEL_DTYPE_REALIZATION,
+                    )
+                    _surface = BACKEND.decode_token(
+                        int(_trial["patched_top_token_id"])
+                    ).strip()
+                    _row = {
+                        "group_id": str(_group["group_id"]),
+                        "image_id": str(_group["image_id"]),
+                        "property": _property_name,
+                        "modality": _modality,
+                        "condition": _condition,
+                        "patched_surface": _surface,
+                        "success": property_fact_matches(
+                            _surface, _property_name, "target"
+                        ),
+                        "integrity_pass": _leg_integrity(
+                            _trial, BROAD_POOLED_BAND
+                        ),
+                        "layers_patched": list(_trial["layers_patched"]),
+                        "all_prompt_positions_patched": bool(
+                            _trial["all_prompt_positions_patched"]
+                        ),
+                        "all_model_dtype_realizations_converged": bool(
+                            _trial.get("all_model_dtype_realizations_converged")
+                        ),
+                        "max_activation_norm_ratio": float(
+                            _trial["max_activation_norm_ratio"]
+                        ),
+                        "max_update_to_activation_norm_ratio": float(
+                            _trial["max_update_to_activation_norm_ratio"]
+                        ),
+                    }
+                    _store.save("intervention", _key, _row)
+                _trial_rows.append(_row)
+                if len(_trial_rows) == 1 or len(_trial_rows) % 36 == 0:
+                    print("confirmation property trials", len(_trial_rows), "of 216")
+
+    BIRD_CAT_PROPERTY_CONFIRMATION_REPORT = property_confirmation_report(
+        _trial_rows, property_name=_property_name, expected_n=12
+    )
+    BIRD_CAT_PROPERTY_CONFIRMATION_REPORT = {
+        **BIRD_CAT_PROPERTY_CONFIRMATION_REPORT,
+        "scientific_config": _config,
+        "confirmation_design": _design,
+        "population_digest": _population["population_digest"],
+        "recruited_group_ids": [str(row["group_id"]) for row in _recruited],
+        "run_dir": str(_run_root),
+    }
+    BIRD_CAT_PROPERTY_CONFIRMATION_REPORT["report_checksum"] = payload_checksum({
+        key: value for key, value in BIRD_CAT_PROPERTY_CONFIRMATION_REPORT.items()
+        if key != "report_checksum"
+    })
+    _store.save(
+        "metric", "fresh_bird_cat_property_generalization",
+        BIRD_CAT_PROPERTY_CONFIRMATION_REPORT,
+    )
+    BIRD_CAT_PROPERTY_CONFIRMATION_ROOT.mkdir(parents=True, exist_ok=True)
+    BIRD_CAT_PROPERTY_CONFIRMATION_REPORT_PATH.write_text(
+        json.dumps(BIRD_CAT_PROPERTY_CONFIRMATION_REPORT, indent=2),
+        encoding="utf-8",
+    )
+    print("=" * 96)
+    print("FRESH BIRD->CAT PROPERTY GENERALIZATION --",
+          BIRD_CAT_PROPERTY_CONFIRMATION_REPORT["verdict"])
+    for _cell in BIRD_CAT_PROPERTY_CONFIRMATION_REPORT["effect_cells"]:
+        print(_cell["modality"], {
+            name: f"{row['successes']}/{row['n']}"
+            for name, row in _cell["conditions"].items()
+        })
+    print("report", BIRD_CAT_PROPERTY_CONFIRMATION_REPORT_PATH)
+elif RUN_STAGE8C_BIRD_CAT_PROPERTY_CONFIRMATION:
+    print("Stage 8C requested but blocked; confirm fp32 A100 and its budget.")
 '''
 )
 
