@@ -15,7 +15,7 @@ from collections.abc import Mapping, Sequence
 from jlens.mmpilot.multimodal_lens import holm_adjust, paired_binary_one_sided_p
 from jlens.mmpilot.store import payload_checksum
 
-VERSION = "mmpilot.bird_cat_downstream_property_generalization.v2"
+VERSION = "mmpilot.bird_cat_downstream_property_generalization.v3"
 SOURCE = "bird"
 TARGET = "cat"
 MODALITIES = ("text", "image", "spoken_audio")
@@ -77,6 +77,7 @@ def frozen_design() -> dict:
         "positions": "every_original_prompt_position",
         "output_endpoint": "unrestricted_greedy_complete_answer",
         "max_new_tokens": 4,
+        "model_dtype": "torch.float32",
         "teacher_forcing_used": False,
         "candidate_list_supplied": False,
         "selection_uses": "clean capability only; no intervention outcome",

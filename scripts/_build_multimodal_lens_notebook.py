@@ -1329,6 +1329,7 @@ markdown("## 4. Load the pinned model and audited native processor")
 code(
     r'''
 BACKEND = BUNDLE = AUDIO_RECORD = None
+_observed_model_dtype = None
 if REAL_MODE and MODEL_ENABLED:
     import getpass
     import torch
@@ -1336,23 +1337,25 @@ if REAL_MODE and MODEL_ENABLED:
         os.environ["HF_TOKEN"] = getpass.getpass("HF_TOKEN (input hidden): ").strip()
     from jlens.mmpilot.real_backend import build_real_backend
     from jlens.mmpilot.tri_modal import assert_audio_protocol
-    _leg_generalization_gpu = bool(
+    _fp32_model_required = bool(
         RUN_STAGE7B_LEG_GENERALIZATION_DEVELOPMENT
         or RUN_STAGE7B2_NOVEL_LEG_TARGET_DEVELOPMENT
         or RUN_STAGE7D_LEG_GENERALIZATION_CONFIRMATION
+        or RUN_STAGE8A_BIRD_CAT_PROPERTY_DEVELOPMENT
+        or RUN_STAGE8C_BIRD_CAT_PROPERTY_CONFIRMATION
     )
-    if _leg_generalization_gpu:
+    if _fp32_model_required:
         from jlens.mmpilot.fp32_preflight import preflight_fp32_or_refuse
         _fp32_preflight = preflight_fp32_or_refuse(
             workspace_fraction=0.10, safety_margin=1.10,
         )
-        print("Stage 7 fp32 preflight", _fp32_preflight["device_name"])
+        print("fp32 causal-stage preflight", _fp32_preflight["device_name"])
     BUNDLE = build_real_backend(
         MODEL_REPO_ID, revision=MODEL_REVISION, token=os.environ["HF_TOKEN"],
         device="cuda", allow_model_load=True, resolve_audio=True,
         expect_n_layers=EXPECT_N_LAYERS, expect_d_model=EXPECT_D_MODEL,
         expect_vocab_size=EXPECT_VOCAB,
-        dtype=(torch.float32 if _leg_generalization_gpu else torch.bfloat16),
+        dtype=(torch.float32 if _fp32_model_required else torch.bfloat16),
     )
     if BUNDLE.audio_interface is None:
         raise RuntimeError("native spoken audio did not resolve: " + BUNDLE.audio_blocked_reason)
@@ -1360,11 +1363,11 @@ if REAL_MODE and MODEL_ENABLED:
         BUNDLE.audio_interface, expected_fingerprint=AUDIO_PROTOCOL_FINGERPRINT
     )
     BACKEND = BUNDLE.backend
-    if _leg_generalization_gpu:
-        _observed_dtype = str(next(BACKEND.hf_model.parameters()).dtype)
-        if _observed_dtype != "torch.float32":
+    _observed_model_dtype = str(next(BACKEND.hf_model.parameters()).dtype)
+    if _fp32_model_required:
+        if _observed_model_dtype != "torch.float32":
             raise RuntimeError(
-                f"Stage 7 requested fp32 but loaded {_observed_dtype}"
+                f"causal stage requested fp32 but loaded {_observed_model_dtype}"
             )
 elif not REAL_MODE:
     from jlens.mmpilot.mock import MockPilotBackend, MockWorld
@@ -8932,7 +8935,7 @@ if REAL_MODE and BIRD_CAT_PROPERTY_DEVELOPMENT_ENABLED:
     _lens = JacobianLens.load(_source_pin["lens_path"])
     _random_seeds = (2026082801, 2026082802, 2026082803)
     _config = {
-        "study": "bird_cat_downstream_property_development.v2",
+        "study": "bird_cat_downstream_property_development.v3",
         "design_digest": BIRD_CAT_PROPERTY_DESIGN["design_digest"],
         "source_novel_report_checksum": EXPECTED_STAGE7B2_NOVEL_REPORT_CHECKSUM,
         "superseded_first_token_report_checksum": (
@@ -8943,7 +8946,7 @@ if REAL_MODE and BIRD_CAT_PROPERTY_DEVELOPMENT_ENABLED:
         "lens_checksum": EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
         "model_repo_id": MODEL_REPO_ID,
         "model_revision": MODEL_REVISION,
-        "model_dtype": "float32",
+        "model_dtype": _observed_model_dtype,
         "direction": "bird->cat",
         "candidate_properties": list(BIRD_CAT_PROPERTY_DESIGN["property_priority"]),
         "property_selection": "clean capability only before causal outcomes",
@@ -8983,7 +8986,8 @@ if REAL_MODE and BIRD_CAT_PROPERTY_DEVELOPMENT_ENABLED:
                 "design_digest": BIRD_CAT_PROPERTY_DESIGN["design_digest"],
                 "direction": "bird->cat", "conditions": list(PROPERTY_CONDITIONS),
                 "random_seeds": list(_random_seeds), "alpha": 1.0,
-                "positions": "all_original_prompt_positions", "dtype": "float32",
+                "positions": "all_original_prompt_positions",
+                "dtype": _observed_model_dtype,
             },
             extra={"study_digest": _digest},
         ),
@@ -9290,14 +9294,14 @@ if REAL_MODE and BIRD_CAT_PROPERTY_CONFIRMATION_ENABLED:
     )
     _lens = JacobianLens.load(_source_pin["lens_path"])
     _config = {
-        "study": "fresh_multimodal_bird_cat_property_generalization.v2",
+        "study": "fresh_multimodal_bird_cat_property_generalization.v3",
         "confirmation_design_checksum": _design["confirmation_design_checksum"],
         "property": _property_name,
         "direction": "bird->cat",
         "lens_checksum": EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
         "model_repo_id": MODEL_REPO_ID,
         "model_revision": MODEL_REVISION,
-        "model_dtype": "float32",
+        "model_dtype": _observed_model_dtype,
         "layers": list(BROAD_POOLED_BAND),
         "alpha": 1.0,
         "positions": "every_original_prompt_position",
@@ -9335,7 +9339,7 @@ if REAL_MODE and BIRD_CAT_PROPERTY_CONFIRMATION_ENABLED:
                 "conditions": list(PROPERTY_CONDITIONS),
                 "random_seeds": list(_design["random_seeds"]),
                 "alpha": 1.0, "positions": "all_original_prompt_positions",
-                "dtype": "float32",
+                "dtype": _observed_model_dtype,
             },
             extra={"study_digest": _digest},
         ),

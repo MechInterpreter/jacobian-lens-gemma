@@ -143,7 +143,7 @@ def test_notebook_contains_no_refit_leg_count_target_generalization() -> None:
         "legdev_real_",
         "legconfirm_real_",
         "preflight_fp32_or_refuse",
-        '_observed_dtype != "torch.float32"',
+        '_observed_model_dtype != "torch.float32"',
         "load_broad_pooled_development_source",
         "STAGE 7 NO-REFIT LEG-COUNT GENERALIZATION",
         "frozen_population.json",
@@ -197,6 +197,28 @@ def test_notebook_contains_no_refit_bird_cat_property_generalization() -> None:
     assert "fit_arm(" not in section
     assert "fit_jacobian" not in section
     assert '"teacher_forcing_used": True' not in section
+
+
+def test_stage8_requires_and_records_observed_fp32_model_dtype() -> None:
+    source = _source()
+    loader = source.split(
+        "## 4. Load the pinned model and audited native processor"
+    )[1].split("## 5. Media loading and processor-input construction")[0]
+    assert "RUN_STAGE8A_BIRD_CAT_PROPERTY_DEVELOPMENT" in loader
+    assert "RUN_STAGE8C_BIRD_CAT_PROPERTY_CONFIRMATION" in loader
+    assert "_fp32_model_required" in loader
+    assert (
+        "dtype=(torch.float32 if _fp32_model_required else torch.bfloat16)"
+        in loader
+    )
+    assert '_observed_model_dtype != "torch.float32"' in loader
+
+    stage8 = source.split(
+        "## 21. Stage 8: hold the proven identity exchange fixed and vary the fact"
+    )[1]
+    assert '"model_dtype": _observed_model_dtype' in stage8
+    assert '"dtype": _observed_model_dtype' in stage8
+    assert '"model_dtype": "float32"' not in stage8
 
 
 def test_mock_notebook_executes_end_to_end(tmp_path: Path, monkeypatch) -> None:

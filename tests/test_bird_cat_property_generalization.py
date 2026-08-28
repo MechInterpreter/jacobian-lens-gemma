@@ -51,6 +51,7 @@ def test_design_is_no_refit_exact_confirmed_method():
     assert design["target"] == "cat"
     assert design["layers"] == list(range(16, 41))
     assert design["alpha"] == 1.0
+    assert design["model_dtype"] == "torch.float32"
     assert design["lens_refitted"] is False
     assert "intervention outcome" in design["selection_uses"]
 
