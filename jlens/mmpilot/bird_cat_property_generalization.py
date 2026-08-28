@@ -21,6 +21,8 @@ TARGET = "cat"
 MODALITIES = ("text", "image", "spoken_audio")
 CONDITIONS = ("exact", "zero", "unrelated", "random_0", "random_1", "random_2")
 CONTROL_CONDITIONS = CONDITIONS[1:]
+TWO_MODALITY_PRIMARY = ("image", "spoken_audio")
+TWO_MODALITY_SECONDARY = ("text",)
 
 # Ordered before capability is measured.  Selection uses clean capability only,
 # never an intervention outcome.  Both properties are nonvisual facts with a
@@ -308,6 +310,106 @@ def confirmation_report(
     return {**body, "report_checksum": payload_checksum(body)}
 
 
+def two_modality_confirmation_report(
+    rows: Sequence[Mapping], *, property_name: str, expected_n: int = 18
+) -> dict:
+    """Score the prospective image-plus-audio follow-up.
+
+    The primary modalities were selected from the completed development run,
+    so this report labels that provenance explicitly. Text remains a frozen
+    secondary outcome and cannot make or break the primary verdict.
+    """
+    if property_name not in PROPERTY_SPECS:
+        raise BirdCatPropertyRefused("confirmation property was not predeclared")
+    cells = _effect_cells(rows, property_name=property_name, expected_n=expected_n)
+    comparisons = []
+    for modality in TWO_MODALITY_PRIMARY:
+        exact = sorted(
+            [
+                row
+                for row in rows
+                if row.get("property") == property_name
+                and row.get("modality") == modality
+                and row.get("condition") == "exact"
+            ],
+            key=lambda row: str(row["group_id"]),
+        )
+        for control in CONTROL_CONDITIONS:
+            other = sorted(
+                [
+                    row
+                    for row in rows
+                    if row.get("property") == property_name
+                    and row.get("modality") == modality
+                    and row.get("condition") == control
+                ],
+                key=lambda row: str(row["group_id"]),
+            )
+            if [row["group_id"] for row in exact] != [
+                row["group_id"] for row in other
+            ]:
+                raise BirdCatPropertyRefused("confirmation rows are not paired")
+            comparisons.append(
+                {
+                    "modality": modality,
+                    "control": control,
+                    **paired_binary_one_sided_p(
+                        [bool(row.get("success")) for row in exact],
+                        [bool(row.get("success")) for row in other],
+                    ),
+                }
+            )
+    adjusted = holm_adjust(comparisons)
+    adjusted_index = {
+        (row["modality"], row["control"]): row for row in adjusted
+    }
+    cell_index = {cell["modality"]: cell for cell in cells}
+    minimum_exact_rate = 0.50
+    minimum_control_margin = 0.25
+    familywise_alpha = 0.05
+    passed = all(
+        cell_index[modality]["conditions"]["exact"]["rate"]
+        >= minimum_exact_rate
+        and all(
+            cell_index[modality]["conditions"]["exact"]["rate"]
+            - cell_index[modality]["conditions"][control]["rate"]
+            >= minimum_control_margin
+            and adjusted_index[(modality, control)]["holm_adjusted_p"]
+            <= familywise_alpha
+            for control in CONTROL_CONDITIONS
+        )
+        and all(
+            row["integrity_pass"]
+            for row in cell_index[modality]["conditions"].values()
+        )
+        for modality in TWO_MODALITY_PRIMARY
+    )
+    body = {
+        "version": "mmpilot.bird_cat_property_two_modality_confirmation.v1",
+        "stage": "fresh_two_modality_confirmation",
+        "verdict": (
+            "FRESH_BIRD_CAT_PROPERTY_TWO_MODALITY_GENERALIZATION_GO"
+            if passed
+            else "FRESH_BIRD_CAT_PROPERTY_TWO_MODALITY_GENERALIZATION_NO_GO"
+        ),
+        "selection_provenance": (
+            "image and spoken_audio selected from completed fp32 development; "
+            "fresh confirmation population remained sealed until design freeze"
+        ),
+        "frozen_property": property_name,
+        "primary_modalities": list(TWO_MODALITY_PRIMARY),
+        "secondary_modalities": list(TWO_MODALITY_SECONDARY),
+        "minimum_exact_rate": minimum_exact_rate,
+        "minimum_control_margin": minimum_control_margin,
+        "effect_cells": cells,
+        "primary_paired_comparisons": adjusted,
+        "familywise_alpha": familywise_alpha,
+        "fitting_performed": False,
+        "backward_passes": 0,
+    }
+    return {**body, "report_checksum": payload_checksum(body)}
+
+
 __all__ = [
     "BirdCatPropertyRefused",
     "CONDITIONS",
@@ -315,10 +417,13 @@ __all__ = [
     "MODALITIES",
     "PROPERTY_PRIORITY",
     "PROPERTY_SPECS",
+    "TWO_MODALITY_PRIMARY",
+    "TWO_MODALITY_SECONDARY",
     "answer_matches",
     "capability_report",
     "confirmation_report",
     "development_report",
     "frozen_design",
     "property_prompt",
+    "two_modality_confirmation_report",
 ]

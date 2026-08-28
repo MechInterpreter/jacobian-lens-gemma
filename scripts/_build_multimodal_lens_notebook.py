@@ -314,8 +314,11 @@ CONFIRM_LEG_GENERALIZATION_FP32_A100 = True
 RUN_STAGE8A_BIRD_CAT_PROPERTY_DEVELOPMENT = False
 RUN_STAGE8B_FREEZE_BIRD_CAT_PROPERTY_CONFIRMATION = False
 RUN_STAGE8C_BIRD_CAT_PROPERTY_CONFIRMATION = False
+RUN_STAGE8D_FREEZE_TWO_MODALITY_PROPERTY_CONFIRMATION = False
+RUN_STAGE8E_TWO_MODALITY_PROPERTY_CONFIRMATION = False
 CONFIRM_BIRD_CAT_PROPERTY_DEVELOPMENT_BUDGET = False
 CONFIRM_BIRD_CAT_PROPERTY_CONFIRMATION_BUDGET = False
+CONFIRM_BIRD_CAT_TWO_MODALITY_CONFIRMATION_BUDGET = False
 CONFIRM_BIRD_CAT_PROPERTY_FP32_A100 = True
 
 # The frozen cat->dog scientific target and every tunable it uses. Declared
@@ -682,6 +685,12 @@ FOLLOWUP_STAGES = {
     "8C_bird_cat_property_confirmation": (
         RUN_STAGE8C_BIRD_CAT_PROPERTY_CONFIRMATION
     ),
+    "8D_bird_cat_two_modality_freeze": (
+        RUN_STAGE8D_FREEZE_TWO_MODALITY_PROPERTY_CONFIRMATION
+    ),
+    "8E_bird_cat_two_modality_confirmation": (
+        RUN_STAGE8E_TWO_MODALITY_PROPERTY_CONFIRMATION
+    ),
 }
 if sum(1 for value in FOLLOWUP_STAGES.values() if value) > 1:
     raise RuntimeError(
@@ -716,6 +725,7 @@ MODEL_STAGE = any((
     RUN_STAGE7D_LEG_GENERALIZATION_CONFIRMATION,
     RUN_STAGE8A_BIRD_CAT_PROPERTY_DEVELOPMENT,
     RUN_STAGE8C_BIRD_CAT_PROPERTY_CONFIRMATION,
+    RUN_STAGE8E_TWO_MODALITY_PROPERTY_CONFIRMATION,
 ))
 MODEL_ENABLED = bool(MODEL_STAGE and CONFIRM_MODEL_LOAD)
 FIT_ENABLED = bool(RUN_STAGE1_FIT_LENSES and MODEL_ENABLED and CONFIRM_FIT_BUDGET)
@@ -810,6 +820,12 @@ BIRD_CAT_PROPERTY_CONFIRMATION_ENABLED = bool(
     and CONFIRM_BIRD_CAT_PROPERTY_CONFIRMATION_BUDGET
     and CONFIRM_BIRD_CAT_PROPERTY_FP32_A100
 )
+BIRD_CAT_TWO_MODALITY_CONFIRMATION_ENABLED = bool(
+    RUN_STAGE8E_TWO_MODALITY_PROPERTY_CONFIRMATION
+    and MODEL_ENABLED
+    and CONFIRM_BIRD_CAT_TWO_MODALITY_CONFIRMATION_BUDGET
+    and CONFIRM_BIRD_CAT_PROPERTY_FP32_A100
+)
 for _name, _requested, _enabled in (
     ("STAGE 5A LOCALIZATION", RUN_STAGE5A_BAND_LOCALIZATION, LOCALIZATION_ENABLED),
     ("STAGE 5B00 PROPERTY PROMPT SCREEN", RUN_STAGE5B00_PROPERTY_PROMPT_SCREEN, PROPERTY_PROMPT_SCREEN_ENABLED),
@@ -822,6 +838,7 @@ for _name, _requested, _enabled in (
     ("STAGE 7D LEG GENERALIZATION CONFIRMATION", RUN_STAGE7D_LEG_GENERALIZATION_CONFIRMATION, LEG_GENERALIZATION_CONFIRMATION_ENABLED),
     ("STAGE 8A BIRD-CAT PROPERTY DEVELOPMENT", RUN_STAGE8A_BIRD_CAT_PROPERTY_DEVELOPMENT, BIRD_CAT_PROPERTY_DEVELOPMENT_ENABLED),
     ("STAGE 8C BIRD-CAT PROPERTY CONFIRMATION", RUN_STAGE8C_BIRD_CAT_PROPERTY_CONFIRMATION, BIRD_CAT_PROPERTY_CONFIRMATION_ENABLED),
+    ("STAGE 8E TWO-MODALITY PROPERTY CONFIRMATION", RUN_STAGE8E_TWO_MODALITY_PROPERTY_CONFIRMATION, BIRD_CAT_TWO_MODALITY_CONFIRMATION_ENABLED),
 ):
     if REAL_MODE and _requested and not _enabled:
         print(f"{_name} BLOCKED: confirm its printed budget above")
@@ -940,6 +957,17 @@ print("  confirmation completions  66 capability + 216 causal on untouched photo
 print("  confirmation max forwards 264 capability + 864 causal")
 print("  fitting / backward        0 / 0")
 print("  runtime                   fp32 80 GB A100; one JSON per completed condition")
+print()
+print("STAGE 8D/8E PROSPECTIVE TWO-MODALITY CONFIRMATION")
+print("  primary / secondary      image + spoken_audio / text")
+print("  fresh candidates         22 sealed bird photographs")
+print("  recruited                18 clean-capable photographs")
+print("  capability completions   66, <=4 token-forwards each")
+print("  intervention completions 324, <=4 token-forwards each")
+print("  primary comparisons      10 Holm-corrected paired tests")
+print("  fitting / backward       0 / 0")
+print("  Stage 8D                 CPU, zero model forwards")
+print("  Stage 8E                 fp32 80 GB A100; atomic condition resume")
 print()
 print("STAGE 3DA CONFIRMATION REALIZATION REPLICATION BUDGET")
 print("  what it measures          whether the completed confirmation's exchange")
@@ -1343,6 +1371,7 @@ if REAL_MODE and MODEL_ENABLED:
         or RUN_STAGE7D_LEG_GENERALIZATION_CONFIRMATION
         or RUN_STAGE8A_BIRD_CAT_PROPERTY_DEVELOPMENT
         or RUN_STAGE8C_BIRD_CAT_PROPERTY_CONFIRMATION
+        or RUN_STAGE8E_TWO_MODALITY_PROPERTY_CONFIRMATION
     )
     if _fp32_model_required:
         from jlens.mmpilot.fp32_preflight import preflight_fp32_or_refuse
@@ -8836,6 +8865,17 @@ BIRD_CAT_PROPERTY_CONFIRMATION_REPORT_PATH = (
     BIRD_CAT_PROPERTY_CONFIRMATION_ROOT
     / "fresh_multimodal_bird_cat_property_generalization_report.json"
 )
+EXPECTED_STAGE8A_FP32_DEVELOPMENT_REPORT_CHECKSUM = (
+    "sha256:e116d2c5bb633e1586e62b26e2feab574da345f0bd0e0fc812060e9be5d582d1"
+)
+BIRD_CAT_TWO_MODALITY_ROOT = BIRD_CAT_PROPERTY_ROOT / "two_modality_confirmation"
+BIRD_CAT_TWO_MODALITY_DESIGN_PATH = (
+    BIRD_CAT_TWO_MODALITY_ROOT / "confirmation_design.json"
+)
+BIRD_CAT_TWO_MODALITY_REPORT_PATH = (
+    BIRD_CAT_TWO_MODALITY_ROOT
+    / "fresh_bird_cat_property_two_modality_confirmation_report.json"
+)
 EXPECTED_STAGE7B2_NOVEL_REPORT_CHECKSUM = (
     "sha256:dbd1c4c6eb46b14c8edb831db0cc4ca8f0f56d6a4084932a5571ae6f3821527a"
 )
@@ -9523,6 +9563,440 @@ if REAL_MODE and BIRD_CAT_PROPERTY_CONFIRMATION_ENABLED:
     print("report", BIRD_CAT_PROPERTY_CONFIRMATION_REPORT_PATH)
 elif RUN_STAGE8C_BIRD_CAT_PROPERTY_CONFIRMATION:
     print("Stage 8C requested but blocked; confirm fp32 A100 and its budget.")
+'''
+)
+
+code(
+    r'''
+if RUN_STAGE8D_FREEZE_TWO_MODALITY_PROPERTY_CONFIRMATION:
+    if not BIRD_CAT_PROPERTY_DEVELOPMENT_REPORT_PATH.is_file():
+        raise RuntimeError("Stage 8D requires the completed fp32 Stage 8A report")
+    _development = json.loads(
+        BIRD_CAT_PROPERTY_DEVELOPMENT_REPORT_PATH.read_text(encoding="utf-8")
+    )
+    _development_body = {
+        key: value for key, value in _development.items()
+        if key != "report_checksum"
+    }
+    if _development.get("report_checksum") != payload_checksum(_development_body):
+        raise RuntimeError("the Stage 8A fp32 report failed its own checksum")
+    if _development["report_checksum"] != (
+        EXPECTED_STAGE8A_FP32_DEVELOPMENT_REPORT_CHECKSUM
+    ):
+        raise RuntimeError("Stage 8D is pinned to a different development report")
+    if _development.get("fresh_confirmation_opened") is not False:
+        raise RuntimeError("the Stage 8A report does not prove confirmation stayed sealed")
+    if _development.get("selected_property") != "taxonomic_class":
+        raise RuntimeError("the frozen development property is not taxonomic_class")
+    if (_development.get("scientific_config") or {}).get("model_dtype") != (
+        "torch.float32"
+    ):
+        raise RuntimeError("the Stage 8A source was not observed in torch.float32")
+
+    _cells = {
+        str(cell["modality"]): cell for cell in _development.get("effect_cells", [])
+    }
+    _expected_exact = {"text": 0, "image": 3, "spoken_audio": 3}
+    if set(_cells) != {"text", "image", "spoken_audio"}:
+        raise RuntimeError("the Stage 8A modality cells changed")
+    for _modality, _successes in _expected_exact.items():
+        _conditions = _cells[_modality]["conditions"]
+        if _conditions["exact"] != {
+            "n": 6, "successes": _successes,
+            "rate": _successes / 6, "integrity_pass": True,
+        }:
+            raise RuntimeError(f"the {_modality} exact development result changed")
+        for _control in ("zero", "unrelated", "random_0", "random_1", "random_2"):
+            if _conditions[_control] != {
+                "n": 6, "successes": 0, "rate": 0.0,
+                "integrity_pass": True,
+            }:
+                raise RuntimeError(
+                    f"the {_modality} {_control} development result changed"
+                )
+    if LEG_GENERALIZATION_CONFIRMATION_REPORT_PATH.is_file():
+        raise RuntimeError("the shared Stage 7 confirmation population was opened")
+    if BIRD_CAT_PROPERTY_CONFIRMATION_REPORT_PATH.is_file():
+        raise RuntimeError("the original Stage 8 confirmation population was opened")
+    if BIRD_CAT_TWO_MODALITY_REPORT_PATH.is_file():
+        raise RuntimeError("the two-modality confirmation already has a result")
+
+    _population, _confirmation_candidates = _leg_population_groups("confirmation")
+    if len(_confirmation_candidates) != 22:
+        raise RuntimeError(
+            f"Stage 8D expected 22 sealed candidates, got {len(_confirmation_candidates)}"
+        )
+    _design_body = {
+        "version": "mmpilot.bird_cat_property_two_modality_design.v1",
+        "selection_provenance": (
+            "image and spoken_audio selected from completed fp32 development; "
+            "text retained as a secondary outcome"
+        ),
+        "source_development_report_checksum": _development["report_checksum"],
+        "source_development_verdict": _development["verdict"],
+        "frozen_property": "taxonomic_class",
+        "primary_modalities": ["image", "spoken_audio"],
+        "secondary_modalities": ["text"],
+        "direction": "bird->cat",
+        "lens_checksum": EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+        "layers": list(BROAD_POOLED_BAND),
+        "alpha": 1.0,
+        "positions": "every_original_prompt_position",
+        "output_endpoint": "unrestricted_greedy_complete_answer",
+        "model_dtype": "torch.float32",
+        "conditions": list(BIRD_CAT_PROPERTY_DESIGN["conditions"]),
+        "random_seeds": [2026083001, 2026083002, 2026083003],
+        "candidate_count": 22,
+        "recruited_count": 18,
+        "minimum_exact_rate": 0.50,
+        "minimum_control_margin": 0.25,
+        "familywise_alpha": 0.05,
+        "primary_comparisons": 10,
+        "confirmation_candidates": _population["confirmation"],
+        "confirmation_population_digest": payload_checksum(
+            _population["confirmation"]
+        ),
+        "confirmation_outputs_opened": False,
+        "fitting_performed": False,
+        "backward_passes": 0,
+    }
+    _design = {
+        **_design_body,
+        "confirmation_design_checksum": payload_checksum(_design_body),
+    }
+    BIRD_CAT_TWO_MODALITY_ROOT.mkdir(parents=True, exist_ok=True)
+    if BIRD_CAT_TWO_MODALITY_DESIGN_PATH.is_file():
+        _existing = json.loads(
+            BIRD_CAT_TWO_MODALITY_DESIGN_PATH.read_text(encoding="utf-8")
+        )
+        if _existing != _design:
+            raise RuntimeError("the frozen two-modality design changed")
+    else:
+        BIRD_CAT_TWO_MODALITY_DESIGN_PATH.write_text(
+            json.dumps(_design, indent=2), encoding="utf-8"
+        )
+    print("BIRD->CAT TWO-MODALITY CONFIRMATION DESIGN FROZEN")
+    print("source report", _design["source_development_report_checksum"])
+    print("primary", _design["primary_modalities"], "secondary", _design["secondary_modalities"])
+    print("candidates", len(_confirmation_candidates), "recruit", _design["recruited_count"])
+    print("confirmation outputs opened False")
+    print("model forwards 0; fitting 0; backward passes 0")
+    print("design", BIRD_CAT_TWO_MODALITY_DESIGN_PATH)
+'''
+)
+
+code(
+    r'''
+BIRD_CAT_TWO_MODALITY_REPORT = None
+if REAL_MODE and BIRD_CAT_TWO_MODALITY_CONFIRMATION_ENABLED:
+    from jlens.lens import JacobianLens
+    from jlens.mmpilot.bird_cat_property_generalization import (
+        CONDITIONS as PROPERTY_CONDITIONS,
+        MODALITIES as PROPERTY_MODALITIES,
+        PROPERTY_SPECS,
+        answer_matches as property_fact_matches,
+        property_prompt,
+        two_modality_confirmation_report,
+    )
+    from jlens.mmpilot.coordinate_swap import (
+        random_two_direction_basis, resolve_concept_token,
+    )
+    from jlens.mmpilot.multimodal_instrument import (
+        MODEL_DTYPE_REALIZATION, trial_integrity,
+    )
+    from jlens.mmpilot.multimodal_followup import (
+        PropertyAnswer, generation_trial_row,
+    )
+    from jlens.mmpilot.multimodal_lens import (
+        build_swap_bases_for_lens, load_broad_pooled_development_source,
+    )
+    from jlens.mmpilot.store import RunFingerprint, UnitStore, safe_key
+    from jlens.mmpilot.workspace_replication import (
+        unrestricted_greedy_completion, unrestricted_greedy_swap_trial,
+    )
+
+    if not BIRD_CAT_TWO_MODALITY_DESIGN_PATH.is_file():
+        raise RuntimeError("run Stage 8D before Stage 8E")
+    _design = json.loads(
+        BIRD_CAT_TWO_MODALITY_DESIGN_PATH.read_text(encoding="utf-8")
+    )
+    _design_body = {
+        key: value for key, value in _design.items()
+        if key != "confirmation_design_checksum"
+    }
+    if _design.get("confirmation_design_checksum") != payload_checksum(_design_body):
+        raise RuntimeError("the Stage 8D design failed its checksum")
+    if _design.get("confirmation_outputs_opened") is not False:
+        raise RuntimeError("the Stage 8D design does not prove outputs were sealed")
+    if _design.get("source_development_report_checksum") != (
+        EXPECTED_STAGE8A_FP32_DEVELOPMENT_REPORT_CHECKSUM
+    ):
+        raise RuntimeError("Stage 8E is pinned to a different development result")
+    if _design.get("primary_modalities") != ["image", "spoken_audio"]:
+        raise RuntimeError("the Stage 8E primary modalities changed")
+    if _design.get("secondary_modalities") != ["text"]:
+        raise RuntimeError("the Stage 8E secondary modality changed")
+    if _observed_model_dtype != "torch.float32":
+        raise RuntimeError(f"Stage 8E loaded {_observed_model_dtype}, not torch.float32")
+
+    _property_name = str(_design["frozen_property"])
+    _population, _candidates = _leg_population_groups("confirmation")
+    if payload_checksum(_population["confirmation"]) != _design[
+        "confirmation_population_digest"
+    ]:
+        raise RuntimeError("the Stage 8E confirmation population changed")
+    _source_pin = load_broad_pooled_development_source(
+        BROAD_DEVELOPMENT_RUN_DIR,
+        expected_report_checksum=EXPECTED_BROAD_DEVELOPMENT_REPORT_CHECKSUM,
+        expected_population_digest=EXPECTED_BROAD_DEVELOPMENT_POPULATION_DIGEST,
+        expected_lens_checksum=EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+        expected_direction=CONFIRMATION_DIRECTION,
+    )
+    _lens = JacobianLens.load(_source_pin["lens_path"])
+    _config = {
+        "study": "fresh_bird_cat_property_two_modality_confirmation.v1",
+        "confirmation_design_checksum": _design["confirmation_design_checksum"],
+        "source_development_report_checksum": _design[
+            "source_development_report_checksum"
+        ],
+        "property": _property_name,
+        "primary_modalities": list(_design["primary_modalities"]),
+        "secondary_modalities": list(_design["secondary_modalities"]),
+        "direction": "bird->cat",
+        "lens_checksum": EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+        "model_repo_id": MODEL_REPO_ID,
+        "model_revision": MODEL_REVISION,
+        "model_dtype": _observed_model_dtype,
+        "layers": list(BROAD_POOLED_BAND),
+        "alpha": 1.0,
+        "positions": "every_original_prompt_position",
+        "output_endpoint": "unrestricted_greedy_complete_answer",
+        "max_new_tokens": 4,
+        "teacher_forcing_used": False,
+        "candidate_list_supplied": False,
+        "conditions": list(PROPERTY_CONDITIONS),
+        "random_seeds": list(_design["random_seeds"]),
+        "candidate_count": int(_design["candidate_count"]),
+        "recruited_count": int(_design["recruited_count"]),
+        "minimum_exact_rate": float(_design["minimum_exact_rate"]),
+        "minimum_control_margin": float(_design["minimum_control_margin"]),
+        "familywise_alpha": float(_design["familywise_alpha"]),
+        "fitting_performed": False,
+        "backward_passes": 0,
+        "commit": COMMIT,
+    }
+    _digest = payload_checksum(_config)
+    _run_root = (
+        BIRD_CAT_TWO_MODALITY_ROOT
+        / f"birdcat2mod_real_{_digest.removeprefix('sha256:')[:12]}"
+    )
+    _run_root.mkdir(parents=True, exist_ok=True)
+    (_run_root / "scientific_config.json").write_text(
+        json.dumps(_config, indent=2), encoding="utf-8"
+    )
+    _store = UnitStore(
+        _run_root,
+        RunFingerprint(
+            mode="real", model_repo_id=MODEL_REPO_ID,
+            model_revision=MODEL_REVISION, processor_revision=MODEL_REVISION,
+            layers=tuple(BROAD_POOLED_BAND),
+            lens_checksum=EXPECTED_BROAD_POOLED_LENS_CHECKSUM,
+            manifest_checksum=MANIFEST_CHECKSUM,
+            split_id=_design["confirmation_population_digest"],
+            intervention_config={
+                "confirmation_design_checksum": _design[
+                    "confirmation_design_checksum"
+                ],
+                "property": _property_name,
+                "primary_modalities": list(_design["primary_modalities"]),
+                "secondary_modalities": list(_design["secondary_modalities"]),
+                "direction": "bird->cat",
+                "conditions": list(PROPERTY_CONDITIONS),
+                "random_seeds": list(_design["random_seeds"]),
+                "alpha": 1.0,
+                "positions": "all_original_prompt_positions",
+                "dtype": _observed_model_dtype,
+            },
+            extra={"study_digest": _digest},
+        ),
+    )
+    print("bird-cat two-modality confirmation run", _store.open())
+    print("property frozen before outputs", _property_name)
+    print("primary", _design["primary_modalities"], "secondary", _design["secondary_modalities"])
+    print("fitting performed False; backward passes 0")
+
+    _capability_rows = []
+    for _group in _candidates:
+        for _modality in PROPERTY_MODALITIES:
+            _key = safe_key("bc2modcap", _group["group_id"], _modality)
+            _row = _store.load("capability", _key)
+            if _row is None:
+                _inputs = build_group_inputs(
+                    _group, _modality,
+                    property_prompt(_property_name, _modality, _group["caption"]),
+                )
+                _completion = unrestricted_greedy_completion(
+                    BACKEND, _inputs,
+                    answer=PROPERTY_SPECS[_property_name]["source_answer"],
+                    max_new_tokens=4,
+                )
+                _surface = str(_completion["generated_text"])
+                _row = {
+                    "group_id": str(_group["group_id"]),
+                    "image_id": str(_group["image_id"]),
+                    "modality": _modality,
+                    "generated": _surface,
+                    "generated_token_ids": list(_completion["generated_token_ids"]),
+                    "n_forward_passes": int(_completion["n_forward_passes"]),
+                    "endpoint": _completion["endpoint"],
+                    "pass": property_fact_matches(
+                        _surface, _property_name, "source"
+                    ),
+                }
+                _store.save("capability", _key, _row)
+            _capability_rows.append(_row)
+    _recruited = []
+    for _group in _candidates:
+        _own = [
+            row for row in _capability_rows
+            if row["group_id"] == str(_group["group_id"])
+        ]
+        if len(_own) == 3 and all(row["pass"] for row in _own):
+            _recruited.append(_group)
+        if len(_recruited) == int(_design["recruited_count"]):
+            break
+    if len(_recruited) != int(_design["recruited_count"]):
+        raise RuntimeError(
+            f"Stage 8E recruited {len(_recruited)}/{_design['recruited_count']} "
+            "clean-capable groups"
+        )
+    print("confirmation recruited", len(_recruited), "/", _design["recruited_count"])
+
+    _unembed = BACKEND.unembedding_weight()
+    _tokens = {
+        name: resolve_concept_token(BACKEND.encode_candidate, name)
+        for name in ("bird", "cat", *BROAD_POOLED_CONTROLS)
+    }
+    _basis = build_swap_bases_for_lens(
+        _lens, _unembed, layers=BROAD_POOLED_BAND,
+        source=_tokens["bird"], target=_tokens["cat"],
+    )
+    _random_bases = {
+        index: {
+            layer: random_two_direction_basis(
+                layer_basis, seed=int(_design["random_seeds"][index]) + layer
+            )
+            for layer, layer_basis in _basis.items()
+        }
+        for index in range(3)
+    }
+    _unrelated = build_swap_bases_for_lens(
+        _lens, _unembed, layers=BROAD_POOLED_BAND,
+        source=_tokens[BROAD_POOLED_CONTROLS[0]],
+        target=_tokens[BROAD_POOLED_CONTROLS[1]],
+    )
+    _spec = PROPERTY_SPECS[_property_name]
+    _source_answer_token = resolve_concept_token(
+        BACKEND.encode_candidate, _spec["source_answer"]
+    )
+    _target_answer_token = resolve_concept_token(
+        BACKEND.encode_candidate, _spec["target_answer"]
+    )
+    _conditions = [
+        ("exact", 1.0, _basis),
+        ("zero", 0.0, _basis),
+        ("unrelated", 1.0, _unrelated),
+        *[(f"random_{index}", 1.0, _random_bases[index]) for index in range(3)],
+    ]
+    _trial_rows = []
+    _total_trials = len(_recruited) * len(PROPERTY_MODALITIES) * len(_conditions)
+    for _group in _recruited:
+        for _modality in PROPERTY_MODALITIES:
+            for _condition, _alpha, _bases in _conditions:
+                _key = safe_key(
+                    "bc2modtrial", _group["group_id"], _modality, _condition
+                )
+                _row = _store.load("intervention", _key)
+                if _row is None:
+                    _inputs = build_group_inputs(
+                        _group, _modality,
+                        property_prompt(_property_name, _modality, _group["caption"]),
+                    )
+                    _trial = unrestricted_greedy_swap_trial(
+                        BACKEND, _inputs, bases=_bases, alpha=_alpha,
+                        answer=_spec["target_answer"], max_new_tokens=4,
+                        diagnostic_token_ids={
+                            "source_answer": int(_source_answer_token.token_id),
+                            "target_answer": int(_target_answer_token.token_id),
+                        },
+                        realization_policy=MODEL_DTYPE_REALIZATION,
+                    )
+                    _target_answer = PropertyAnswer(
+                        concept="cat", answer=_spec["target_answer"],
+                        aliases=tuple(_spec["target_aliases"]), admissible=True,
+                        reason=_spec["rationale"],
+                    )
+                    _row = generation_trial_row(
+                        _trial, group=_group, modality=_modality,
+                        condition=_condition, direction=("bird", "cat"),
+                        answer=_target_answer, layers=BROAD_POOLED_BAND,
+                    )
+                    _integrity = trial_integrity(
+                        _row, layers=BROAD_POOLED_BAND
+                    )
+                    _row = {
+                        **_row,
+                        "property": _property_name,
+                        "success": property_fact_matches(
+                            _row["generated_text"], _property_name, "target"
+                        ),
+                        "integrity_pass": bool(_integrity["passed"]),
+                        "integrity": _integrity,
+                    }
+                    _store.save("intervention", _key, _row)
+                _trial_rows.append(_row)
+                if len(_trial_rows) == 1 or len(_trial_rows) % 54 == 0:
+                    print("two-modality confirmation trials", len(_trial_rows), "of", _total_trials)
+
+    BIRD_CAT_TWO_MODALITY_REPORT = two_modality_confirmation_report(
+        _trial_rows, property_name=_property_name,
+        expected_n=int(_design["recruited_count"]),
+    )
+    BIRD_CAT_TWO_MODALITY_REPORT = {
+        **BIRD_CAT_TWO_MODALITY_REPORT,
+        "capability_rows": _capability_rows,
+        "scientific_config": _config,
+        "confirmation_design": _design,
+        "population_digest": _population["population_digest"],
+        "recruited_group_ids": [str(row["group_id"]) for row in _recruited],
+        "run_dir": str(_run_root),
+    }
+    BIRD_CAT_TWO_MODALITY_REPORT["report_checksum"] = payload_checksum({
+        key: value for key, value in BIRD_CAT_TWO_MODALITY_REPORT.items()
+        if key != "report_checksum"
+    })
+    _store.save(
+        "metric", "fresh_bird_cat_property_two_modality_confirmation",
+        BIRD_CAT_TWO_MODALITY_REPORT,
+    )
+    BIRD_CAT_TWO_MODALITY_ROOT.mkdir(parents=True, exist_ok=True)
+    BIRD_CAT_TWO_MODALITY_REPORT_PATH.write_text(
+        json.dumps(BIRD_CAT_TWO_MODALITY_REPORT, indent=2), encoding="utf-8"
+    )
+    print("=" * 96)
+    print("FRESH BIRD->CAT TWO-MODALITY PROPERTY CONFIRMATION --",
+          BIRD_CAT_TWO_MODALITY_REPORT["verdict"])
+    for _cell in BIRD_CAT_TWO_MODALITY_REPORT["effect_cells"]:
+        print(_cell["modality"], {
+            name: f"{row['successes']}/{row['n']}"
+            for name, row in _cell["conditions"].items()
+        })
+    print("primary comparisons", len(
+        BIRD_CAT_TWO_MODALITY_REPORT["primary_paired_comparisons"]
+    ))
+    print("report", BIRD_CAT_TWO_MODALITY_REPORT_PATH)
+elif RUN_STAGE8E_TWO_MODALITY_PROPERTY_CONFIRMATION:
+    print("Stage 8E requested but blocked; confirm fp32 A100 and its budget.")
 '''
 )
 

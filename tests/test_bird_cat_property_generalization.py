@@ -8,6 +8,7 @@ from jlens.mmpilot.bird_cat_property_generalization import (
     development_report,
     frozen_design,
     property_prompt,
+    two_modality_confirmation_report,
 )
 
 
@@ -108,3 +109,36 @@ def test_fresh_confirmation_holm_corrects_all_fifteen_controls():
     assert report["verdict"] == "FRESH_MULTIMODAL_BIRD_CAT_PROPERTY_GENERALIZATION_GO"
     assert len(report["paired_comparisons"]) == 15
     assert all(row["holm_adjusted_p"] <= 0.05 for row in report["paired_comparisons"])
+
+
+def test_two_modality_confirmation_can_pass_with_text_null() -> None:
+    rows = _trial_rows("taxonomic_class", 18, exact_successes=9)
+    for row in rows:
+        if row["modality"] == "text" and row["condition"] == "exact":
+            row["success"] = False
+    report = two_modality_confirmation_report(
+        rows, property_name="taxonomic_class", expected_n=18
+    )
+    assert report["verdict"] == (
+        "FRESH_BIRD_CAT_PROPERTY_TWO_MODALITY_GENERALIZATION_GO"
+    )
+    assert len(report["primary_paired_comparisons"]) == 10
+    assert report["primary_modalities"] == ["image", "spoken_audio"]
+    assert report["secondary_modalities"] == ["text"]
+
+
+def test_two_modality_confirmation_requires_each_primary_modality() -> None:
+    rows = _trial_rows("taxonomic_class", 18, exact_successes=9)
+    for row in rows:
+        if (
+            row["modality"] == "image"
+            and row["condition"] == "exact"
+            and int(str(row["group_id"]).removeprefix("g")) >= 8
+        ):
+            row["success"] = False
+    report = two_modality_confirmation_report(
+        rows, property_name="taxonomic_class", expected_n=18
+    )
+    assert report["verdict"] == (
+        "FRESH_BIRD_CAT_PROPERTY_TWO_MODALITY_GENERALIZATION_NO_GO"
+    )

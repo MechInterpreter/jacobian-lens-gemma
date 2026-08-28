@@ -168,11 +168,16 @@ def test_notebook_contains_no_refit_bird_cat_property_generalization() -> None:
         "RUN_STAGE8A_BIRD_CAT_PROPERTY_DEVELOPMENT",
         "RUN_STAGE8B_FREEZE_BIRD_CAT_PROPERTY_CONFIRMATION",
         "RUN_STAGE8C_BIRD_CAT_PROPERTY_CONFIRMATION",
+        "RUN_STAGE8D_FREEZE_TWO_MODALITY_PROPERTY_CONFIRMATION",
+        "RUN_STAGE8E_TWO_MODALITY_PROPERTY_CONFIRMATION",
         "EXPECTED_STAGE7B2_NOVEL_REPORT_CHECKSUM",
         "sha256:dbd1c4c6eb46b14c8edb831db0cc4ca8f0f56d6a4084932a5571ae6f3821527a",
         "bird_cat_property_development_report.json",
         "bird_cat_property_generation_development_report.json",
         "fresh_multimodal_bird_cat_property_generalization_report.json",
+        "fresh_bird_cat_property_two_modality_confirmation_report.json",
+        "EXPECTED_STAGE8A_FP32_DEVELOPMENT_REPORT_CHECKSUM",
+        "sha256:e116d2c5bb633e1586e62b26e2feab574da345f0bd0e0fc812060e9be5d582d1",
         "EXPECTED_SUPERSEDED_STAGE8A_FIRST_TOKEN_REPORT_CHECKSUM",
         "sha256:ac0350ecb8de68a446a1db8e39c38595ac62dc716ba1c6ada6048cecedbf2a30",
         '"direction": "bird->cat"',
@@ -188,6 +193,7 @@ def test_notebook_contains_no_refit_bird_cat_property_generalization() -> None:
         "property_capability_report",
         "property_development_report",
         "property_confirmation_report",
+        "two_modality_confirmation_report",
     ):
         assert required in source, required
 
@@ -206,6 +212,7 @@ def test_stage8_requires_and_records_observed_fp32_model_dtype() -> None:
     )[1].split("## 5. Media loading and processor-input construction")[0]
     assert "RUN_STAGE8A_BIRD_CAT_PROPERTY_DEVELOPMENT" in loader
     assert "RUN_STAGE8C_BIRD_CAT_PROPERTY_CONFIRMATION" in loader
+    assert "RUN_STAGE8E_TWO_MODALITY_PROPERTY_CONFIRMATION" in loader
     assert "_fp32_model_required" in loader
     assert (
         "dtype=(torch.float32 if _fp32_model_required else torch.bfloat16)"
