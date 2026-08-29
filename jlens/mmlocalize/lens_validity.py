@@ -846,10 +846,7 @@ RECALIBRATION_PLAN = {
     "calibration_uses_cat_or_toilet_targets": False,
     "heldout_independent_of_fitting": True,
     "frozen_before_multimodal_evaluation": True,
-    "runner": (
-        "notebooks/archive/legacy_prototypes/"
-        "gemma_4_e4b_text_jlens_recalibration_colab.ipynb"
-    ),
+    "runner": "historical bounded recalibration runner; see Git history",
     "new_artifact_dir": (
         "runs/text_jlens_early_layer_recalibration_v3/artifacts/lens.validated.pt"
     ),

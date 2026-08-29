@@ -22,3 +22,16 @@ hf_cache/
 # copies live in reports/endpoint_audit/ and are written by
 # scripts/write_endpoint_audit.py
 reports/endpoint_audit_mock/
+
+# Local research/application working files. Keep these off the public branch.
+.pytest_*/
+.t/
+.uv-codex-cache/
+tmp/
+runs/
+docs/Research_Proposal_updated.png
+reports/mats_application/
+scripts/build_mats_application_*.js
+scripts/build_mats_research_dossier.py
+scripts/make_docx_contact_sheets.py
+scripts/render_docx_via_word.ps1

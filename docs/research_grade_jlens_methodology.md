@@ -192,7 +192,7 @@ adds orchestration, not physics.
 | Atomic unit store + fingerprint resume | `jlens/mmpilot/store.py` | **Primitives only** | new store; `STAGES` is an mmpilot-specific tuple | We reuse `canonical_json`, `payload_checksum`, `safe_key`, `IncompatibleStateError` and the `RunFingerprint` pattern, and define calibration stages separately rather than widening mmpilot's vocabulary. Precedent: `jlens/native_readout.py` does exactly this. |
 | Config validation / fingerprint / env manifest | `jlens/metadata.py` | **Reuse** | `environment_manifest`, `file_sha256`, `write_metadata`, `local_git_commit` as-is | Records torch/transformers/upstream/local commit with every artifact |
 | Cost probe | `jlens.gemma4.probe_fit_cost` | **As-is** | none | Measures one prompt's wall time and peak CUDA memory before committing to a full run |
-| Colab bootstrap + builder-generated notebook | `scripts/_build_localization_notebook.py`, `tests/_mmlocalize_notebook_runner.py` | **Pattern reuse** | new builder + runner | Keeps the committed notebook output-free and byte-reproducible from source |
+| Colab bootstrap + builder-generated notebook | historical localization workflow in Git history | **Pattern reuse** | new builder + runner | Keeps committed notebooks output-free and byte-reproducible from source |
 | MOCK model | `tests/mock_gemma4.py` | **As-is for architecture tests** | new synthetic world for scale behaviour | The existing mock has the exact Gemma 4 module layout; the scale study needs a *statistical* mock instead (§ Stage 9) |
 
 ### Explicitly not imported

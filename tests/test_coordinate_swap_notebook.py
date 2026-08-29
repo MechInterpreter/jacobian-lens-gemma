@@ -244,7 +244,6 @@ def test_flipping_the_switch_refuses_instead_of_running_anything():
 SCHEMATIC_SVG = REPO_ROOT / "docs" / "assets" / "intervention_methods.svg"
 SCHEMATIC_PNG = REPO_ROOT / "docs" / "assets" / "intervention_methods.png"
 PROTOCOL_DOC = REPO_ROOT / "docs" / "coordinate_swap_protocol.md"
-PILOT_DOC = REPO_ROOT / "docs" / "multimodal_jspace_pilot.md"
 
 
 def _flat(text: str) -> str:
@@ -308,15 +307,3 @@ def test_the_protocol_doc_records_the_audit_and_the_boundaries():
     assert "assets/intervention_methods.png" in text
 
 
-def test_the_pilot_doc_corrects_the_terminology_without_retracting_the_result():
-    text = _flat(PILOT_DOC.read_text(encoding="utf-8"))
-    section = text.split("## The completed causal result is steering", 1)
-    assert len(section) == 2, "the pilot doc must state the A/B distinction"
-    body = section[1]
-    assert "source-derived positive-minus-negative J-space directions" in body
-    assert "stand unchanged" in body
-    assert "valid causal steering experiment" in body
-    assert "must not be described as one" in body
-    assert "h_patched = h + alpha * V (sigma(c) - c)" in body
-    assert "No real coordinate-swap run exists" in body
-    assert "coordinate_swap_protocol.md" in body

@@ -662,20 +662,3 @@ def test_the_interface_resolver_returns_the_fields_the_backend_reads(bundle):
         assert field in result.interface, field
 
 
-def test_the_notebook_constants_match_the_package_expectations():
-    """Model id / revision / lens triple must agree everywhere it is stated."""
-    from pathlib import Path
-
-    source = (
-        Path(__file__).resolve().parent.parent
-        / "notebooks"
-        / "archive"
-        / "completed_studies"
-        / "multimodal_jspace_spokencoco_robustness_colab.ipynb"
-    ).read_text(encoding="utf-8")
-    assert "google/gemma-4-E4B-it" in source
-    assert "fa62d88df2e6df5efa9d26ad6b3beaea2765f0cd" in source
-    assert "EXPECT_N_LAYERS, EXPECT_D_MODEL, EXPECT_VOCAB = 42, 2560, 262144" in source
-    assert R.EXPECT_N_LAYERS == 42
-    assert R.EXPECT_D_MODEL == 2560
-    assert R.EXPECT_VOCAB == 262144

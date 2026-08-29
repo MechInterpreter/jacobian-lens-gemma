@@ -45,7 +45,6 @@ from tests._prep_cache_harness import build_fingerprint
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HARNESS = Path(__file__).resolve().parent / "_prep_cache_harness.py"
-BUILDER = REPO_ROOT / "scripts" / "_build_l32_resolution_notebook.py"
 
 
 # ------------------------------------------------------------------ fixtures
@@ -715,37 +714,7 @@ def test_the_preparation_is_bound_into_the_scientific_fingerprint():
         assert name in RESOLUTION_FINGERPRINT_FIELDS, name
 
 
-# ============================================ the configured real paths
-
-
-def _builder_source() -> str:
-    return BUILDER.read_text(encoding="utf-8")
-
-
-def test_the_configured_completed_run_paths_are_the_real_ones():
-    source = _builder_source()
-    assert (
-        '"/content/drive/MyDrive/jacobian-lens-gemma/runs/"\n'
-        '    "mml32_l32_followup_20260808T182717"' in source
-    )
-    assert (
-        '"/content/drive/MyDrive/jacobian-lens-gemma/runs/"\n'
-        '    "mmaudio_native_audio_transfer_20260806T144822"' in source
-    )
-
-
-def test_the_expanded_manifest_is_derived_from_the_completed_l32_run():
-    source = _builder_source()
-    assert 'f"{COMPLETED_RUN_DIRS[0]}/expanded_manifest.json"' in source
-    assert "jlens_mmpilot_v1" not in source
-
-
 def test_the_preparation_cache_root_is_configured_and_deterministic(tmp_path, run_dir):
-    source = _builder_source()
-    assert (
-        'PREP_CACHE_ROOT = "/content/drive/MyDrive/datasets/cstf_spokencoco_derived"'
-        in source
-    )
     fingerprint = build_fingerprint([run_dir])
     cache = prep.preparation_cache_dir(
         "/content/drive/MyDrive/datasets/cstf_spokencoco_derived", fingerprint

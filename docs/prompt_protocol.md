@@ -7,7 +7,8 @@ protocols, and states what each one is allowed to support.
 ![Two J-space interventions](assets/intervention_methods.png)
 
 Implementation: [`jlens/mmpilot/prompt_protocol.py`](../jlens/mmpilot/prompt_protocol.py).
-MOCK: [`notebooks/archive/protocol_mocks/open_prompt_protocol_mock_colab.ipynb`](../notebooks/archive/protocol_mocks/open_prompt_protocol_mock_colab.ipynb).
+The supported coordinate-swap mock is
+[`notebooks/multimodal_jspace_coordinate_swap_mock_colab.ipynb`](../notebooks/multimodal_jspace_coordinate_swap_mock_colab.ipynb).
 Primary source: <https://transformer-circuits.pub/2026/workspace/index.html>.
 
 ---

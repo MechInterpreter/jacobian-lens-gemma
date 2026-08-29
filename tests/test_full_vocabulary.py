@@ -420,16 +420,6 @@ def test_ambiguous_tokenization_is_refused(backend, monkeypatch):
 # --------------------------------------------------------------------------
 
 
-def test_clean_and_intervened_use_the_same_unrestricted_scorer():
-    source = (ROOT / "scripts" / "_build_full_vocabulary_notebook.py").read_text(
-        encoding="utf-8"
-    )
-    assert source.count("score_unrestricted_next_token(") >= 2
-    # There is exactly one scoring function named in the causal cell, and it is
-    # never `prediction_and_margin`.
-    assert "prediction_and_margin" not in source
-
-
 def test_one_scoring_forward_pass_per_trial(backend, inputs, monkeypatch):
     calls = {"n": 0}
     real = backend.forward_logits
@@ -778,16 +768,6 @@ def test_the_l32_band_guard_is_not_dead_code(monkeypatch):
         module.full_vocab_design_record(suffix_starts=(32, 35, 38, 40))
 
 
-def test_band_hook_integrity_is_the_completed_studys_function():
-    from jlens.mmpilot.validated_band_followup import assert_band_hook_integrity
-
-    source = (ROOT / "scripts" / "_build_full_vocabulary_notebook.py").read_text(
-        encoding="utf-8"
-    )
-    assert "assert_band_hook_integrity" in source
-    assert callable(assert_band_hook_integrity)
-
-
 # --------------------------------------------------------------------------
 # 19/20. No teacher-forced position is the primary endpoint; no leakage
 # --------------------------------------------------------------------------
@@ -817,14 +797,6 @@ def test_the_primary_endpoint_never_scores_a_teacher_forced_position(backend, in
     )
     assert record["n_candidate_positions_appended"] == 0
     assert record["scored_input_length"] == record["prompt_len"]
-
-
-def test_transcript_leakage_remains_impossible():
-    source = (ROOT / "scripts" / "_build_full_vocabulary_notebook.py").read_text(
-        encoding="utf-8"
-    )
-    assert "build_backend_inputs(BACKEND, built, transcript=offline)" in source
-    assert 'offline = group["caption"] if modality != "text" else None' in source
 
 
 # --------------------------------------------------------------------------
